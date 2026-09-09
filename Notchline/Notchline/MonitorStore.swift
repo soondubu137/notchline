@@ -190,12 +190,18 @@ struct CompactTrailingReading: Equatable {
     /// Whether those digits have stopped.
     ///
     /// A turn ending does not take the reading away: it freezes at the last
-    /// value the timer showed and the ground it was already standing on fills,
-    /// so the panel's edge does not move by a point at that instant. A filled
-    /// ground is allowed here where the white flip is not, because "this figure
-    /// has stopped" is a property of the figure rather than a comparison with
-    /// its neighbours — and it is the one thing the digits cannot say alone
-    /// (`compact-view-v2.md` §4.2).
+    /// value the timer showed. ~~and the ground it was already standing on
+    /// fills, so the panel's edge does not move by a point at that instant. A
+    /// filled ground is allowed here where the white flip is not, because "this
+    /// figure has stopped" is a property of the figure rather than a comparison
+    /// with its neighbours — and it is the one thing the digits cannot say
+    /// alone (`compact-view-v2.md` §4.2).~~ **The ground is gone and the dot
+    /// says it instead** — see ``drawsFinishedDot``. The property being a
+    /// property rather than a comparison is exactly why it can be a mark of its
+    /// own, and the wing was already drawing that mark for the other half of
+    /// the same fact. The edge still does not move at that instant on a wing
+    /// that was already drawing the dot; where it was not, the wing opens by
+    /// the dot's own `4 + 8`.
     var isFrozen = false
     /// Whether a finished, unread turn is sitting under a mark that is drawing
     /// something else.
@@ -208,6 +214,23 @@ struct CompactTrailingReading: Equatable {
     static let empty = CompactTrailingReading()
 
     var isEmpty: Bool { timerText == nil && !buriesAFinishedTurn }
+
+    /// Whether the wing draws the finished-turn dot.
+    ///
+    /// **Two questions with one answer, and one mark between them.** A finished
+    /// turn the aggregate mark is not drawing has no representative and takes
+    /// the dot as its stand-in; a *frozen* reading is a finished turn drawing
+    /// itself, and used to say so with a filled ground behind the digits. Those
+    /// were two marks for one fact. The ground is gone and the dot covers both:
+    /// it stands in front of the reading whether the reading is that turn's own
+    /// or somebody else's (`compact-view-v2.md` §4.2 and §4.3).
+    ///
+    /// The two are very nearly exclusive already — ``isFrozen`` needs nothing
+    /// running and ``buriesAFinishedTurn`` stands down once the aggregate is
+    /// Completed — so this is a union rather than a choice, and it can only
+    /// ever draw one dot. It is read by the width composition as well as by the
+    /// view, which is what keeps the drawn wing and the billed wing one number.
+    var drawsFinishedDot: Bool { buriesAFinishedTurn || isFrozen }
 }
 
 enum PanelMetrics {
@@ -277,13 +300,54 @@ enum PanelMetrics {
     /// thicker because the menu bar got taller.
     static let surfaceOutlineWidth: CGFloat = 0.8
     static let expandedBaselineWidth: CGFloat = 610
-    static let sessionRowHeight: CGFloat = 80
+    /// A live row's three lines, stacked with the spacing the row stacks them
+    /// with: `16 + 2 + 17 + 2 + 18`.
+    ///
+    /// Declared because the row's height is now composed *from* it rather than
+    /// chosen and divided into it — see ``sessionRowVerticalPadding``.
+    static let sessionRowContentHeight: CGFloat = sessionRowCaptionHeight
+        + sessionRowLineSpacing
+        + sessionRowTitleHeight
+        + sessionRowLineSpacing
+        + sessionRowPreviewHeight
+    /// The air above a live row's first line and below its last.
+    ///
+    /// **`8.5`, where it was `12.5`.** The three lines a row carries were
+    /// centred in a height chosen before them, and what fell out was `25` pt
+    /// of black between one row's last word and the next row's first — more
+    /// air *between* two rows than a row spends on its own three lines'
+    /// leading, which is the panel claiming the rows are further apart than
+    /// they are. `8.5` leaves `17` between them: still the largest gap on the
+    /// list, and still comfortably clear of the `12` pt corner the hover
+    /// ground is drawn with.
+    ///
+    /// It is a half point for the same reason `12.5` was — the block it
+    /// centres is odd — and it lands on the pixel grid at 2x, which is the
+    /// scale this panel is drawn at.
+    static let sessionRowVerticalPadding: CGFloat = 8.5
+    /// **`72` = `8.5 + 55 + 8.5`**, and it is composed in that direction now.
+    ///
+    /// It was `80`, a constant the row's own lines were centred in. Written
+    /// that way the height was the decision and the padding was whatever was
+    /// left, so a row's air could only be changed by changing a number that
+    /// says nothing about air. Now the padding is the decision — see
+    /// ``sessionRowVerticalPadding`` — and the height follows it, which is
+    /// also what keeps ``OpenRow``'s explicit inset equal to the closed row's
+    /// implicit one: an open row's caption and title have to be exactly where
+    /// the closed row left them.
+    static let sessionRowHeight: CGFloat = sessionRowContentHeight
+        + sessionRowVerticalPadding * 2
     /// A row that has left the list, drawn under the seam.
     ///
     /// **Half a live row, exactly** (`expanded-panel-v2.md` §2.1) — the
     /// plainest statement of "less than a live row" this surface can make. It
     /// was measured from the half-row it has to equal rather than from the one
     /// line it carries, so nothing about that line's contents moves it.
+    ///
+    /// `36` now that a live row is `72`, which puts `10` above its one line
+    /// and `10` below where there were `12`. The queue's air comes down with
+    /// the list's because it is the same air — and it comes down by less,
+    /// which is right: a one-line row has nothing to be crowded against.
     static let retiredRowHeight: CGFloat = sessionRowHeight / 2
     /// The rule between the list and what has left it -- and, now, the
     /// footer's own spend line: the two closing bars this panel has, drawn
@@ -302,10 +366,10 @@ enum PanelMetrics {
     static let rowTrailingFadeWidth: CGFloat = 48
     /// The tallest the *live* session viewport is ever drawn.
     ///
-    /// **A height rather than a row count.** `240` is what `sessionRowHeight ×
+    /// **A height rather than a row count.** `216` is what `sessionRowHeight ×
     /// 3` already was; saying it in points is what lets an open row (taller
-    /// than `80`) still share the same viewport rather than needing a row
-    /// count of its own.
+    /// than a closed one) still share the same viewport rather than needing a
+    /// row count of its own.
     ///
     /// **The live list and the Recent queue no longer share one viewport or
     /// one scroller.** Each folds on its own past its own cap — see
@@ -326,6 +390,36 @@ enum PanelMetrics {
     /// pointer and then does nothing is a promise made quietly
     /// (`answer-in-notch.md` §11 rule 03), and there is nothing to fold yet.
     static var productGroupHeaderHeight: CGFloat { recentSeamHeight }
+    /// The whole of that bar which is not its chip: the slack, all of it above
+    /// (`expanded-panel-v2.md` §4.2).
+    static var productGroupHeaderSlack: CGFloat {
+        productGroupHeaderHeight - productBadgeHeight
+    }
+    /// The bar the **first** block is headed with, which is the bar with its
+    /// slack taken off: the chip alone, `16`.
+    ///
+    /// A heading's slack is what separates it from what precedes it, and the
+    /// first heading is preceded by the band — which already brings its own
+    /// air, half the difference between the menu bar's height and the `16.6`
+    /// matrix standing in the middle of it. Spending `16` more on top of that
+    /// put the first chip `26` under the matrix and left the panel opening on
+    /// a stripe of black.
+    ///
+    /// It is also what lets the panel's own top hairline come off. That rule
+    /// and this bar's rule are the same `1` pt of white at `15%` on the same
+    /// two `x` values, `24` apart, saying nothing different from each other;
+    /// with the slack gone the block's rule stands where the panel's stood —
+    /// `8` lower, which is the chip's own half — and the panel draws one line
+    /// there instead of two. See ``MonitorStore/listLeadsWithABlockHeading``,
+    /// which is the single question both ends of that answer to.
+    static var leadingProductGroupHeaderHeight: CGFloat { productBadgeHeight }
+    /// What a grouped list spends on its headings: the leading one short, and
+    /// every one after it whole.
+    static func groupHeadingsHeight(count: Int) -> CGFloat {
+        guard count > 0 else { return 0 }
+        return leadingProductGroupHeaderHeight
+            + productGroupHeaderHeight * CGFloat(count - 1)
+    }
     /// The tallest the Recent queue's own viewport is ever drawn: five retired
     /// rows, half a live row each.
     static let recentViewportCap: CGFloat = retiredRowHeight * 5
@@ -414,6 +508,50 @@ enum PanelMetrics {
     static let productBadgeHeight: CGFloat = 16
     static let productBadgeRadius: CGFloat = 5
     static let productBadgePadding: CGFloat = 6
+    /// The caption idiom's `11` pt Light, which the block heading's count and
+    /// the Recent seam's both take.
+    static let captionFont = NSFont.systemFont(ofSize: 11, weight: .light)
+    /// The room the separator held between a block's badge and its count.
+    ///
+    /// **The dot is gone and its space is not.** `Codex · 3` put a mark
+    /// immediately after a chip, which is a boundary after a boundary — the
+    /// same thing `panel-v2.md` §3.4 took the row's colour bar out for, and the
+    /// chip is a stronger boundary than any separator drawn beside it. What a
+    /// separator *does* between a word and a figure is hold them apart, and a
+    /// chip needs that held apart just as much, so the gap stays exactly as
+    /// wide as it was: ``productBadgePadding`` plus the `"· "` this measures.
+    ///
+    /// Measured rather than tabulated, for the reason the badge's own width is
+    /// (``productBadgeHeight``): the glyph is real rendered text, so a table
+    /// here would be a second answer this file had to keep in step with the
+    /// font. The seam's `Recent · 3` keeps its dot — a word and a figure on one
+    /// line is what the idiom is for, and there is no boundary there already.
+    static var captionSeparatorWidth: CGFloat {
+        textWidth("· ", font: captionFont)
+    }
+    /// Badge to count on a block's heading: the padding, and the room the
+    /// separator held.
+    static var productBadgeCountGap: CGFloat {
+        productBadgePadding + captionSeparatorWidth
+    }
+    /// The separator's own mark, back in that gap and drawn rather than set.
+    ///
+    /// **`3`, which is more area than the glyph had and a third of its
+    /// brightness.** A `·` at `11` pt Light is about `1.5` pt of `#7C7C80`;
+    /// this is a `3` pt disc at `15%` white, so the ink it puts on the panel is
+    /// about what the glyph put there — and it puts it in the rule's value
+    /// rather than the caption's, which is the point of the change. A separator
+    /// is not a reading.
+    static let captionSeparatorDotSize: CGFloat = 3
+    /// What stands either side of that dot, so the dot lands on the middle of
+    /// the gap and the count still does not move.
+    ///
+    /// One spacing rather than two, because an `HStack` of three has exactly
+    /// one: half of what is left of ``productBadgeCountGap`` once the dot has
+    /// taken its own width out of the middle.
+    static var productBadgeCountSpacing: CGFloat {
+        (productBadgeCountGap - captionSeparatorDotSize) / 2
+    }
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8
     /// A table line to the next one.
@@ -999,24 +1137,29 @@ enum PanelMetrics {
     /// reading and pushes the edge out in front of it, rather than sliding the
     /// whole figure sideways.
     static func drawnTrailingReadingWidth(_ trailing: CompactTrailingReading) -> CGFloat {
-        let dot = trailing.buriesAFinishedTurn ? buriedFinishDotSize : 0
+        let dot = trailing.drawsFinishedDot ? buriedFinishDotSize : 0
         guard let timerText = trailing.timerText else {
             // The dot alone, with nothing for its gap to stand off: each gap on
             // this surface exists only where content stands on both sides of it.
             return dot
         }
-        guard trailing.buriesAFinishedTurn else {
+        guard trailing.drawsFinishedDot else {
             return drawnCompactReadingWidth(timerText)
         }
         return dot + buriedFinishDotSpacing + drawnCompactReadingWidth(timerText)
     }
 
-    /// The buried-finish dot, and the gap it stands off the digits by.
+    /// The finished-turn dot, and the gap it stands off the digits by.
     ///
-    /// `4` in the wing's own `#7C7C80`, `8` before the reading. Both whole
-    /// numbers, so the wing stays integral and the leading edge still cannot
-    /// feel anything the trailing side does
+    /// `4` in ~~the wing's own `#7C7C80`~~ the sessions numeral's `#C7C7CC`
+    /// (``NotchPalette/finishedDotDrawingColor``), `8` before the reading. Both
+    /// whole numbers, so the wing stays integral and the leading edge still
+    /// cannot feel anything the trailing side does
     /// (`theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove`).
+    ///
+    /// **The same two figures place a row's dot**, which is not a second
+    /// decision: a row's reading is the same `13` pt Light the wing's is, so
+    /// the mark in front of it is the same mark at the same distance.
     static let buriedFinishDotSize: CGFloat = 4
     static let buriedFinishDotSpacing: CGFloat = 8
     /// What the dot costs a wing that is also drawing a reading.
@@ -1334,9 +1477,9 @@ enum PanelMetrics {
         groupHeaderCount: Int = 0
     ) -> CGFloat {
         // One of the live rows may be open, and an open row is taller than the
-        // `80` every row is billed at above. It is added as a difference rather
-        // than counted separately so that a row opening cannot also change how
-        // many rows there are.
+        // closed height every row is billed at above. It is added as a
+        // difference rather than counted separately so that a row opening
+        // cannot also change how many rows there are.
         let opened = liveRowCount > 0 && openRowHeight != nil
             ? (openRowHeight ?? sessionRowHeight) - sessionRowHeight
             : 0
@@ -1348,7 +1491,7 @@ enum PanelMetrics {
         return liveRowCount > 0
             ? sessionRowHeight * CGFloat(liveRowCount)
                 + opened
-                + productGroupHeaderHeight * CGFloat(max(groupHeaderCount, 0))
+                + groupHeadingsHeight(count: max(groupHeaderCount, 0))
             : thinExpandedBodyHeight
     }
 
@@ -1370,10 +1513,10 @@ enum PanelMetrics {
             // it was — three closed rows, or one open question — plus the bars
             // above them, so a grouped list shows the three rows an ungrouped
             // one shows and scrolls at the same place. The alternative was
-            // holding `240`: `32 + 80 + 32 + 80` leaves two rows visible, and
-            // a third of what this panel is for spent on chrome.
+            // holding the cap: `16 + 72 + 32 + 72` leaves two rows visible,
+            // and a third of what this panel is for spent on chrome.
             max(sessionViewportCap, openRowHeight ?? 0)
-                + productGroupHeaderHeight * CGFloat(max(groupHeaderCount, 0))
+                + groupHeadingsHeight(count: max(groupHeaderCount, 0))
         )
     }
 
@@ -1405,10 +1548,26 @@ enum PanelMetrics {
 
     // MARK: - The open row
 
-    /// Approval and plan bodies retain their 140 pt viewport. Questions with
-    /// options may use 300 pt for readable descriptions; the fixed 100 pt of
-    /// heading and answer controls remains outside that scrollable body.
-    static let requestBodyMaximumHeight: CGFloat = 140
+    /// An approval's or a plan's body: **what the three-row viewport has left
+    /// once the row's fixed parts have taken theirs**, which is `124` now and
+    /// was `140`.
+    ///
+    /// It has always been that subtraction rather than a chosen number —
+    /// `answer-in-notch.md` §4.1 writes it as one — and it is what makes the
+    /// tallest approval exactly the viewport it stands in, so opening one does
+    /// not resize the panel. A row's air coming down
+    /// (``sessionRowVerticalPadding``) takes `24` off the viewport and gives
+    /// `8` back to the row, so the body loses the `16` between them. Written as
+    /// the literal it would have kept, the identity would simply have become
+    /// false: a maximal approval would stand `16` taller than the viewport and
+    /// the panel would grow by that much at the moment somebody opened one.
+    ///
+    /// Questions with options are the exception and use
+    /// ``questionBodyMaximumHeight`` for readable descriptions; the live
+    /// viewport grows to fit that row, deliberately (§4.1).
+    static var requestBodyMaximumHeight: CGFloat {
+        sessionViewportCap - openRowFixedHeight
+    }
     static let questionBodyMaximumHeight: CGFloat = 300
     static let optionTitleFont = NSFont.systemFont(ofSize: 13, weight: .medium)
     static let optionDescriptionFont = NSFont.systemFont(ofSize: 12, weight: .regular)
@@ -1457,11 +1616,17 @@ enum PanelMetrics {
 
     /// Everything an open row is besides its body.
     ///
-    /// `12.5 + 16 + 2 + 17 + 2` above and `10 + 28 + 12.5` below — the caption,
+    /// `8.5 + 16 + 2 + 17 + 2` above and `10 + 28 + 8.5` below — the caption,
     /// the title and the answer row, none of which changes with the request.
-    static let openRowFixedHeight: CGFloat = 12.5 + sessionRowCaptionHeight
+    ///
+    /// The two `8.5`s are the closed row's own air
+    /// (``sessionRowVerticalPadding``), read from it rather than repeated:
+    /// opening a row must not move the caption and the title it already drew,
+    /// so an open row's inset is the closed row's inset by construction.
+    static let openRowFixedHeight: CGFloat = sessionRowVerticalPadding
+        + sessionRowCaptionHeight
         + sessionRowLineSpacing + sessionRowTitleHeight + sessionRowLineSpacing
-        + 10 + answerRowHeight + 12.5
+        + 10 + answerRowHeight + sessionRowVerticalPadding
 
     /// The width an open row's body is *wrapped* at.
     ///
@@ -2822,6 +2987,24 @@ final class MonitorStore: ObservableObject {
         guard groupsSessionsByProduct else { return 0 }
         return Set(sessions.map(\.agent)).count
     }
+
+    /// Whether the first thing under the band is a block's heading rather than
+    /// a row or the apology.
+    ///
+    /// **The panel's own top hairline is drawn on the negation of this, and on
+    /// nothing else.** That rule and a block heading's rule are the same `1` pt
+    /// of white at `15%` between the same two `x` values; drawn together they
+    /// were two lines `24` apart with nothing said between them, which is a
+    /// boundary drawn twice (`panel-v2.md` §3.4). One of them has to go, and it
+    /// is the panel's: the heading's carries a name, and a rule that carries a
+    /// name is the more useful of two identical rules.
+    ///
+    /// So the heading takes the job over, and takes the position with it —
+    /// ``PanelMetrics/leadingProductGroupHeaderHeight`` is the other half of
+    /// this answer. With nothing live the apology is what stands there, and
+    /// with one product connected the list is flat: neither draws a rule of its
+    /// own, so the panel keeps drawing its own.
+    var listLeadsWithABlockHeading: Bool { sessionGroupHeaderCount > 0 }
 
     /// Every product named anywhere on the list, above the rule and below it.
     private var attributedAgents: Set<AgentKind> {

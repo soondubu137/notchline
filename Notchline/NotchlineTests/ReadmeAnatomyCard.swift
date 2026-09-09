@@ -377,8 +377,12 @@ struct AnatomyAnchors {
         }
         var drawn = 0
         var y = band
-        for group in groups {
-            y += PanelMetrics.productGroupHeaderHeight
+        for (block, group) in groups.enumerated() {
+            // The first block's heading is the short one: it stands in for the
+            // panel's own top rule and gives its slack back.
+            y += block == 0
+                ? PanelMetrics.leadingProductGroupHeaderHeight
+                : PanelMetrics.productGroupHeaderHeight
             for _ in group.sessions {
                 if drawn == index { return y }
                 drawn += 1
@@ -392,9 +396,12 @@ struct AnatomyAnchors {
     /// `index`, when that row is the first of its block.
     func headingAboveRow(_ index: Int) -> CGFloat? {
         var drawn = 0
-        for group in store.sessionGroups {
+        for (block, group) in store.sessionGroups.enumerated() {
             if drawn == index {
-                return rowTop(index) - PanelMetrics.productGroupHeaderHeight / 2
+                let bar = block == 0
+                    ? PanelMetrics.leadingProductGroupHeaderHeight
+                    : PanelMetrics.productGroupHeaderHeight
+                return rowTop(index) - bar / 2
             }
             drawn += group.sessions.count
         }
@@ -402,15 +409,8 @@ struct AnatomyAnchors {
     }
 
     /// The row's three lines, at the offsets the row's own content block puts
-    /// them at: `55` points of text centred in `80`.
-    private var rowContentTop: CGFloat {
-        let content = PanelMetrics.sessionRowCaptionHeight
-            + PanelMetrics.sessionRowLineSpacing
-            + PanelMetrics.sessionRowTitleHeight
-            + PanelMetrics.sessionRowLineSpacing
-            + PanelMetrics.sessionRowPreviewHeight
-        return (PanelMetrics.sessionRowHeight - content) / 2
-    }
+    /// them at: `55` points of text with the row's own air above them.
+    private var rowContentTop: CGFloat { PanelMetrics.sessionRowVerticalPadding }
 
     func rowCaptionY(_ index: Int) -> CGFloat {
         rowTop(index) + rowContentTop + PanelMetrics.sessionRowCaptionHeight / 2
@@ -639,7 +639,10 @@ struct ReadmeAnatomyCard: View {
 
     // MARK: The pill's parts
 
-    private var compactCallouts: [AnatomyCallout] {
+    /// Internal, with ``expandedCallouts``, for the one thing the drawing
+    /// cannot say about itself: that no two labels in a column land on top of
+    /// each other. See `theReadmeCalloutsStandApartInTheirColumns`.
+    var compactCallouts: [AnatomyCallout] {
         let a = compactAnchors
         let s = compactScale
         return [
@@ -690,7 +693,7 @@ struct ReadmeAnatomyCard: View {
 
     // MARK: The panel's parts
 
-    private var expandedCallouts: [AnatomyCallout] {
+    var expandedCallouts: [AnatomyCallout] {
         let a = expandedAnchors
         return [
             // The band, which the collapsed bar draws identically.
@@ -719,12 +722,21 @@ struct ReadmeAnatomyCard: View {
 
             // The heading over the first block, and the reason the row under
             // it no longer names its own product.
+            //
+            // **Lifted, because its part and the Project's are `24.5` apart.**
+            // The first block's heading is the short bar, so its chip stands
+            // that far above the caption line under it; the Project's own
+            // label is already lifted `18` to clear the title's, and two
+            // labels `6` apart are one illegible label. `-12` puts this one
+            // the same distance clear of the Project's as the Project's is of
+            // the title's.
             AnatomyCallout(
                 id: 0,
                 text: "One block per product",
                 side: .leading,
                 target: CGPoint(x: a.rowTextLeft, y: a.headingAboveRow(0) ?? a.rowCaptionY(0)),
-                stem: 26
+                stem: 26,
+                drop: -12
             ),
 
             // One live row, line by line.

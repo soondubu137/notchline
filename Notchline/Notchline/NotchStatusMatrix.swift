@@ -353,6 +353,32 @@ enum NotchPalette {
         blue: 0xCC / 255,
         alpha: 1
     )
+    /// The dot that says a turn has finished, on the notch and on a row alike.
+    ///
+    /// **The sessions numeral's own ink, and that is the whole of the choice.**
+    /// This mark used to be ``labelDrawingColor`` — `#7C7C80`, the dim step
+    /// every reading takes — which put it a step *below* the figure it stands
+    /// in front of, on a surface where brightness is the only thing that says
+    /// a person is wanted. A finished turn nobody has read wants one. `#C7C7CC`
+    /// is where this surface already puts that meaning, and it is the value the
+    /// count beside the mark is drawn in, so the dot has a ceiling it is
+    /// *equal* to rather than a new brightness of its own: on the notch the
+    /// breath's crest is exactly the numeral and never past it.
+    static var finishedDotDrawingColor: NSColor { countsSessionDrawingColor }
+    /// Every rule this panel draws: the one under the band, a block heading's,
+    /// and the seam's — `1` pt of white at `15%`.
+    ///
+    /// Declared because a fourth thing takes it now. The dot between a block's
+    /// badge and its count is *chrome rather than caption*
+    /// (`expanded-panel-v2.md` §4.2), which is a claim about being the same
+    /// value as the rule it sits on rather than about being a faint grey — so
+    /// the two are written once and cannot drift into being nearly the same.
+    ///
+    /// The scroll rail's track is not one of these. It reads the same value and
+    /// means something else — how far there is to travel — so it keeps its own.
+    static let hairline = Color.white.opacity(0.15)
+    /// The same ink where SwiftUI draws the mark — a row's still dot.
+    static var finishedDot: Color { reading }
     /// The searchlight that sweeps a row's text, which is the one white left on
     /// this surface that the pointer did not put there — and it brightens
     /// glyphs rather than filling an area. See ``spotlight``.
@@ -688,36 +714,41 @@ enum SessionDotBreath {
     /// `theBreathIsSlowerThanAnythingTheMatrixRuns`.
     static let period: TimeInterval = 2.8
 
-    /// **Steady, and a little under full.** Unchanged, and it is also the top
-    /// of the swing: the breath only ever leaves this value and comes back to
-    /// it, so the column never draws brighter than a resting one and §11's
-    /// reason for holding the dots under full still stands untouched.
+    /// **Full, and the ceiling is somebody else's value.** ~~Steady, and a
+    /// little under full: the column rests at `0.85` and the breath only ever
+    /// leaves that value, so it never draws brighter than a resting column.~~
+    /// ~~A version that went to `1.0` was tried and dropped — it made the
+    /// column the brightest thing in the leading wing for part of every cycle,
+    /// and bought that by breaking the one value this mark has always had.~~
     ///
-    /// A version that went to `1.0` was tried and dropped. It read, but it made
-    /// the column the brightest thing in the leading wing for part of every
-    /// cycle, and it bought that by breaking the one value this mark has always
-    /// had. Taking the same amplitude out of the floor instead costs nothing
-    /// that was already there.
-    static let restingOpacity: Double = 0.85
+    /// **Superseded, with the carrier.** There is no column: what breathes is
+    /// one dot in the *trailing* wing, standing in front of a reading, and it
+    /// has no resting appearance of its own to keep faith with. What holds it
+    /// under the surface's own ceiling now is the ink rather than the opacity —
+    /// ``NotchPalette/finishedDotDrawingColor`` is the sessions numeral's
+    /// `#C7C7CC`, so the crest of every breath is *exactly* that numeral and
+    /// never past it. `0.85` of it would have been a mark that only ever
+    /// approached the value it was told to reach.
+    static let restingOpacity: Double = 1.0
 
     /// The bottom of the swing.
     ///
-    /// **`0.55` of amplitude, all of it below rest.** The first version swung
-    /// `0.35` and was too quiet to catch on a screen; this is wider than that
-    /// and wider than the `1.0`-crested version it replaces, without the column
-    /// ever exceeding where it rests.
+    /// **`0.55` of amplitude, all of it below the crest.** The first version
+    /// swung `0.35` and was too quiet to catch on a screen; this is wider than
+    /// that. It is the same amplitude it has always been — the crest moved and
+    /// the movement did not, because the movement is what was tuned against a
+    /// screen and the crest is what the ink was chosen for.
     ///
-    /// It goes this low because the dip is **momentary**. A column held at
-    /// `0.30` would stop being countable, which is exactly why "dim the marks
-    /// that are not yours" was rejected when this page was drawn — but a column
-    /// that returns to full rest every `2.8 s` is legible for most of its cycle
-    /// and never stops being a count. What must hold at every instant is the
-    /// weaker, checkable thing: the run of dots stays clearly brighter than the
-    /// extinguished matrix beside it, so a breathing column never reads as a
-    /// mark going out. At `0.30` it keeps about twice that value in every
-    /// channel of both inks — pinned by
-    /// `theBreathsFloorStaysAboveTheMarkItStandsBeside`.
-    static let floorOpacity: Double = 0.30
+    /// It goes this low because the dip is **momentary**. A mark held at the
+    /// floor would stop being legible, which is exactly why "dim the marks that
+    /// are not yours" was rejected when this page was drawn — but one that
+    /// returns to its crest every `2.8 s` is legible for most of its cycle and
+    /// never stops being a mark. What must hold at every instant is the weaker,
+    /// checkable thing: it stays clearly brighter than the extinguished matrix
+    /// across the bar, so a breathing dot never reads as a mark going out.
+    /// Pinned by `theBreathsFloorStaysAboveTheMarkItStandsBeside`, which is
+    /// asked of the dot's own ink now that the two differ.
+    static let floorOpacity: Double = 0.45
 
     /// **The turns slow down; they do not stop.**
     ///
@@ -1444,31 +1475,56 @@ final class CountsNumeralsView: NSView {
     }
 }
 
-/// The trailing wing's stand-in for a finished turn nobody has read.
+/// The mark that says a turn has finished: `4` points of `#C7C7CC`, in front of
+/// the reading, on the notch and on a row alike.
 ///
-/// **The one state a summary loses.** The mark draws the most urgent status
-/// anywhere and the reading belongs to whatever is being timed, so a turn that
-/// finished while another is still running has no representative at all: the
-/// mark is on Radar and the frozen reading belongs to a Completed aggregate
-/// this is not. The dot is that reading's stand-in
-/// (`compact-view-v2.md` §4.3).
+/// **It began as the trailing wing's stand-in for a finished turn nobody had
+/// read.** The mark draws the most urgent status anywhere and the reading
+/// belongs to whatever is being timed, so a turn that finished while another
+/// was still running had no representative at all
+/// (`compact-view-v2.md` §4.3). That is still one of the two things this dot
+/// says, and it is now the only one it says on both surfaces:
 ///
-/// **It breathes within its own ink, never above it.** The modulation only ever
-/// dims `#7C7C80`, so it cannot approach the aggregate's lit ink and cannot be
-/// read as the one thing brightness means on this surface. Its slot is a fixed
-/// `4`, so nothing on the wing changes width while it moves. This is V1's
-/// breath on a new carrier — the session-dot column that used to carry it went
-/// with the per-product marks.
-struct BuriedFinishDot: View {
+/// **A finished reading is a dot in front of the digits, not a ground behind
+/// them.** ~~The turn ends, the figure freezes at the length it reached, and
+/// the ground it was already standing on fills.~~ A filled ground was a
+/// silhouette — a shape one row could answer with, where "no timer" and "a
+/// dimmer timer" are both comparisons with a neighbour — and it worked, at the
+/// price of two marks for one meaning: the notch drew a dot for a finished turn
+/// it could not otherwise speak for, and a grey tile for a finished turn it
+/// could. One meaning gets one mark. The digits simply stop, which is what they
+/// do, and the dot in front of them is what says they have.
+///
+/// **It breathes on the notch and is still on a row**, and that difference is
+/// the surfaces' own: a collapsed bar is glanced at and has one line to say
+/// everything on, so movement is how it gets attention across a screen; an open
+/// panel is being read, and a dot that pulsed once per row would be the list
+/// moving while somebody scanned it (`AGENTS.md` §7).
+///
+/// **Its crest is the sessions numeral and never past it.** The breath swings
+/// within ``NotchPalette/finishedDotDrawingColor``, whose full value is the
+/// count beside the mark — see ``SessionDotBreath/restingOpacity``. Its slot is
+/// a fixed `4`, so nothing on the wing changes width while it moves.
+struct FinishedTurnDot: View {
+    /// The notch's dot breathes; a row's holds still.
+    var breathes = true
+
     var body: some View {
-        BreathingDot()
-            .frame(
-                width: PanelMetrics.buriedFinishDotSize,
-                height: PanelMetrics.buriedFinishDotSize
-            )
-            // Spoken instead by `MonitorStore.spokenBuriedCompletionText`,
-            // which says how many — something the movement never does.
-            .accessibilityHidden(true)
+        Group {
+            if breathes {
+                BreathingDot()
+            } else {
+                Circle().fill(NotchPalette.finishedDot)
+            }
+        }
+        .frame(
+            width: PanelMetrics.buriedFinishDotSize,
+            height: PanelMetrics.buriedFinishDotSize
+        )
+        // Spoken instead by the row's own status and by
+        // `MonitorStore.spokenBuriedCompletionText`, which says how many —
+        // something the movement never does.
+        .accessibilityHidden(true)
     }
 }
 
@@ -1485,7 +1541,7 @@ final class BreathingDotView: NSView {
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
-        ink.backgroundColor = NotchPalette.labelDrawingColor.cgColor
+        ink.backgroundColor = NotchPalette.finishedDotDrawingColor.cgColor
         ink.opacity = Float(SessionDotBreath.restingOpacity)
         layer?.addSublayer(ink)
         // Installed once, for the life of the view: this dot exists only while

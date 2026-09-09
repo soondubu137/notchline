@@ -73,7 +73,7 @@ Figma page 09 draws `[Codex] notchline`; page 10 draws `[Codex] · notchline`, c
 
 [`figma-design.md`](figma-design.md) §4.7 puts the reading — a duration — on the white ground, and Figma page 06 draws `0:42` there. [`answer-in-notch.md`](answer-in-notch.md) §3.3 says the mark says `Approval needed` or `Input needed`, and page 10 draws that.
 
-~~**The name, and it is the composition that decides it rather than either document.**~~ **The act, since 2026-09-06** — `Approve`, `Answer`, or `Read` where neither is available — and the composition still decides it, by the same argument turned round. §3.3 held that the ground **does not resize** when the word inside it becomes `Answer` under the pointer, so the ground was sized for the longest name it could say; with the word settled at rest there is nothing to reserve against and the chip hugs one verb, `77` at its widest against the reservation's `113`. **What is unchanged is the conclusion this section exists for**: neither the name nor the act is a duration, so the duration keeps the place it already had — the finished row's dark ground, the one object on this panel that reports how long a Turn took. It is safer than it was, because the mark is now `32` tall against that reading's `16` and the two could not be confused for one slot even if something tried.
+~~**The name, and it is the composition that decides it rather than either document.**~~ **The act, since 2026-09-06** — `Approve`, `Answer`, or `Read` where neither is available — and the composition still decides it, by the same argument turned round. §3.3 held that the ground **does not resize** when the word inside it becomes `Answer` under the pointer, so the ground was sized for the longest name it could say; with the word settled at rest there is nothing to reserve against and the chip hugs one verb, `77` at its widest against the reservation's `113`. **What is unchanged is the conclusion this section exists for**: neither the name nor the act is a duration, so the duration keeps the place it already had — the finished row's reading, ~~dark ground and all~~ **behind a still dot since 2026-09-08** ([`compact-view-v2.md`](compact-view-v2.md) §4.3), the one object on this panel that reports how long a Turn took. It is safer than it was, because the mark is now `32` tall against that reading's `16` and the two could not be confused for one slot even if something tried.
 
 **And the ground is the app's ink rather than white.** `NotchPalette.brightGround` — `themeInk`'s lit `#DEE8E0` — wherever this panel fills a bright ground: the mark, the subagent badge, and the ground `⏎` sits on inside an open row. §1's *a white ground said a person was wanted* is now *the app's own ink says it*, which costs the argument nothing and gains it the thing the rule was really after: the brightest value on the surface is spent on one state rather than on two, and request controls deepen that same hue under the pointer instead of filling white ([`answer-in-notch.md`](answer-in-notch.md) §3.3).
 
@@ -106,17 +106,21 @@ Three consequences:
 - **The cap has not moved; the floor under it has.** `308` is still reached by three live rows or by one request opened at the body's cap — not by owning a second product.
 - ~~**A limit speaking is the one state neither the user nor the machine chose.** It costs `25`, once, at any product and window count, and it arrives as a line that was not there a moment ago.~~ **Void, and it makes the bullet above absolute.** With the threshold removed, the *only* thing that takes this panel past `308` is the user opening the quota table. Nothing the machine observes — no share, no reset, no unreadable reading — changes its height at all.
 
-Grouping the live list (2026-09-08): the viewport gains `32` for every product
-block it draws, so the resting two-product panel is `388` without a queue and
-`420` with one folded under it, against `324` / `356` before. **That makes the
-second bullet above conditional for the first time**: opening the quota table is
-no longer the only thing that takes this panel past its resting height —
-connecting a second product does too, once and for `64`. Nothing the machine
-*observes* still moves it: no share, no reset, no status and no row count. The
-rules, the arithmetic and the guarantee this weakens are
-[`expanded-panel-v2.md`](expanded-panel-v2.md) §4.
+Grouping the live list (2026-09-08): the viewport gains a bar for every product
+block it draws — `16` for the first, which stands in for the panel's own top
+rule, and `32` for each one after it — so the resting two-product panel is `348`
+without a queue and `380` with one folded under it. **That makes the second
+bullet above conditional for the first time**: opening the quota table is no
+longer the only thing that takes this panel past its resting height —
+connecting a second product does too, once and for `48`. Nothing the machine
+*observes* still moves it: no share, no reset, no status and no row count.
+~~`32` per block, `388` / `420` against `324` / `356`, once and for `64`~~ —
+those were the figures on the day this was built; a row's air came down and the
+first heading gave up its slack the same day
+([`expanded-panel-v2.md`](expanded-panel-v2.md) §2.1 and §4.2), which is where
+the rules, the arithmetic and the guarantee this weakens all are.
 
-Approval detail refinement (2026-09-07): the body retains labelled argument fields with separate prose and code treatments ([`answer-in-notch.md`](answer-in-notch.md) §4.2). Its measured content includes labels and spacing but is still capped at `140` pt; the open row remains capped at `240` pt. The header, queue and footer dimensions are unchanged.
+Approval detail refinement (2026-09-07): the body retains labelled argument fields with separate prose and code treatments ([`answer-in-notch.md`](answer-in-notch.md) §4.2). Its measured content includes labels and spacing but is still capped at ~~`140`~~ `124` pt; the open row remains capped at ~~`240`~~ `216` pt — both are the viewport's own subtraction and moved with it ([`answer-in-notch.md`](answer-in-notch.md) §4.1, 2026-09-08). The header, queue and footer dimensions are unchanged.
 
 Question refinement (2026-09-07): the body may reach `300` pt and the row `400` pt, with the same fixed `100` pt heading/footer composition. The live viewport is capped at `max(240, openRowHeight)`, so the answer row remains visible. The height table above describes closed rows and approval/plan bodies; at its question cap the reference panel is `46 + 400 + 22 = 468` pt before any Recent section. Option cards wrap titles and independently expand long descriptions; both selection modes use the same permanent answer field and affirmative — `Next` until the last question of the set and `Submit` on it ([`answer-in-notch.md`](answer-in-notch.md) §5, §5.8).
 
@@ -147,7 +151,7 @@ These are the checks that span more than one of the three; each document keeps i
 - [x] A row's caption draws the badge and then the Project, with no separator between them, and the caption line measures `16` with a badge and without one.
 - [x] The theme ink reaches the mark, the badge and the `multiSelect` tick box, and those three change together when the `Theme colour` selection changes. Built 2026-09-05: the box is `NotchPalette.badgeInk(store.aggregateInk).on`, which is the accessor the badge already reads and the same pair the mark reads, so the three cannot drift; a ticked box was seen in the theme ink on the running app.
 - [x] ~~A waiting row's white ground is sized for `Approval needed` / `Input needed` and does not resize when the word inside it becomes `Answer` or `Read`. Built 2026-09-05: `PanelMetrics.waitingMarkWidth` is measured once against all four words, and the word says `Read` on every row until §14.2's write path exists.~~ **Redrawn 2026-09-06** (§3.5): the ground hugs one verb decided at rest, so it cannot resize under a pointer that changes nothing. `PanelMetrics.waitingMarkWord(for:canBeAnswered:)` is what the two new assertions pin, and the reservation is gone.
-- [x] A finished row's dark ground is the only place on the panel that reports how long a Turn took.
+- [x] A finished row's reading is the only place on the panel that reports how long a Turn took. (Its ~~dark ground~~ **dot** is what says the figure has stopped, since 2026-09-08.)
 - [x] With every colour rendered as flat grey, no figure, name or state on the expanded panel becomes ambiguous.
 - [x] An unreadable quota field draws `--` and nothing anywhere else on the panel — band, mark, rows or footer control — reports it.
 

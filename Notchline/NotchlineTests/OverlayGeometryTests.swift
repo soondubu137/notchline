@@ -112,7 +112,7 @@ struct OverlayGeometryTests {
         #expect(
             store.sessionViewportHeight
                 == PanelMetrics.sessionRowHeight * 3
-                    + PanelMetrics.productGroupHeaderHeight * 2
+                    + PanelMetrics.groupHeadingsHeight(count: 2)
         )
         #expect(abs(host.fittingSize.height - store.sessionViewportHeight) < 0.01)
 
@@ -194,6 +194,118 @@ struct OverlayGeometryTests {
         // And lit below, where the chip is.
         let lit = brightest(from: slack + 3, to: PanelMetrics.productGroupHeaderHeight - 3)
         #expect(lit > 0.8, "the heading drew no chip — brightest value was \(lit)")
+    }
+
+    /// The separator between the chip and the count is **the rule's own value,
+    /// on the rule's own line, in the middle of the gap the glyph held**.
+    ///
+    /// Three claims and one drawing, and none of the three is checkable from
+    /// the metrics: `productBadgeCountSpacing` is `(gap − dot) / 2` by
+    /// construction and would agree with itself however the bar were drawn.
+    /// What can be wrong is the ink — a `·` set in the caption's `#7C7C80` is
+    /// a third piece of *text* on a line that already carries a chip and a
+    /// figure, and this is a mark on the same chrome layer as the hairline it
+    /// sits on — and the placement, which is what "add the dot back without
+    /// moving the count" means.
+    ///
+    /// Read off the bar's own centre row, which is where the rule is: the runs
+    /// of ink across it are the chip, the separator, the count and the rule, so
+    /// the second one is the mark and the fourth is what it has to match.
+    @Test @MainActor
+    func theHeadingsSeparatorIsTheRulesOwnValueInTheMiddleOfItsGap() throws {
+        let header = ProductGroupHeader(
+            group: MonitorAggregation.SessionGroup(
+                agent: .codex,
+                sessions: [
+                    MonitoredSession(
+                        agent: .codex,
+                        threadID: "a", turnID: "u", projectName: "p", title: "t",
+                        preview: nil, status: .running, startedAt: nil
+                    )
+                ],
+                wantsAttention: false
+            )
+        )
+        let width = PanelMetrics.sessionViewportWidth(panelWidth: 520)
+        let host = NSHostingView(rootView: header.frame(width: width))
+        host.frame = NSRect(
+            x: 0, y: 0, width: width, height: PanelMetrics.productGroupHeaderHeight
+        )
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.layoutSubtreeIfNeeded()
+
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let across = CGFloat(rep.pixelsWide) / host.bounds.width
+        let down = CGFloat(rep.pixelsHigh) / host.bounds.height
+
+        // The bar centres its contents, so the rule's line is the chip's
+        // middle -- and the chip stands on the bar's bottom edge.
+        let line = PanelMetrics.productGroupHeaderHeight
+            - PanelMetrics.productBadgeHeight / 2
+        struct Run { var from: CGFloat; var to: CGFloat; var peak: CGFloat }
+        var runs: [Run] = []
+        // A tenth of a point, so a `3` pt disc is measured rather than
+        // rounded, and the run either side of it is found where it ends.
+        for step in 0...Int(width * 10) {
+            let x = CGFloat(step) / 10
+            let colour = rep
+                .colorAt(x: Int(x * across), y: Int(line * down))?
+                .usingColorSpace(.deviceRGB)
+            // Above the panel's black and below the chip's own ground, which
+            // is what makes the chip one run rather than its glyphs several.
+            let value = colour?.brightnessComponent ?? 0
+            if value > 0.06 {
+                if var last = runs.last, x - last.to < 0.2 {
+                    last.to = x
+                    last.peak = max(last.peak, value)
+                    runs[runs.count - 1] = last
+                } else {
+                    runs.append(Run(from: x, to: x, peak: value))
+                }
+            }
+        }
+
+        #expect(runs.count == 4, "expected chip, separator, count and rule")
+        let chip = try #require(runs.first)
+        let dot = try #require(runs.count > 1 ? runs[1] : nil)
+        let count = try #require(runs.count > 2 ? runs[2] : nil)
+        let rule = try #require(runs.last)
+
+        // The mark is the rule drawn round: the same value, to the point.
+        #expect(
+            abs(dot.peak - rule.peak) < 0.02,
+            "the separator is \(dot.peak) against the rule's \(rule.peak)"
+        )
+        // And plainly not the caption's ink, which is the thing it stopped
+        // being. Compared against that ink's own value rather than against the
+        // count's drawn peak: one row through a `11` pt glyph crosses whatever
+        // antialiasing that row happens to carry, so the numeral samples well
+        // under the `#7C7C80` it is set in and would make this a weak test of
+        // a strong claim.
+        let caption = try #require(
+            NotchPalette.labelDrawingColor.usingColorSpace(.deviceRGB)
+        )
+        #expect(dot.peak < caption.brightnessComponent / 2)
+        #expect(count.peak > dot.peak)
+
+        // Its own width, and the middle of the gap: the space it leaves on the
+        // chip's side is the space it leaves on the count's.
+        #expect(abs((dot.to - dot.from) - PanelMetrics.captionSeparatorDotSize) < 0.6)
+        let before = dot.from - chip.to
+        let after = count.from - dot.to
+        // Half a point of slack, and it is the chip's edge rather than the
+        // arithmetic: a `5` pt corner drawn into a scan this fine reports its
+        // own antialiasing as ink, which puts `chip.to` a fraction past where
+        // the layout ends it.
+        #expect(abs(before - PanelMetrics.productBadgeCountSpacing) < 0.7)
+        // The count's glyph carries its own left bearing, so `after` is the
+        // spacing plus that -- never less than it, and within a point of it.
+        // Chasing the bearing itself is declined: it differs per digit, and a
+        // separator that moved when a block gained a session would be worse
+        // than one half a point off centre.
+        #expect(after >= before)
+        #expect(after - before < 1.5)
     }
 
     @Test @MainActor

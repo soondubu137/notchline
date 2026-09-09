@@ -565,8 +565,8 @@ private struct CompactTrailingSlot: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            if store.buriesAFinishedTurn {
-                BuriedFinishDot()
+            if drawsFinishedDot {
+                FinishedTurnDot()
                     .padding(
                         .trailing,
                         store.compactTimerText == nil
@@ -591,14 +591,16 @@ private struct CompactTrailingSlot: View {
             // ground at all: it carries the padding both trailing widths bill
             // for, so the composed bar width is unchanged.
             //
-            // **Except when it has stopped**, which is the one thing the digits
-            // cannot say alone: the turn ends, the figure freezes at the length
-            // it reached, and the ground it was already standing on fills. That
-            // is a property of the figure rather than a comparison with a
-            // neighbour, which is why a ground is allowed here where the white
-            // flip is not (`compact-view-v2.md` §4.2).
+            // **Including when it has stopped**, which is the one thing the
+            // digits cannot say alone: the turn ends and the figure freezes at
+            // the length it reached. ~~and the ground it was already standing
+            // on fills.~~ **The ground is gone and the dot above says it**
+            // (``CompactTrailingReading/drawsFinishedDot``): that was two marks
+            // for one fact, a grey tile for a finished turn this wing could
+            // draw and a dot for one it could not. One meaning, one mark, and
+            // the wing was already drawing it.
             if let span = store.compactReadingSpan {
-                ReadingGround(fill: span.end == nil ? .clear : Self.stoppedGround) {
+                ReadingGround(fill: .clear) {
                     ElapsedReadout(
                         startedAt: span.start,
                         stoppedAt: span.end,
@@ -636,15 +638,16 @@ private struct CompactTrailingSlot: View {
         store.compactDrawnTrailingReadingWidth
     }
 
-    /// What the slot is currently drawing, as against how wide it is.
-    private var presence: [Bool] {
-        [store.compactReadingSpan == nil, store.buriesAFinishedTurn]
+    /// Whether the wing draws the finished-turn dot, asked of the one value the
+    /// width is composed from so the drawing and the billing cannot disagree.
+    private var drawsFinishedDot: Bool {
+        store.compactTrailingReading.drawsFinishedDot
     }
 
-    /// The ground a stopped reading fills with: the dim end of the row's own
-    /// pair, unchanged, so a frozen figure up here and a finished row below it
-    /// are the same mark.
-    private static let stoppedGround = NotchPalette.restingInk.chipFill
+    /// What the slot is currently drawing, as against how wide it is.
+    private var presence: [Bool] {
+        [store.compactReadingSpan == nil, drawsFinishedDot]
+    }
 
     /// Fading rather than appearing, because the wing they stand in is a width
     /// that opens for them: a reading arriving at full ink would be drawn over
@@ -692,7 +695,22 @@ private struct SettingsButton: View {
     }
 }
 
+/// The panel below the band: the live list, the queue, the footer — and the
+/// rule that closes the band off from them.
+///
+/// **That rule is drawn only while the list does not lead with a block
+/// heading.** A heading brings the same hairline, on the same two `x` values,
+/// and drawn together the two stood `24` apart with nothing said between them:
+/// one boundary drawn twice (`panel-v2.md` §3.4). The heading's is the one
+/// that keeps its name, so it takes the job — and, with its slack off
+/// (``PanelMetrics/leadingProductGroupHeaderHeight``), very nearly the
+/// position: `8` lower, which is the chip's own half.
+///
+/// With nothing live, or with one product connected and a flat list, no
+/// heading is drawn and the panel draws its own rule exactly as it always has.
 private struct ExpandedPanelContent: View {
+    @EnvironmentObject private var store: MonitorStore
+
     var body: some View {
         VStack(spacing: 0) {
             ActiveSessionList()
@@ -701,10 +719,12 @@ private struct ExpandedPanelContent: View {
         }
         .foregroundStyle(.white)
         .overlay(alignment: .top) {
-            Rectangle()
-                .fill(Color.white.opacity(0.15))
-                .frame(height: 1)
-                .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
+            if !store.listLeadsWithABlockHeading {
+                Rectangle()
+                    .fill(NotchPalette.hairline)
+                    .frame(height: 1)
+                    .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
+            }
         }
     }
 }
@@ -828,11 +848,18 @@ struct ActiveSessionList: View {
                     if groups.isEmpty {
                         rows(store.sessions)
                     } else {
-                        ForEach(groups) { group in
+                        ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
                             Section {
                                 rows(group.sessions)
                             } header: {
-                                ProductGroupHeader(group: group)
+                                // The first block's heading is the one that
+                                // stands in for the panel's own top rule, so
+                                // it is drawn without the slack that separates
+                                // the others from the row above them.
+                                ProductGroupHeader(
+                                    group: group,
+                                    isLeading: index == 0
+                                )
                             }
                         }
                     }
@@ -1469,7 +1496,11 @@ struct OpenRow: View {
                 answerRow
             }
             .padding(.horizontal, PanelMetrics.sessionRowPadding)
-            .padding(.vertical, 12.5)
+            // The closed row centres its three lines in its own height, so
+            // this has to be exactly what that leaves: the head does not move
+            // when a row opens, and a literal here drifted from it the moment
+            // the row's air changed.
+            .padding(.vertical, PanelMetrics.sessionRowVerticalPadding)
         }
         .frame(maxWidth: .infinity)
         .frame(height: store.openRowHeight ?? PanelMetrics.sessionRowHeight)
@@ -2806,39 +2837,73 @@ struct OptionRow: View {
 ///
 /// **All of the bar's slack sits above the chip, and none below it.** Centred,
 /// the `32` put `8` over the chip and `8` under — and the row beneath brings
-/// its own `12.5` of top padding, so the chip stood `8` from the band's
-/// hairline and `20.5` from the caption it was heading. A heading nearer to
-/// what precedes it than to what it heads is a heading attached to the wrong
-/// thing; centring is right for a bar that closes a list and wrong for one
-/// that opens a block. Taking the whole `16` above inverts it — `16` clear of
-/// the band, `12.5` to the caption, which is the row's own padding and nothing
-/// added — and it moves the block's rule from `16` below the panel's own
-/// hairline to `24`, where the two no longer read as a pair.
+/// its own top padding, so the chip stood `8` from the rule above it and
+/// `20.5` from the caption it was heading. A heading nearer to what precedes
+/// it than to what it heads is a heading attached to the wrong thing; centring
+/// is right for a bar that closes a list and wrong for one that opens a block.
+/// Taking the whole `16` above inverts it — `16` clear of what came before,
+/// and the row's own padding and nothing added to the caption below.
+///
+/// **The first block's bar is that bar with the slack taken off**, `16` and
+/// the chip alone (``PanelMetrics/leadingProductGroupHeaderHeight``). The
+/// slack is what separates a heading from what precedes it, and the first
+/// heading is preceded by the band, which brings its own — so the `16` was
+/// paid twice and the panel opened on a stripe of black. Off, the chip's top
+/// edge stands where the panel's own hairline used to be drawn, and this bar's
+/// rule stands `8` under it, which is why that hairline is now not drawn at
+/// all (``ExpandedPanelContent``).
 ///
 /// Internal for the same reason ``ActiveSessionList`` is — the height it draws
 /// at against the height the panel was sized to is only checkable by laying it
 /// out.
 struct ProductGroupHeader: View {
     let group: MonitorAggregation.SessionGroup
+    /// Whether this is the block the panel opens on, which is drawn without
+    /// the slack — see ``PanelMetrics/leadingProductGroupHeaderHeight``.
+    var isLeading: Bool = false
+
+    private var height: CGFloat {
+        isLeading
+            ? PanelMetrics.leadingProductGroupHeaderHeight
+            : PanelMetrics.productGroupHeaderHeight
+    }
 
     var body: some View {
         ZStack(alignment: .bottom) {
             Rectangle().fill(Color.black)
 
             HStack(spacing: 8) {
-                HStack(spacing: PanelMetrics.productBadgePadding) {
+                HStack(spacing: PanelMetrics.productBadgeCountSpacing) {
                     ProductBadge(name: group.agent.displayName)
 
-                    // The caption idiom exactly, separator included -- and one
-                    // step brighter while this block holds somebody's
+                    // **The separator is drawn rather than set, and it is the
+                    // rule's own value.** A `·` at the caption's `#7C7C80` was
+                    // a third piece of text on a line that already carries a
+                    // chip and a figure; as a mark at ``NotchPalette/hairline``
+                    // it is the same object as the rule it sits on -- the same
+                    // value, and on the same line, because the bar centres its
+                    // contents and the rule is one of them.
+                    //
+                    // It stands on the **middle** of the gap the glyph held
+                    // (``PanelMetrics/productBadgeCountSpacing``), so the count
+                    // has not moved by a point either side of this change.
+                    Circle()
+                        .fill(NotchPalette.hairline)
+                        .frame(
+                            width: PanelMetrics.captionSeparatorDotSize,
+                            height: PanelMetrics.captionSeparatorDotSize
+                        )
+                        .accessibilityHidden(true)
+
+                    // One step brighter while this block holds somebody's
                     // attention. Grouped, the most urgent row on the surface
                     // may be inside the second block and below the fold; this
                     // is what says so, and it says it in the channel this
                     // panel already spends on exactly that meaning
                     // (`panel-v2.md` §1.1): every value brighter than the
                     // values around it is brighter because a person is wanted.
-                    Text("· \(group.sessions.count)")
-                        .font(.system(size: 11, weight: .light))
+                    Text(verbatim: "\(group.sessions.count)")
+                        .font(Font(PanelMetrics.captionFont))
                         .foregroundStyle(
                             group.wantsAttention
                                 ? NotchPalette.reading
@@ -2848,16 +2913,12 @@ struct ProductGroupHeader: View {
                 }
 
                 Rectangle()
-                    .fill(Color.white.opacity(0.15))
+                    .fill(NotchPalette.hairline)
                     .frame(height: 1)
             }
             .padding(.horizontal, PanelMetrics.sessionRowPadding)
         }
-        .frame(
-            maxWidth: .infinity,
-            minHeight: PanelMetrics.productGroupHeaderHeight,
-            maxHeight: PanelMetrics.productGroupHeaderHeight
-        )
+        .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(spokenLabel)
         .accessibilityAddTraits(.isHeader)
@@ -2989,7 +3050,7 @@ private struct FoldSeamRule: View {
 
     var body: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.15))
+            .fill(NotchPalette.hairline)
             .frame(height: 1)
             .scaleEffect(x: isVisible ? 1 : 0, anchor: .leading)
             .opacity(isVisible ? 1 : 0)
@@ -3267,7 +3328,7 @@ private struct SessionStatusControl: View {
     // colours left on it. What changed in `figma-design.md` page 14 is that the
     // mark now has three silhouettes rather than one drawn three ways: a bare
     // reading while the turn runs, the same reading on white while it wants a
-    // person, and on a dim ground once it has finished.
+    // person, and ~~on a dim ground~~ **behind a dot** once it has finished.
     //
     // **Presence and brightness were both comparisons, and that was the bug.**
     // "No timer" only reads as finished beside a row that has one, and a white
@@ -3276,6 +3337,15 @@ private struct SessionStatusControl: View {
     // neither question. A ground is a silhouette, which one row can answer
     // alone. It is the ``SubagentBadgeView`` tile at reading width, which is
     // also why the two compose here without a case of their own.
+    //
+    // **The finished silhouette is a dot now, and it is the same argument.** A
+    // mark in front of the digits is answerable by one row exactly as a ground
+    // behind them was, and it costs the surface one silhouette rather than two:
+    // the notch already drew this dot for a finished turn it could not
+    // otherwise speak for (``FinishedTurnDot``), so the panel and the bar stop
+    // saying one thing two ways. The tile stays where it is still a tile —
+    // ``SubagentBadgeView`` — and the bright ground stays, because it answers
+    // *does this want a person* rather than *has this stopped*.
     //
     // A finished row with a subagent still working keeps the badge in this
     // slot, as before: the turn's own clock has stopped — it really did end —
@@ -3425,11 +3495,22 @@ private struct SessionStatusControl: View {
         isMarkHovered ? NotchPalette.requestHoverGround : NotchPalette.brightGround
     }
 
-    /// The reading, on the ground its state gives it.
+    /// The reading, on the ground its state gives it — and behind the dot that
+    /// says it has stopped.
     ///
-    /// Running is the one state drawn bare: a set of silhouettes needs one
-    /// member that is nothing, and it should be the state that fills most of
-    /// the list.
+    /// **A stopped reading is a dot and bare digits**, where it used to be
+    /// digits on a filled tile. The tile was a silhouette, and the argument for
+    /// it holds: "no timer" and "a dimmer timer" are both comparisons with a
+    /// neighbour, and a row read on its own answered neither. A dot in front of
+    /// the figure is a silhouette too — one row can answer with it alone — and
+    /// it is the mark the notch was *already* drawing for the same fact
+    /// (``FinishedTurnDot``), so the two surfaces stop saying one thing two
+    /// ways.
+    ///
+    /// What it also buys is alignment: with the ground went its `6` of padding,
+    /// so a running row's digits and a finished row's now end on the same
+    /// column instead of the finished one standing `6` short of it. The
+    /// difference between the two rows is the dot, which is the difference.
     @ViewBuilder
     private func reading(startedAt: Date, stoppedAt: Date?) -> some View {
         let readout = ElapsedReadout(
@@ -3439,18 +3520,36 @@ private struct SessionStatusControl: View {
             tint: tint,
             weight: weight
         )
-        if let fill = groundFill {
-            ReadingGround(fill: fill) { readout }
-        } else {
-            readout
+        HStack(spacing: PanelMetrics.buriedFinishDotSpacing) {
+            if stoppedAt != nil {
+                // **Still, where the notch's breathes.** A collapsed bar is
+                // glanced at and has one line to say everything on; an open
+                // panel is being read, and a dot pulsing once per row would be
+                // the list moving under somebody scanning it (`AGENTS.md` §7).
+                FinishedTurnDot(breathes: false)
+            }
+            if let fill = groundFill {
+                ReadingGround(fill: fill) { readout }
+            } else {
+                readout
+            }
         }
     }
 
-    /// The ground under the reading, or nil on the one state that has none.
+    /// The ground under the reading, or nil on the states that have none.
+    ///
+    /// **Two of them now.** Running was the one state drawn bare — a set of
+    /// silhouettes needs one member that is nothing, and it should be the state
+    /// that fills most of the list. A finished turn is the second: its dot is
+    /// the silhouette, and a dot in front of a filled tile would be the same
+    /// mark drawn twice. ~~`NotchPalette.restingInk.chipFill`~~ is left to
+    /// ``SubagentBadgeView``, which is a badge rather than a reading and still
+    /// wants a tile to be one.
+    ///
+    /// What is left here is the bright ground, and it answers a different
+    /// question: not *has this stopped* but *does this want a person*.
     private var groundFill: Color? {
-        if wantsAttention { return NotchPalette.brightGround }
-        guard !session.status.keepsTiming else { return nil }
-        return NotchPalette.restingInk.chipFill
+        wantsAttention ? NotchPalette.brightGround : nil
     }
 
     /// Whether this row wants the person, from either of the two places that

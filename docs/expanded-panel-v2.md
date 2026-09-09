@@ -8,6 +8,8 @@
 | Amended | **§2's queue is a five-hour window, not a five-row queue.** Membership is every row that left within the past five hours; five is now the number the viewport *draws* rather than the number the store *holds*. Touched: §2.2, §2.3, §2.4 (rules 01, 02, 05, 09 and a new 11), §2.5 (new), §2.6, §4, §5, §6, §7, §8.1, §8.5, §8.6, §9, §10. **No metric moves** — `32 + 5 × 40 = 232 ≤ 240 < 272` already said "five, then scroll", and it now says it about the fold instead of the store. One thing gets worse and is stated rather than finessed: the queue is now literally the "fixed time window" [`PRD.md`](PRD.md) §3 bans, and §8.1 rewrites that sentence instead of arguing with it. |
 | Amended | **The live list is grouped by product** (2026-09-08), and the queue is not. §4 is the whole of it: one block per product that has a row, headed by the bar §2.2 already defines, in the fixed product order, with the chip coming off the live row and staying on the retired one. Nothing in §2 moves — the seam, the window, the ages, the fold and the five rows are untouched — and nothing in §3 is touched either. Built the same day. |
 | Amended | **`No active sessions` is drawn whenever nothing is live, queue or no queue** (2026-09-05). §2 let the seam take the sentence's place, on the reading that a list continuing past its own end is a better answer than an apology. It is a better answer to a different question: what has left is not what is running, and the panel was left unable to say the one thing it exists to say for as long as anything sat under the rule. The apology becomes the empty list's own first line, above the seam and inside the same scroller. Touched: §2.4 rule 02, §2.6, §4, §9, §10. **No metric moves, and the floor comes back up** — `178` again rather than `162`, with a folded queue `32` above it; the fold with nothing live is four rows rather than five, because `48 + 32 + 4 × 40` is the `240` cap exactly. |
+| Amended | **A row's air comes down, and the first block's heading takes the panel's own top rule over** (2026-09-08). Two changes, both cosmetic, both in §2.1 and §4.2. A live row is `72` rather than `80` — `8.5` above its three lines and `8.5` below, where it was `12.5` — so a retired row is `36`, the live viewport's cap is `216` and the queue's is `180`; nothing about what either viewport *draws* moves, still three rows and five. And the first block's heading is drawn without its `16` of slack, `16` rather than `32`: its chip's top edge stands where the panel's own hairline was, its rule stands `8` under that, and the panel stops drawing that hairline while a heading is there to draw one. The panel is `300` at every connected form where it was `324`. Touched: §2.1, §2.3, §2.4 rules 02 and 04, §4.2, §4.3 (new rule 11), §4.4, §9. **One figure follows and is not a choice:** an approval's body is the viewport less the row's fixed parts (`answer-in-notch.md` §4.1), so it is `124` where it was `140` — held at `140` a maximal approval would stand `16` taller than the list it opens in. |
+| Amended | **The heading's separator becomes chrome, and a finished row's ground becomes a dot** (2026-09-08, with the row above). `Codex · 3` set its separator in the caption's ink, which made it a third piece of text on a line already carrying a chip and a figure; it is a `3` pt disc at the hairline's own `15%` white now, on the rule's own line and in the middle of the gap the glyph held, so the count does not move and the mark stops competing with what it separates (§4.2). And a finished row's reading gives up its dim tile for a still `4` pt dot in front of the digits — the mark the collapsed bar already drew for the same fact ([`compact-view-v2.md`](compact-view-v2.md) §4.2 and §4.3), in the sessions numeral's `#C7C7CC`, so the two surfaces stop saying one thing two ways. With the tile went its `6` of padding, which puts a running row's digits and a finished row's on the same column for the first time. |
 | File | [Notchline V2](https://www.figma.com/design/c3CQBBk3Boiu0oM00Vvs9Y/Notchline-V2) — `06 — The expanded panel` |
 | Scope | The expanded panel's session viewport only: the region between the band and the quota footer. The band is [`expanded-header-v2.md`](expanded-header-v2.md), the footer is [`dual-agent-design.md`](dual-agent-design.md) §5, and both collapsed forms are [`compact-view-v2.md`](compact-view-v2.md). None of the three is touched. |
 | Supersedes | [`figma-design.md`](figma-design.md) §5.1's "removed automatically" as the end of a row's life, and §5.3's fixed `Approval requested` string. Narrows two [`PRD.md`](PRD.md) §3 non-goals and moves a third — §8.1, §8.2. |
@@ -28,11 +30,20 @@ The band and both collapsed forms have been redrawn. The viewport between them h
 
 | Object | Height | Where it comes from |
 | --- | --- | --- |
-| A live row | `80` | Unchanged |
+| A live row | ~~`80`~~ **`72`** | `8.5` + its three lines' `55` + `8.5` |
 | The seam | `32` | `9` + a `14` pt caption line + `9` |
-| A row that has left | `40` | Half a live row, exactly |
+| A row that has left | ~~`40`~~ **`36`** | Half a live row, exactly |
 
-The viewport is **its content, capped at `240`** — which is what `80 × min(rows, 3)` already was, restated in points so that rows of two heights can share it.
+The viewport is **its content, capped at ~~`240`~~ `216`** — which is what `sessionRowHeight × min(rows, 3)` already was, restated in points so that rows of two heights can share it.
+
+**The row's height is composed from its air now, not divided into it** (amended
+2026-09-08). `80` was chosen and the three lines were centred in it, which left
+`12.5` above and below — `25` of black between one row's last word and the
+next's first, more air *between* two rows than a row spends on its own leading.
+`8.5` is the decision and `72` is what follows; `17` between rows is still the
+largest gap on the list and still clear of the `12` pt corner the hover ground
+draws. The retired row follows too, at `36`, because "half a live row exactly"
+is the statement it is making and not a number it happens to hold.
 
 ### 2.2 The seam
 
@@ -47,7 +58,7 @@ A label, a hairline and a chevron, on one `32` pt line at the foot of the live l
 
 One line: **product · project · subject**, `13` pt Regular. ~~The product name takes that product's caption ink (`#4D81B7` / `#9C553E`)~~ — **the product is a badge** ([`colour-v2.md`](colour-v2.md) §5), ground and text from the `Theme colour` pair, drawn only while more than one product is connected. `· project ·` takes `#7C7C80`, and the subject takes `#C7C7CC` — one step below a live title's white-at-98% and one step above a caption. It ends in a fade like every other line here.
 
-**The badge is `16` on a `13` pt line**, which is the same two points a live row's caption pays (§2.1). The line's own `40` is unchanged: it was measured from the half-row it has to equal, not from its text, and `16` still clears it.
+**The badge is `16` on a `13` pt line**, which is the same two points a live row's caption pays (§2.1). The line's own ~~`40`~~ **`36`** is measured from the half-row it has to equal rather than from its text, so it moved when the live row did and for no reason of its own — and `16` still clears it, with `10` above and `10` below.
 
 The trailing reading is an **age** — `now`, `2m`, `9m`, `1h`, `4h` — bare, `13` pt Light `#7C7C80`, tabular. **Its ceiling is `4h`, and that is the window agreeing with the reading rather than a coincidence:** nothing here can read `5h`, because at five hours the row is gone (§2.4 rule 11). ~~The age therefore stays two characters for the whole of a member's life.~~ **It stays within three characters, and its hours within one digit** — `10m` through `59m` are three, which the tabular figures hold steady. What the window buys is the digit: unbounded, this column would have to hold `12h`, and then `3d`, and a reading that grows a unit is a column that moves.
 
@@ -58,9 +69,9 @@ The ground family does not travel below the rule: bare / white / dim answers *wh
 | | Rule | |
 | --- | --- | --- |
 | 01 | **It is every row that left within the past five hours, not the last five threads.** Membership is a window, not a count: a row enters when it leaves the live list and stays until that departure is five hours old. Every member was still on the list a moment ago and was handed over by its product before it was ever given a row, so the queue remains unsearchable, unpageable, holds nothing the list did not itself hold, and can never contain a Thread this run has not watched. **Five hours is a constant, not a setting** — a window the user can widen is the history browser this app is not | §8.1 |
-| 02 | **What the viewport draws needs no rule of its own — and with nothing live it draws four.** ~~Five: a seam and five rows is `232` against the viewport's own `240`, and a sixth is `272`.~~ An empty live list still draws its own line, so the sum with nothing live is `48 + 32 + 4 × 40 = 240` — the cap exactly — and a fifth row is `280` (§4). **The queue draws its fold and scrolls past it in the panel's own viewport** — no second scroller, no nested scroll chaining, no new metric, and nothing to snap. ~~And the `8` points the viewport has left over fall in the sixth row's own top padding, so they carry no ink at all.~~ There is no slack left to fall anywhere: the fold lands on `240` exactly, so an over-full queue is drawn exactly like a full one and the row past the fold is simply not drawn. There is no partial line, no sliver of a subject, nothing to notice. That is why §2.2 makes the count live. It is not a redundant hint; it is the only one | §4 |
+| 02 | **What the viewport draws needs no rule of its own — and with nothing live it draws four.** ~~Five: a seam and five rows is `232` against the viewport's own `240`, and a sixth is `272`.~~ ~~An empty live list still draws its own line, so the sum with nothing live is `48 + 32 + 4 × 40 = 240` — the cap exactly — and a fifth row is `280` (§4).~~ **The queue has its own viewport and its own cap** (`recentViewportCap`, five retired rows), so the two no longer share one ceiling and this arithmetic is not what decides the fold; what it draws is still five, at `36` each rather than `40` (amended 2026-09-08). **The queue draws its fold and scrolls past it in the panel's own viewport** — no second scroller, no nested scroll chaining, no new metric, and nothing to snap. ~~And the `8` points the viewport has left over fall in the sixth row's own top padding, so they carry no ink at all.~~ There is no slack left to fall anywhere: the fold lands on `240` exactly, so an over-full queue is drawn exactly like a full one and the row past the fold is simply not drawn. There is no partial line, no sliver of a subject, nothing to notice. That is why §2.2 makes the count live. It is not a redundant hint; it is the only one | §4 |
 | 03 | **It is empty at launch.** Nothing has departed yet. A stored queue would be the one thing on this surface promising navigation to a Thread nobody vouched for this run, which is exactly what [ADR 0017](adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md) forbids the live list. Memory, not history | |
-| 04 | **A row that retires halves; it does not vanish.** Completed sorts last, so a retiring row is already at the foot of the live list and the seam is directly beneath it: it drops from `80` to `40`, gives up two of its three lines and its ground, and passes under the rule. One local exchange, nothing travelling. A row dismissed by hand from the middle of the list is the exception — removed and re-inserted, with only the halving drawn | |
+| 04 | **A row that retires halves; it does not vanish.** Completed sorts last, so a retiring row is already at the foot of the live list and the seam is directly beneath it: it drops from ~~`80` to `40`~~ `72` to `36`, gives up two of its three lines and its ground, and passes under the rule. One local exchange, nothing travelling. A row dismissed by hand from the middle of the list is the exception — removed and re-inserted, with only the halving drawn | |
 | 05 | ~~**Everything that left is in it, whatever took it out.**~~ **The three ways in are the rule, and "everything" was one word too many.** Read, dismissed, or dismissed while still running — and nothing else. A row can leave the live list without ending: a killed session is retired by App Server membership correction with its Turn still open, and a product going dark takes every row with it. Those vanished, they did not finish, and **vanishing is not archiving** (§2.5). The reading is an age rather than a duration, so it stays honest in all three; and nothing below the rule claims a status, because the rule's meaning is that the list stops there. **The window is measured from the departure instant, not from the Turn's end** — that is the moment this list stopped reporting the row, it is the only moment of the three the app itself observed, and it is what the age already counts | |
 | 06 | **The ground family does not travel below the rule.** §2.3 | |
 | 07 | **Folded by default, remembered, on the quota block's own control.** One setting, `recentFolded`, defaulting to folded. Unlike the quota's, folding this one never closes the panel: the footer stands between the control and the bottom edge, so that edge cannot travel past a still pointer ([`dual-agent-design.md`](dual-agent-design.md) §5.4) | |
@@ -125,29 +136,67 @@ chevron taken off:
 
 ```
 32  =  16  +  badge 16  +  0           (the seam's own bar height, unchanged)
-[Codex]  · 3  ────────────────────────────────────────────────────────  508
+16  =   0  +  badge 16  +  0           (the first block's, amended 2026-09-08)
+[Codex] ·  3  ────────────────────────────────────────────────────────  508
 ```
 
 **All of the bar's slack is above the chip, and none of it below.** Centred at
 `8 / 8` — which is what the seam does, and what this was built as on
 2026-09-08 — the chip stood `8` under the band's hairline and `20.5` from the
-caption it heads, because the row beneath brings its own `12.5` of top padding.
-A heading nearer to what precedes it than to what it heads is a heading
-attached to the wrong thing. Centring is right for a bar that *closes* a list
-and wrong for one that *opens* a block, and this is the only bar of the second
-kind on the panel. Taking the whole `16` above inverts it — `16` clear of the
-band, `12.5` to the caption, which is the row's own padding and nothing added —
-and it moves a block's rule from `16` below the panel's own hairline to `24`,
-where the two stop reading as a pair. **No figure outside the bar moves**: it
-is still `32`, still `productGroupHeaderHeight`, and every height in §4.4 is
-unchanged.
+caption it heads, because the row beneath brings its own top padding. A heading
+nearer to what precedes it than to what it heads is a heading attached to the
+wrong thing. Centring is right for a bar that *closes* a list and wrong for one
+that *opens* a block, and this is the only bar of the second kind on the panel.
+Taking the whole `16` above inverts it — `16` clear of the band, and the row's
+own padding and nothing added to the caption below.
+
+**The first block's bar is that bar with the slack taken off** (amended
+2026-09-08). The slack is what separates a heading from what precedes it, and
+the first heading is preceded by the band — which brings its own air already,
+half the difference between the menu bar's height and the `16.6` matrix
+standing in the middle of it. Paid twice, the first chip stood `26` under the
+matrix and the panel opened on a stripe of black. Off, the chip's top edge
+stands exactly where the panel's own hairline was drawn.
+
+**And that hairline is now not drawn at all while a heading is there.** The two
+were the same `1` pt of white at `15%` between the same two `x` values, `24`
+apart, with nothing said between them: one boundary drawn twice
+([`panel-v2.md`](panel-v2.md) §3.4). The heading's is the one that carries a
+name, so it takes the job over and — the slack being gone — very nearly the
+position: `8` lower, which is the chip's own half. With nothing live, or with
+one product connected and a flat list, no heading is drawn and the panel draws
+its own rule exactly as it always has.
 
 - The badge is [`colour-v2.md`](colour-v2.md) §5's chip unchanged — `16` tall,
   corner `5`, `6` of padding, `10` pt Medium, `#DEE8E0` on `#1B1F1C` — on the
-  panel's own `12`, and on the bar's own bottom edge.
-- `· N` is the caption idiom exactly, separator included: `11` pt Light at
-  `#7C7C80`, `6` after the chip, which is the badge's own padding and the gap
-  §2.3 already puts between a chip and what follows it.
+  panel's own `12`, and on the bar's own bottom edge, which on the first block's
+  bar is also its top.
+- ~~`· N` is the caption idiom exactly, separator included:~~ **`N` at `11` pt
+  Light `#7C7C80`, with the separator drawn rather than set** (amended
+  2026-09-08). The gap is `6` after the chip *plus* the width the `"· "` glyph
+  held — measured off the glyph rather than tabulated, for the reason the
+  badge's own width is — so the count has not moved by a point.
+
+  Standing in the middle of that gap is a `3` pt disc at
+  ``NotchPalette.hairline``, `1` pt of white at `15%`: **the rule's own value,
+  and the rule's own line**, because the bar centres its contents and the rule
+  is one of them. A `·` set in the caption's `#7C7C80` was a third piece of
+  *text* on a line already carrying a chip and a figure, and what separates
+  them is not a reading — it is chrome, and it now says so by being the same
+  object as the hairline it sits on. `3` at `15%` is about the ink `1.5` pt of
+  `#7C7C80` put there, so the mark has the weight the glyph had and none of its
+  rank.
+
+  Its placement is the **layout** midpoint: the space it leaves on the chip's
+  side is the space it leaves on the count's. A digit's own left bearing puts
+  the drawn `N` about a point further off than the chip is, and chasing that is
+  declined — the bearing differs per digit, so a separator corrected for it
+  would move when a block gained a session, which is worse than one half a
+  point off centre. Pinned by
+  `theHeadingsSeparatorIsTheRulesOwnValueInTheMiddleOfItsGap`.
+
+  The seam's `Recent · N` keeps its glyph: a word and a figure on one line is
+  what the idiom is for, and there is no boundary there already.
 - The hairline is the seam's, `8` after the count — and it **runs to `508`**,
   where the seam's stops `8` short of a `16 × 16` control at `492`. That is the
   only thing on this surface distinguishing a label from a bar you can press,
@@ -166,29 +215,32 @@ unchanged.
 | 01 | **Headings are drawn on `showsProductAttribution` and nowhere else** — the same gate the chip already answers to, so the two are exactly complementary and a row can never end up with neither. Keyed to presence, so the structure does not appear and vanish as one product's rows drain while both stay open. With one product connected the list is the flat one it has always been | §8.6 |
 | 02 | **The block order is fixed** — `AgentKind`'s own, Codex then Claude Code, never re-ordered by state. The precedent is `MonitorStore.footerRules`; the argument is [`dual-agent-design.md`](dual-agent-design.md) §3.1's about the collapsed marks, on a much larger object | |
 | 03 | **Inside a block nothing changes.** `MonitorAggregation.rowOrder` as it stands ([`PRD.md`](PRD.md) §6.2). A status change re-sorts a row inside its own block and never across a heading, which is a shorter journey than the one it makes today | |
-| 04 | **A product with no rows draws no heading.** Nothing is drawn while it has nothing to say; the band already counts what is running. The cap falls by that heading's `32` at the same moment the row that emptied the block left, so the two changes are one change | |
+| 04 | **A product with no rows draws no heading.** Nothing is drawn while it has nothing to say; the band already counts what is running. The cap falls by that heading's own height at the same moment the row that emptied the block left, so the two changes are one change | |
 | 05 | **The chip comes off the live row and stays in its spoken name.** A boundary after a boundary is a mark doing nothing ([`panel-v2.md`](panel-v2.md) §3.4). The caption line is `16` with a chip and without one, so nothing moves vertically — the Project simply starts on the row's own `12`. VoiceOver keeps the product for the reason §2.3 already gives about a retired row: a reader arriving row by row has no surface to compare against | |
 | 06 | **The heading pins**, and that is what makes rule 05 safe: a row can be scrolled away from its heading but never orphaned from its name. **Except while a row is open**, where opening scrolls the row to the top of the viewport and a pinned heading would sit over its caption line — whose trailing end is the chevron that closes it. An open row is the subject and everything else is at `45%`, so the list is not being scanned, which is pinning's only job. The open row keeps its own chip for the same reason, and because the product decides what its answer footer can do ([`answer-in-notch.md`](answer-in-notch.md) §14.2) | |
-| 07 | **A heading is chrome and is never paid for out of rows.** The cap is `240 + 32 × headings drawn`, so a grouped list shows the three rows a flat one shows and scrolls in the same place. Holding the cap at `240` was the alternative and is declined: `32 + 80 + 32 + 80` leaves two rows visible, which is a third of what the panel is for spent on chrome | §4.4 |
+| 07 | **A heading is chrome and is never paid for out of rows.** The cap is `216 + the headings drawn` — the first `16` and every one after it `32` — so a grouped list shows the three rows a flat one shows and scrolls in the same place. Holding the cap flat was the alternative and is declined: `16 + 72 + 32 + 72` leaves two rows visible, which is a third of what the panel is for spent on chrome | §4.4 |
 | 08 | **The count is lit while its block holds a row that wants a person** — `#C7C7CC` rather than `#7C7C80`, on derived status like the summary and the sort. Grouped, the most urgent row on the surface may be inside the second block and below the fold; this is the whole of what says so, in the channel [`panel-v2.md`](panel-v2.md) §1.1 reserves for exactly that meaning | §4.5 |
 | 09 | **The queue is not grouped**, keeps its chip and keeps its cap. §4.1 | |
 | 10 | **The band and both collapsed forms are untouched.** Nothing here is visible with the panel shut | |
+| 11 | **The first heading is drawn short, and the panel's own top rule is drawn on the negation of "a heading leads the list"** (2026-09-08). One question, asked once — `MonitorStore.listLeadsWithABlockHeading` — because the two halves have to agree: a short bar under a rule opens the panel on a chip `10` from the matrix with no line at all, and a whole bar with the rule kept is the pair of hairlines this rule exists to remove. Every heading after the first keeps its `32`, which is what a heading needs to stand clear of the row above it | §4.2 |
 
 ### 4.4 What it costs
 
 ```
-live viewport  =  min(content,  max(240, open row) + 32 × headings)
+live viewport  =  min(content,  max(216, open row) + 16 + 32 × (headings − 1))
 ```
 
-| The state | Live | Panel | It was |
+| The state | Live | Panel | At `80` rows and `32` headings |
 | --- | --- | --- | --- |
-| One product connected | 240 | **324** | 324 |
-| Both connected, one holding rows | 272 | **356** | 324 |
-| Both connected, both holding rows | 304 | **388** | 324 |
-| …with a queue folded under it | 304 | **420** | 356 |
+| One product connected | 216 | **300** | 324 |
+| Both connected, one holding rows | 232 | **316** | 356 |
+| Both connected, both holding rows | 264 | **348** | 388 |
+| …with a queue folded under it | 264 | **380** | 420 |
 
-**One number: `64`, once, at two products** — `32` while only one of them is
-holding rows, and nothing at all at one connected product. It is paid against
+**One number: `48`, once, at two products** — `16` while only one of them is
+holding rows, and nothing at all at one connected product. ~~`64`, `32`~~: the
+first heading gives its slack back, so the structure costs a third less than it
+did when it was built (amended 2026-09-08). It is paid against
 [`panel-v2.md`](panel-v2.md) §4's own direction of travel, which took this panel
 from `370` to `308` by taking things off it. The difference is that this puts
 something on that the panel did not previously say.
@@ -268,7 +320,15 @@ Empty, the white ground sits on `Approve`. The moment there is text in the field
 
 ## 4. Heights
 
-The panel is `panelHeight + viewport + footer`, with the viewport its content capped at `240`. At the `46` reference with both products and the quota expanded:
+The panel is `panelHeight + viewport + footer`, with the viewport its content capped at ~~`240`~~ `216`. At the `46` reference with both products and the quota expanded:
+
+> **The table below is the arithmetic of 2026-09-04 and is kept as the record.**
+> Two things have moved under it since: the footer is `38` at every connected
+> form rather than the `84` / `53` / `30` / `22` its own table quotes
+> ([`quota-footer-v2.md`](quota-footer-v2.md)), and a row is `72` rather than
+> `80` with the queue's `36` under it (§2.1, 2026-09-08). What it still says
+> correctly is the shape — which content each state carries, and where the
+> folded queue's `32` is inside it.
 
 **The apology stands above the seam, and every figure with nothing live carries its `48`.** ~~An empty list stops spending `48` points saying it is empty and spends `32` offering the five things you last did, so each connected form gets a new, lower floor.~~ That read the queue as an answer to the question `No active sessions` answers, and it is not one: **what has left is not what is running.** A panel that says nothing while a row from an hour ago sits under a rule is a panel with no way to state the one fact it exists to state, and the fact is wanted most in exactly that case — the queue's members are what make an empty live list look like a mistake. So the sentence is drawn whenever nothing is live, queue or no queue, and it is the list's own first line rather than a substitute for the list (§2.4 rule 02, amended 2026-09-05).
 
@@ -376,8 +436,9 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 
 ## 9. Verification
 
-- [ ] A live row is `80`, the seam `32`, a retired row `40`, at every menu bar height.
-- [ ] The viewport is its content capped at `240`, and is `80 × min(rows, 3)` when nothing has retired.
+- [ ] A live row is ~~`80`~~ `72`, the seam `32`, a retired row ~~`40`~~ `36`, at every menu bar height.
+- [ ] The viewport is its content capped at ~~`240`~~ `216`, and is `72 × min(rows, 3)` when nothing has retired.
+- [ ] The first block's heading is `16` and every one after it `32`; the panel draws its own top hairline with nothing live and with a flat list, and draws none while a heading leads the list.
 - [ ] The panel is `178` with nothing live and nothing retired, `210` with nothing live and the queue folded, and `148` with the quota folded too — and `No active sessions` is drawn in all three.
 - [ ] Three live rows draw no seam and cost the queue nothing; the third retiring puts the seam back inside the viewport.
 - [ ] A retiring row halves in place and the seam rises over it; nothing travels the length of the panel.
@@ -388,13 +449,13 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 - [ ] Five quiet hours empty the queue, take the seam with them, and return the panel to its `178` floor with nothing left to fold.
 - [ ] No age reads `5h` or longer, and the age column never widens.
 - [ ] The seam's label and hairline redraw correctly at a two-digit count, with the hairline's trailing edge still at `508`.
-- [ ] At five or more in the window with nothing live the panel is `370`, the fold lands on `240` exactly, and no partial line is drawn.
+- [ ] At five or more in the window with nothing live the panel is ~~`370`~~ what the queue's own viewport gives it, the fold lands on the queue's own cap exactly, and no partial line is drawn.
 - [ ] Folding the queue does not close the panel at any connected form.
 - [ ] Opening the queue and folding it each move the panel itself, on the click — neither needs a second hover to be drawn at the right height.
 - [ ] Nothing is parked on the clock for the queue while the panel is shut, and a folded queue wakes only at a member's expiry.
 - [ ] The seam's hairline lands on the same `x` as the footer's rules and the band's matrix, in every attribution option.
 - [ ] Only `Approval needed` and `Input needed` rows draw `Answer` under the pointer; no other row becomes clickable.
-- [ ] An opened row is `134` at one request line, `170` at three and `118` for Input, and never exceeds the viewport.
+- [ ] An opened row is `126` at one request line, `162` at three and `110` for Input, and never exceeds the viewport — ~~`134` / `170` / `118`~~, each `8` lower with the row's air ([`answer-in-notch.md`](answer-in-notch.md) §4.1).
 - [ ] While a row is open the panel does not close on pointer exit, holds the keyboard, and returns it on `⎋`, on send and on an outside click.
 - [ ] The white ground is on `Approve` with an empty field and on `Deny` with a non-empty one, and neither button moves when it crosses.
 - [ ] A request settled elsewhere closes the open row within one publish.

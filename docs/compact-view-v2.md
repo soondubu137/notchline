@@ -140,23 +140,32 @@ The longest unfinished turn anywhere, as in V1. `longestRunningSessionStart` is 
 
 ### 4.2 Stopped
 
-When the turn ends the reading does not leave. The digits freeze at the last value the timer showed, **the ground they were already standing on fills**, and the panel's edge does not move by a point.
+When the turn ends the reading does not leave. The digits freeze at the last value the timer showed, ~~**the ground they were already standing on fills**, and the panel's edge does not move by a point~~ **and §4.3's dot arrives in front of them** (amended 2026-09-08).
 
 - What it says: that turn's own length, from `MonitoredSession.finishedAt` — a stamp deliberately not moved forward by subagent activity, and the same number the expanded row has drawn since V1.
 - How long it holds: while the aggregate says Completed, which is until the row leaves the monitored list (§3.3).
 - **Which finished turn, when more than one has:** the earliest-started of them — the same rule the live reading follows, and therefore the same turn it was counting a moment ago. Decided at implementation rather than on the board, because "the last value the timer showed" has to name a row: any other choice lets the figure jump when a row it was never drawing ages out.
 - Why a filled ground is allowed here when V1 §4.7 kept grounds off the bar: that argument holds for the white flip — "one of these wants you" needs a neighbour to mean anything — and the white flip stays gone. "This figure has stopped" is a property of the figure, not a comparison, and it is the one thing the digits cannot say alone.
+- **And that is exactly why it did not need to be a ground.** A property one figure can state on its own can be stated by a mark beside it, and this wing was already drawing that mark for the other half of the same fact (§4.3): a grey tile for a finished turn the reading could speak for, a dot for one it could not. Two marks, one meaning. The ground goes and the dot covers both, which also puts one mark in front of the panel's own frozen rows (`expanded-panel-v2.md`) instead of a second silhouette down there.
+- **What goes with it is the edge holding still**, and it is stated rather than finessed. A fill costs no width; a mark costs `4 + 8`, so the trailing wing opens by `12` at the instant a turn ends. Reserving that `12` on every running reading was the alternative and is declined by §5.1's own rule — each wing is exactly as wide as what it draws — so the wing opens on the slot's own curve, which is what it already does when the timer gains a digit.
 
-### 4.3 The buried-finish dot
+### 4.3 The finished-turn dot
+
+~~The buried-finish dot.~~ **Renamed with its job** (2026-09-08): it is drawn for
+every finished turn the wing has, not only for the one nothing else could speak
+for. The clause below is still the harder of the two cases and still the reason
+the mark exists.
 
 A turn that has finished while another is still running has no representative: the mark draws Loom, and the frozen reading belongs to a Completed aggregate that this is not. The dot is that reading's stand-in.
 
-- **4 pt, 8 before the digits, in the wing's own `#7C7C80`.**
+- **4 pt, 8 before the digits**, in ~~the wing's own `#7C7C80`~~ **the sessions numeral's `#C7C7CC`** (2026-09-08). `#7C7C80` put this mark a step *below* the figure it stands in front of, on a surface where brightness is the one thing that says a person is wanted — and a finished turn nobody has read wants one. The new value is not a new brightness: it is the count on the other wing, which gives the dot a ceiling it is *equal* to rather than one it approaches.
 - Drawn only while the list holds a Completed row **and** the mark is drawing something else. That is V1's `buriesAFinishedTurn` asked of the aggregate, and the domain does **not** already answer it: `PresenceMark.buriesAFinishedTurn` is per product, and the case this surface now has to draw — Codex holding nothing but a finished row while Claude Code runs — is true of the aggregate and false of every product in it. The same correction is owed to `MonitorStore.spokenBuriedCompletionText`, which folds the per-product flag today (§10).
-- Never when the aggregate is itself Completed; the frozen reading is then that row.
+- ~~Never when the aggregate is itself Completed; the frozen reading is then that row.~~ **Then too, and that is the change** (2026-09-08): the frozen reading being that row is a reason for the dot rather than against it, now that the row's own ground has gone. `CompactTrailingReading.drawsFinishedDot` is the union of the two conditions and can only ever draw one dot — a frozen reading needs nothing running, and the buried case stands down once the aggregate is Completed.
 - On the notched bar it widens the trailing wing by `12`. On the pill it takes the same `12` out of the middle and moves nothing.
 
-**It breathes**, by opacity within its own ink — `#7C7C80` modulated down and back, never up. Its slot stays a fixed `4`, so nothing on the wing changes width, and because the breath only ever dims the wing's own grey it never approaches the aggregate's lit ink and cannot be read as the one thing brightness means on this surface. This is V1's breath on a new carrier; §10 already speaks it.
+**It breathes**, by opacity within its own ink — `#C7C7CC` modulated down and back, never up. Its slot stays a fixed `4`, so nothing on the wing changes width. ~~Because the breath only ever dims the wing's own grey it never approaches the aggregate's lit ink~~ — **the crest is now full and the ink is what holds the ceiling**: at `1.0` the dot is exactly the sessions numeral and never past it, and the amplitude is the `0.55` it always was, because the movement was tuned against a screen and the crest was chosen against a value. This is V1's breath on a new carrier; §10 already speaks it.
+
+**A row's dot does not breathe.** The panel draws the same mark at the same size in the same ink in front of a frozen row's reading, and holds it still: a collapsed bar is glanced at and has one line to say everything on, so movement is how it reaches somebody across a screen; an open panel is being read, and a dot pulsing once per row would be the list moving under a person scanning it (`AGENTS.md` §7).
 
 ## 5. The notched bar
 
@@ -180,12 +189,12 @@ Fixed middle, moving ends. The cut-out is hardware; each wing is exactly as wide
 | Running · 3 sessions | 47.2 | 200 | 56 | **304** |
 | Running · 3 sessions, 5 subagents | 47.2 | 200 | 56 | **304** |
 | Approval needed · 2 sessions, 1 subagent | 47.2 | 200 | 56 | **304** |
-| Completed, subagent still up · frozen reading | 47.2 | 200 | 56 | **304** |
+| Completed, subagent still up · frozen reading | 47.2 | 200 | ~~56~~ 68 | ~~304~~ **316** |
 | Input needed · reading `12:05` | 47.2 | 200 | 64 | **312** |
 | Running · 12 sessions, 7 subagents | 53.8 | 200 | 56 | **310** |
 | Running, with a finished turn buried under it | 47.2 | 200 | 68 | **316** |
 
-Four of the nine share one width.
+~~Four~~ **Three** of the nine share one width: the frozen reading now carries §4.3's dot and lands where the buried case already did (amended 2026-09-08).
 
 **The notched bar never gets a subject.** It has no middle, and the only way to give it one is a wing — `102` pt of black beside the cut-out for the whole of every turn, which is the reservation both wings spent V1 and V2 getting rid of. This is permanent, not deferred.
 
@@ -328,7 +337,7 @@ The setting still requires a *measurable* cut-out, so it is disabled on every sc
 - [ ] Pill is `209` in every connected state and `41` disconnected.
 - [ ] The counts column draws identically at a 46 pt and a 22 pt menu bar.
 - [ ] The large numeral rises half the matrix's leftover — `4.425` at the drawn cap — when the first subagent arrives, and drops back when the last one leaves.
-- [ ] The reading freezes rather than leaving, and the panel edge does not move at that instant.
+- [ ] The reading freezes rather than leaving, and the dot arrives in front of it — ~~and the panel edge does not move at that instant~~ the trailing wing opens by exactly `4 + 8` and by nothing else (§4.2, 2026-09-08).
 - [ ] The dot appears on the *aggregate* buried finish — including one product's lone finished row under another product's running one — breathes by opacity, and never changes the wing's width.
 - [ ] The middle cycles at `5 s`, holds its place across set changes, and never restarts on join or leave.
 - [ ] One name hands the middle to the next: the outgoing draws in to `0.90` as it fades and the incoming opens back out of `0.90`, each about its own centre, and at no instant are two names both legible.

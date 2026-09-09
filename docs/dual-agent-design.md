@@ -99,7 +99,7 @@ Four presentations, chosen by a setting. The first three land on the row's leadi
 | `Badge` | A small badge: dark ground, bright text | Height `16`, corner `5`, `6` horizontal padding, `10 pt` Medium; grounds `#101B26` / `#21120D`, text `#6CB4FF` / `#D97757` |
 | `Colour bar` | A leading vertical bar, flush with the row block's leading edge and as tall as the row's text | `2` wide, corner `1`, height `53` (caption `14` + `2` + title `17` + `2` + preview `18`; `33` on a row with no preview), vertically centred in the `80` row at `x = 0` in-row (`12` from the panel edge), in the product's lit colour; the caption reverts to plain Project text |
 
-`Badge` makes the matrix's extinguished and lit colours the ground and the text, taking the caption from `14` to `16` and the row's content block from `53` to `55`, with the row height still `80`.
+`Badge` makes the matrix's extinguished and lit colours the ground and the text, taking the caption from `14` to `16` and the row's content block from `53` to `55`, with the row height unchanged by it — `80` then, `72` since ([`expanded-panel-v2.md`](expanded-panel-v2.md) §2.1).
 
 `Name and colour` is the default because it is the only option that adds nothing, and the only one where hue reinforces rather than carries the signal. Its cost is horizontal space — `Claude Code ·` takes about `73` of the caption's `426` — and what gets squeezed is the Project text; the caption is the least important line in a row and ends in a fade rather than an ellipsis, so that is acceptable. (`426` = the `496` content width minus the widest timer `57.91` and its `12` gap. Before the padding went `24 → 12` this was `394`.)
 

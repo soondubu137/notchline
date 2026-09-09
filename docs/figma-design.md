@@ -274,7 +274,7 @@ Each row shows Project, title and current content on the left, with the status c
 The Panel set keeps Notch Compact, No Notch Compact and Expanded.
 
 - The header is `46` in the reference design (the real menu-bar height in practice), and expanding grows it only horizontally.
-- The session viewport is `240` (three `80` rows).
+- The session viewport is ~~`240`~~ `216` (three ~~`80`~~ `72` rows; [`expanded-panel-v2.md`](expanded-panel-v2.md) §2.1, 2026-09-08).
 - **Total expanded height is composed, never a constant**: `panelHeight + 240 + footer`, which is `308` at the `46` reference on every connected form (§3.3), the footer itself being its content plus one shared `6` bottom margin. ~~`316` / `339` / `370` / `308`~~ is void with the per-product footer ([`quota-footer-v2.md`](quota-footer-v2.md)). Earlier revisions of this section carried `444 × 310` and then `520 × 302` with a `256` content region; all three predate the footer.
 - The existing `06 — Notch Core` Running Desktop board has been re-centred to `x = 496` for a `1512` screen.
 

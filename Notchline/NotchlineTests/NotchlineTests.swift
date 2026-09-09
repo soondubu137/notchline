@@ -494,17 +494,18 @@ struct NotchlineTests {
         #expect(shut.buriesAFinishedTurn)
 
         // **The list is grouped, so a row's place is decided by its block.**
-        // Three Codex rows and one of Claude Code's is `32 + 240 + 32` -- the
-        // grouped viewport exactly -- which is what puts both headings on the
-        // figure with three rows between them, and the fourth row under the
-        // rail rather than under the fold with nothing to say it is there.
+        // Three Codex rows and one of Claude Code's is the leading heading,
+        // the cap, and the second heading -- the grouped viewport exactly --
+        // which is what puts both headings on the figure with three rows
+        // between them, and the fourth row under the rail rather than under
+        // the fold with nothing to say it is there.
         #expect(hovered.groupsSessionsByProduct)
         let blocks = hovered.sessionGroups
         #expect(blocks.map(\.agent) == [.codex, .claudeCode])
         #expect(blocks.map(\.sessions.count) == [3, 1])
         #expect(
             hovered.sessionViewportHeight
-                == PanelMetrics.productGroupHeaderHeight * 2
+                == PanelMetrics.groupHeadingsHeight(count: 2)
                     + PanelMetrics.sessionRowHeight * 3
         )
         // The first block is stopped on the approval the whole drawing is of,
@@ -631,6 +632,71 @@ struct NotchlineTests {
                     abs(landing - edge) < 0.01,
                     "pin \(pin.id) on \(figure.what) stops short of its edge, or crosses it"
                 )
+            }
+        }
+    }
+
+    /// **No two callouts in a column of the README card stand on one line.**
+    ///
+    /// The card's own version of the assertion above, and it was written after
+    /// the fault it describes: a row's air came down by `8` and a block's
+    /// heading gave up its `16`, which moved `One block per product` and
+    /// `Project` to within `6` points of each other and drew one over the
+    /// other. Nothing failed. The figure is opt-in — it renders only when
+    /// `~/.notchline-anatomy-out` is set — so the only reader is whoever
+    /// happens to look at the PNG, and the panel's geometry is exactly the
+    /// thing that moves under it.
+    ///
+    /// A label is centred on `target.y + drop`, so a column is legible when
+    /// consecutive labels are at least one line apart. `drop` is what buys
+    /// that where two parts genuinely share a line, and this is the check that
+    /// says when one is owed.
+    ///
+    /// **The leading and trailing columns only.** `.above` and `.below` crowd
+    /// on the other axis — three of them share the collapsed bar's bottom edge
+    /// by design — and `drop` steps those sideways rather than down, over
+    /// labels whose widths this cannot know without laying them out.
+    @Test @MainActor
+    func theReadmeCalloutsStandApartInTheirColumns() {
+        let now = Date()
+        let compact = AnatomyFigureRenderer.store(
+            isExpanded: false,
+            buriedFinish: true,
+            at: now,
+            on: AnatomyFigureRenderer.compactDisplay
+        )
+        let expanded = AnatomyFigureRenderer.store(
+            isExpanded: true,
+            buriedFinish: true,
+            at: now,
+            on: AnatomyFigureRenderer.panelDisplay
+        )
+        expanded.stageSpecimenQueue(AnatomyFigureRenderer.departures(at: now))
+        expanded.isRecentExpanded = true
+        expanded.isQuotaExpanded = true
+
+        // One line of the card's own label face, which is what two labels have
+        // to clear each other by.
+        let line = NSFont.systemFont(ofSize: 13).boundingRectForFont.height
+        let card = ReadmeAnatomyCard(compact: compact, expanded: expanded)
+
+        for (what, callouts) in [
+            ("the panel", card.expandedCallouts),
+            ("the collapsed bar", card.compactCallouts)
+        ] {
+            for side in [AnatomyCallout.Side.leading, .trailing] {
+                let lines = callouts
+                    .filter { $0.side == side }
+                    .map { $0.target.y + $0.drop }
+                    .sorted()
+                for (above, below) in zip(lines, lines.dropFirst()) {
+                    #expect(
+                        below - above >= line,
+                        """
+                        two \(side) labels on \(what) stand \(below - above)                         apart, inside one \(line) pt line
+                        """
+                    )
+                }
             }
         }
     }
@@ -2337,7 +2403,7 @@ struct NotchlineTests {
 
         for shape in Self.everyFooterShape {
             #expect(PanelMetrics.footerHeight(rules: shape) == 38)
-            #expect(panelHeight(shape, expanded: false) == 324)
+            #expect(panelHeight(shape, expanded: false) == 300)
         }
 
         // Nothing connected is no footer, so there is nothing for the control
@@ -2844,7 +2910,7 @@ struct NotchlineTests {
         #expect(store.showsQuotaFoldControl)
     }
 
-    /// **The panel is `324` on every connected form**, and only the user can
+    /// **The panel is `300` on every connected form**, and only the user can
     /// take it past that.
     ///
     /// This replaces `theDualProductPanelIsTallerByTheExtraFooterRules`, which
@@ -2854,23 +2920,30 @@ struct NotchlineTests {
     /// single-product case included, and they all get the same
     /// (`quota-footer-v2.md` §6).
     ///
+    /// **`324` until a row's air came down.** Three rows at `72` rather than
+    /// `80` is the whole of the `24`, and it is one figure changed
+    /// (``PanelMetrics/sessionRowVerticalPadding``) rather than a height
+    /// chosen: what is pinned here is still the property — one panel height at
+    /// every connected form — and it is now pinned at the figure that falls
+    /// out of a row's own padding.
+    ///
     /// Two states can exceed it and both are somebody opening the table. It is
     /// not reached by owning a second product, by a window running low, or by
     /// a reading failing.
     @Test @MainActor
-    func thePanelIsThreeHundredAndTwentyFourOnEveryConnectedForm() {
+    func thePanelIsThreeHundredOnEveryConnectedForm() {
         for shape in Self.everyFooterShape {
             let closed = PanelMetrics.expandedContentHeight(
                 liveRowCount: 3,
                 footerHeight: PanelMetrics.footerHeight(rules: shape)
             )
-            #expect(PanelMetrics.referenceCompactHeight + closed == 324)
+            #expect(PanelMetrics.referenceCompactHeight + closed == 300)
 
             let opened = PanelMetrics.expandedContentHeight(
                 liveRowCount: 3,
                 footerHeight: PanelMetrics.footerHeight(rules: shape, isExpanded: true)
             )
-            #expect(PanelMetrics.referenceCompactHeight + opened > 324)
+            #expect(PanelMetrics.referenceCompactHeight + opened > 300)
         }
 
         // Two products with three windows, including the shared caption clearance.
@@ -2882,33 +2955,39 @@ struct NotchlineTests {
                         rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
                         isExpanded: true
                     )
-                ) == 441
+                ) == 417
         )
     }
 
     /// **Each list is its own content, capped on its own** — the live
-    /// viewport at `240` (three rows), the Recent queue's at `200` (five
+    /// viewport at `216` (three rows), the Recent queue's at `180` (five
     /// retired rows, half a live one each) — and neither one folds the
     /// other's rows into its own cap any more: each scrolls entirely on its
     /// own past its own cap.
+    ///
+    /// Both caps came down with the air inside a row
+    /// (``PanelMetrics/sessionRowVerticalPadding``) and neither was retuned:
+    /// three rows and five is still what each viewport draws, which is what
+    /// this pins.
     @Test @MainActor
     func eachViewportIsItsContentCappedOnItsOwn() {
         #expect(PanelMetrics.retiredRowHeight == PanelMetrics.sessionRowHeight / 2)
-        #expect(PanelMetrics.retiredRowHeight == 40)
+        #expect(PanelMetrics.sessionRowHeight == 72)
+        #expect(PanelMetrics.retiredRowHeight == 36)
         #expect(PanelMetrics.recentSeamHeight == 32)
         #expect(PanelMetrics.thinExpandedBodyHeight == 48)
-        #expect(PanelMetrics.sessionViewportCap == 240)
-        #expect(PanelMetrics.recentViewportCap == 200)
+        #expect(PanelMetrics.sessionViewportCap == 216)
+        #expect(PanelMetrics.recentViewportCap == 180)
 
         // The live list: an empty list still draws its own apology, and
-        // three rows — the cap over `80` pt rows — is where the fold falls.
+        // three rows — the cap over `72` pt rows — is where the fold falls.
         let liveCases: [(live: Int, content: CGFloat, viewport: CGFloat, what: String)] = [
             (0, 48, 48, "nothing live"),
-            (1, 80, 80, "one live row"),
-            (2, 160, 160, "two live rows"),
-            (3, 240, 240, "three live rows — the cap exactly"),
-            (4, 320, 240, "four live rows"),
-            (12, 960, 240, "twelve live rows"),
+            (1, 72, 72, "one live row"),
+            (2, 144, 144, "two live rows"),
+            (3, 216, 216, "three live rows — the cap exactly"),
+            (4, 288, 216, "four live rows"),
+            (12, 864, 216, "twelve live rows"),
         ]
         for row in liveCases {
             #expect(
@@ -2922,14 +3001,14 @@ struct NotchlineTests {
         }
 
         // The Recent queue: nothing while it is empty, and five rows — the
-        // cap over `40` pt rows — is where its own fold falls.
+        // cap over `36` pt rows — is where its own fold falls.
         let recentCases: [(retired: Int, content: CGFloat, viewport: CGFloat, what: String)] = [
             (0, 0, 0, "nothing retired"),
-            (1, 40, 40, "one retired row"),
-            (4, 160, 160, "four retired rows"),
-            (5, 200, 200, "five retired rows — the cap exactly"),
-            (6, 240, 200, "six retired rows"),
-            (12, 480, 200, "twelve retired rows"),
+            (1, 36, 36, "one retired row"),
+            (4, 144, 144, "four retired rows"),
+            (5, 180, 180, "five retired rows — the cap exactly"),
+            (6, 216, 180, "six retired rows"),
+            (12, 432, 180, "twelve retired rows"),
         ]
         for row in recentCases {
             #expect(
@@ -4068,11 +4147,13 @@ struct NotchlineTests {
 
     /// A heading is chrome, and is never paid for out of rows.
     ///
-    /// The cap is `240` plus `32` for every heading drawn, so a grouped list
-    /// shows the three rows an ungrouped one shows and scrolls in the same
-    /// place. Holding the cap at `240` instead was the alternative, and it is
-    /// what this pins against: `32 + 80 + 32 + 80` leaves two rows visible,
-    /// which is a third of what the panel is for spent on chrome.
+    /// The cap is three rows plus every heading drawn — the leading one short
+    /// (``PanelMetrics/leadingProductGroupHeaderHeight``) and the rest whole —
+    /// so a grouped list shows the three rows an ungrouped one shows and
+    /// scrolls in the same place. Holding the cap flat instead was the
+    /// alternative, and it is what this pins against: `16 + 72 + 32 + 72`
+    /// leaves two rows visible, which is a third of what the panel is for
+    /// spent on chrome.
     ///
     /// **The apology is exempt**, because there is no block to head: with
     /// nothing live the list is `48` whatever is connected.
@@ -4105,7 +4186,13 @@ struct NotchlineTests {
                 sessions: [session(.claudeCode, "d"), session(.claudeCode, "e")]
             )
         )
-        let room = PanelMetrics.productGroupHeaderHeight * 2
+        // The leading block's heading is the short one -- it stands in for
+        // the panel's own top rule and gives its slack back.
+        let room = PanelMetrics.groupHeadingsHeight(count: 2)
+        #expect(
+            room == PanelMetrics.leadingProductGroupHeaderHeight
+                + PanelMetrics.productGroupHeaderHeight
+        )
         #expect(store.sessionGroupHeaderCount == 2)
         #expect(store.sessionViewportHeight == PanelMetrics.sessionViewportCap + room)
         #expect(
@@ -4315,7 +4402,7 @@ struct NotchlineTests {
         #expect(NotchPalette.themeInk == NotchPalette.matrixInk(isConnected: true))
     }
 
-    /// **A row is `80` with a badge on it and `80` without one.**
+    /// **A row is the same height with a badge on it and without one.**
     ///
     /// The chip is a point taller than the `11 pt` line it stands on, so the
     /// caption line is `16` — and it is `16` whether or not a badge is in it,
@@ -4326,6 +4413,13 @@ struct NotchlineTests {
     /// This also replaces `theAttributionRailSpansTheRowsTextExactly`: the rail
     /// was measured against these three lines, and with it gone what the three
     /// still have to do is add up to a row that has not changed height.
+    ///
+    /// **The row is `72` now, and that is this claim's other half.** The three
+    /// lines are the row's decision and its air is
+    /// ``PanelMetrics/sessionRowVerticalPadding``; the height is what the two
+    /// compose. So the block staying `55` is what says a badge costs nothing —
+    /// and the height following the padding is what says a change to the air
+    /// cannot quietly become a change to the lines.
     @Test @MainActor
     func theBadgeCostsTheRowNoHeight() {
         #expect(PanelMetrics.sessionRowCaptionHeight == PanelMetrics.productBadgeHeight)
@@ -4337,8 +4431,10 @@ struct NotchlineTests {
             + PanelMetrics.sessionRowLineSpacing
             + PanelMetrics.sessionRowPreviewHeight
         #expect(block == 55)
+        #expect(block == PanelMetrics.sessionRowContentHeight)
         #expect(block < PanelMetrics.sessionRowHeight)
-        #expect(PanelMetrics.sessionRowHeight == 80)
+        #expect(PanelMetrics.sessionRowVerticalPadding == 8.5)
+        #expect(PanelMetrics.sessionRowHeight == 72)
     }
 
     /// A row's gutter and its padding are one margin split in two, in every
@@ -5159,12 +5255,19 @@ struct NotchlineTests {
         #expect(split.presenceMarks.map(\.buriesAFinishedTurn) == [true, false])
     }
 
-    /// The breath is the column's own movement, and is not one of the mark's.
+    /// The breath is the dot's own movement, and is not one of the mark's.
     ///
     /// Slower than every track ``MatrixTrack`` runs, so at `2.92` away it reads
-    /// as a different order of movement rather than a fifth pattern; and it
-    /// leaves and returns to the value the column has always rested at, so
-    /// nothing here is a new resting appearance.
+    /// as a different order of movement rather than a fifth pattern.
+    ///
+    /// **Its crest is the sessions numeral, and the ink is what holds it
+    /// there.** ~~It leaves and returns to `0.85`, the value the session-dot
+    /// column always rested at, so nothing here is a new resting
+    /// appearance.~~ That column is gone; the carrier is one dot in the
+    /// trailing wing with no resting appearance of its own to keep faith with,
+    /// and what it must not outshine is a value on the *other* wing. So the
+    /// crest is full and the ink is `#C7C7CC` — exactly the count beside the
+    /// mark — which is a ceiling the dot reaches rather than one it approaches.
     @Test @MainActor
     func theBreathIsSlowerThanAnythingTheMatrixRuns() {
         for status in MonitorStatus.allCases {
@@ -5175,11 +5278,15 @@ struct NotchlineTests {
             )
         }
         #expect(abs(SessionDotBreath.period - 2.8) < 0.001)
-        // The column rests where it always has, and that is also the top of the
-        // swing: a breathing column never draws brighter than a resting one, so
-        // §11's reason for holding the dots under full is untouched.
-        #expect(abs(SessionDotBreath.restingOpacity - 0.85) < 0.001)
+        #expect(abs(SessionDotBreath.restingOpacity - 1.0) < 0.001)
         #expect(SessionDotBreath.floorOpacity < SessionDotBreath.restingOpacity)
+        // At full opacity the dot is its ink, and its ink is the numeral's: the
+        // crest is equal to the brightest thing the collapsed bar draws and
+        // never past it.
+        #expect(
+            NotchPalette.finishedDotDrawingColor
+                == NotchPalette.countsSessionDrawingColor
+        )
 
         let animation = SessionDotBreath.animation(now: 10)
         #expect(animation.keyPath == "opacity")
@@ -5256,38 +5363,47 @@ struct NotchlineTests {
         }
     }
 
-    /// The floor dims the column deeply without ever losing it.
+    /// The floor dims the dot deeply without ever losing it.
     ///
-    /// **The dip is allowed to be this deep because it is momentary.** A column
-    /// *held* at `0.30` would stop being countable, which is exactly why "dim
+    /// **The dip is allowed to be this deep because it is momentary.** A mark
+    /// *held* at the floor would stop being legible, which is exactly why "dim
     /// the marks that are not yours" was rejected when this was drawn — but one
-    /// that returns to full rest every `2.8 s` is legible for most of its cycle
-    /// and never stops being a count. So the thing that has to hold at every
-    /// instant is the weaker and checkable one: at its darkest the run of dots
-    /// is still clearly brighter than the extinguished matrix it stands beside,
-    /// and a breathing column never reads as a mark going out.
+    /// that returns to its crest every `2.8 s` is legible for most of its cycle
+    /// and never stops being a mark. So the thing that has to hold at every
+    /// instant is the weaker and checkable one: at its darkest the dot is still
+    /// clearly brighter than the extinguished matrix across the bar from it,
+    /// and a breathing dot never reads as a mark going out.
+    ///
+    /// **Asked of the dot's own ink**, which is the fix as much as the figure.
+    /// This used to multiply the floor by the *matrix's* lit channels — a
+    /// stand-in for an ink that was never the matrix's — and it happened to
+    /// answer the right way while the two were within a step of each other.
+    /// They are not now (`#C7C7CC` against `#DEE8E0`), so the comparison is
+    /// made between the things actually on screen.
     @Test @MainActor
     func theBreathsFloorStaysAboveTheMarkItStandsBeside() {
+        let dot = NotchPalette.finishedDotDrawingColor
+            .usingColorSpace(.sRGB) ?? NotchPalette.finishedDotDrawingColor
         let sampleInk = NotchPalette.MatrixInk(
             offRed: 0x22 / 255, offGreen: 0x1D / 255, offBlue: 0x1C / 255,
             onRed: 0xF0 / 255, onGreen: 0xE1 / 255, onBlue: 0xE0 / 255
         )
         for ink in [NotchPalette.themeInk, sampleInk] {
             let channels = [
-                (ink.onRed, ink.offRed),
-                (ink.onGreen, ink.offGreen),
-                (ink.onBlue, ink.offBlue)
+                (dot.redComponent, ink.offRed),
+                (dot.greenComponent, ink.offGreen),
+                (dot.blueComponent, ink.offBlue)
             ]
-            for (on, off) in channels {
+            for (lit, off) in channels {
                 // Clearly brighter, not merely brighter: a margin the floor can
                 // be lowered into again without the mark being lost. Measured
-                // at about twice on every channel of both inks.
-                #expect(SessionDotBreath.floorOpacity * on > off * 1.5)
+                // at more than twice on every channel of both inks.
+                #expect(SessionDotBreath.floorOpacity * lit > off * 1.5)
             }
         }
         // And the swing is worth having: more than half of everything the mark
-        // has to give, taken entirely out of the floor so the crest stays where
-        // the column rests.
+        // has to give, taken entirely out of the floor so the crest stays on
+        // the numeral it is not allowed past.
         let swing = SessionDotBreath.restingOpacity - SessionDotBreath.floorOpacity
         #expect(swing > SessionDotBreath.restingOpacity / 2)
     }
@@ -5315,8 +5431,8 @@ struct NotchlineTests {
         #expect(breath.autoreverses)
         #expect(!breath.isRemovedOnCompletion)
         // Within its own ink, never above it: the modulation only ever dims
-        // `#7C7C80`, so it cannot approach the aggregate's lit ink and cannot
-        // be read as the one thing brightness means on this surface.
+        // `#C7C7CC`, which is the sessions numeral, so the crest is equal to
+        // the brightest figure the collapsed bar draws and never past it.
         #expect(SessionDotBreath.floorOpacity < SessionDotBreath.restingOpacity)
         #expect(SessionDotBreath.restingOpacity <= 1)
 
@@ -6220,8 +6336,19 @@ struct NotchlineTests {
     /// stepped in at exactly the moment somebody might be looking at it and the
     /// one number saying how long the work took went with it. It now holds at
     /// that turn's own length — measured between the turn's two stamps, so it
-    /// is the same figure on every refresh — and the ground it was standing on
-    /// fills to say the figure has stopped (`compact-view-v2.md` §4.2).
+    /// is the same figure on every refresh — and ~~the ground it was standing
+    /// on fills~~ **a dot arrives in front of it** to say the figure has
+    /// stopped (`compact-view-v2.md` §4.2).
+    ///
+    /// **What went with the ground is the edge holding still**, and that is
+    /// stated rather than mourned. A fill costs no width, so the wing was
+    /// identical either side of the moment a turn ended; a mark costs its own
+    /// `4` and the `8` it stands off the digits by. The alternative was to hold
+    /// that `12` open on every running reading, and this bar reserves nothing —
+    /// each wing is exactly as wide as what it draws, which is the rule the
+    /// whole collapsed form is composed by. So the wing opens by `12` on the
+    /// slot's own curve, which is what it already does when the timer gains a
+    /// digit.
     @Test @MainActor
     func theCollapsedReadingFreezesWhenTheLastTurnEnds() async {
         let clock = TestClock(now: Date(timeIntervalSince1970: 1_000))
@@ -6254,8 +6381,8 @@ struct NotchlineTests {
         #expect(!running.isFrozen)
         let runningWidth = store.compactDrawnTrailingReadingWidth
 
-        // The turn ends where it stood. The digits are the same digits, the
-        // ground fills, and the panel's edge does not move by a point.
+        // The turn ends where it stood. The digits are the same digits, and
+        // the dot arrives in front of them.
         store.applyForTesting(
             makeSessionSnapshot([session(.completed, finishedAt: clock.now())]),
             observedAt: clock.now()
@@ -6264,10 +6391,17 @@ struct NotchlineTests {
         let stopped = store.compactTrailingReading
         #expect(stopped.timerText == "1:23")
         #expect(stopped.isFrozen)
-        #expect(store.compactDrawnTrailingReadingWidth == runningWidth)
         // The aggregate is Completed, so nothing is buried under it: this
-        // frozen figure *is* that row.
+        // frozen figure *is* that row -- and the dot is drawn for it anyway,
+        // which is the whole of what replaced the ground.
         #expect(!store.buriesAFinishedTurn)
+        #expect(stopped.drawsFinishedDot)
+        // The wing opens by exactly the mark and its gap, and by nothing else:
+        // the digits themselves have not changed width.
+        #expect(
+            store.compactDrawnTrailingReadingWidth
+                == runningWidth + PanelMetrics.buriedFinishSlotWidth
+        )
 
         // And it stays put as the clock runs on, because it is measured between
         // two stamps rather than against the tick.
@@ -14643,7 +14777,8 @@ struct NotchlineTests {
         ], to: repository)
 
         // The new turn has said nothing yet, so the row falls back to the
-        // prompt it started from -- never to the answer above it.
+        // prompt it started from -- never to the answer above it, and never to
+        // the question the turn above it asked.
         let started = await holds {
             await service.fetchSnapshot().sessions.first?.turnID == "turn-second"
         }
@@ -26945,7 +27080,7 @@ for line in sys.stdin:
         #expect(request.setting == .prose)
     }
 
-    /// The async question is not a wait, and is not read as one.
+    /// The async question keeps its words without opening a wait.
     ///
     /// Codex ships two question handlers and the **model** picks which a Turn
     /// gets: measured 2026-09-07 on CLI `0.153.4`, `gpt-6-astra` in Default
@@ -27393,25 +27528,33 @@ for line in sys.stdin:
         #expect(wrapped == ["first", "", "third"])
     }
 
-    /// An open row is at most the viewport, and its body at most `140`.
+    /// An open row is at most the viewport, and its body is whatever that
+    /// leaves — `124`, where it was `140`.
     ///
     /// §4.1: the body is bounded by the panel rather than by a line count, so
     /// there is one number to remember rather than one per form, and the tallest
     /// an open row can be is the viewport itself. Every height in §12 is this
     /// one arithmetic.
+    ///
+    /// **Which is why the body moved when a row's air did.** The viewport lost
+    /// `24` and the row's fixed parts gave `8` back; a body held at `140`
+    /// through that would have made the first line of this test false and put
+    /// a maximal approval `16` taller than the list it opens in.
     @Test @MainActor
-    func anOpenRowIsAtMostTheViewportAndItsBodyAtMostOneHundredAndForty() {
+    func anOpenRowIsAtMostTheViewportAndItsBodyIsWhatThatLeaves() {
         #expect(
             PanelMetrics.openRowHeight(bodyHeight: PanelMetrics.requestBodyMaximumHeight)
                 == PanelMetrics.sessionViewportCap
         )
         // Asking for more than the cap gets the cap, and the row is the viewport.
-        #expect(PanelMetrics.openRowHeight(bodyHeight: 10_000) == 240)
-        // The fixed part is everything but the body: `12.5 + 16 + 2 + 17 + 2`
-        // above and `10 + 28 + 12.5` below.
-        #expect(PanelMetrics.openRowFixedHeight == 100)
+        #expect(PanelMetrics.openRowHeight(bodyHeight: 10_000) == 216)
+        // The fixed part is everything but the body: `8.5 + 16 + 2 + 17 + 2`
+        // above and `10 + 28 + 8.5` below -- the two insets being the closed
+        // row's own, so that opening a row does not move its head.
+        #expect(PanelMetrics.openRowFixedHeight == 92)
+        #expect(PanelMetrics.requestBodyMaximumHeight == 124)
         // And a one-line question is the shortest row that can be opened.
-        #expect(PanelMetrics.openRowHeight(bodyHeight: 17) == 117)
+        #expect(PanelMetrics.openRowHeight(bodyHeight: 17) == 109)
     }
 
     /// A row with nothing to show does not open.

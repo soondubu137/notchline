@@ -85,7 +85,7 @@ At the default **Sage · hint** that is ground `#1B1F1C`, text `#DEE8E0`. Every 
 
 **The hue lives in the text, not in the ground, and that is by construction.** Every unlit value in the palette runs at `0.55 ×` the lit chroma at `L 0.235`, which is what makes the dark grid carry any hue at all on a `5 × 5` mark — at badge size it reads as near-black whichever entry is chosen. Sage's ground is `L 0.234` and Rose's `L 0.236`, and the twelve are indistinguishable from each other. So switching theme visibly changes the badge's **text** and barely touches its ground. This is the right way round: the ground's job is to be a boundary and the text's is to be the colour, and it means the chip's contrast is identical at every setting rather than something to check twelve times.
 
-**The badge replaces the caption's product prefix and nothing else.** The Project after it stays `#7C7C80`. The caption line grows `14 → 16` and the row's content block `53 → 55`, with the row height still `80` — the same two points `Badge` already cost as one of four options.
+**The badge replaces the caption's product prefix and nothing else.** The Project after it stays `#7C7C80`. The caption line grows `14 → 16` and the row's content block `53 → 55`, with the row height unchanged by the badge (`80` then, `72` since [`expanded-panel-v2.md`](expanded-panel-v2.md) §2.1) — the same two points `Badge` already cost as one of four options.
 
 ## 5. Where a badge is drawn
 
@@ -126,7 +126,7 @@ This is the one place the decision removes something a user could already choose
 | Expanded panel, `220 × 38` cut-out, 6 agents | `571` | `520` |
 | Row caption line | `14`, or `16` under `Badge` | `16` |
 | Row content block | `53`, or `55` under `Badge` | `55` |
-| Row height | `80` | `80` |
+| Row height | `80` | `80` — ~~and `72` since 2026-09-08, unchanged *by the badge*, which is what this row claims~~ |
 | Footer, spoken | `45` | `47` |
 | Footer, opened table | `19W + 28P + 17` | `19W + 30P + 17` |
 
@@ -199,7 +199,7 @@ either surface is *drawn* differently by value, which is what makes it hold.
 - [x] The expanded panel is `520` at every cut-out this product meets, at every agent count, with no width term reading an agent count.
 - [x] A badge appears on a row's caption only while more than one product is connected, and disappears when the second disconnects — not when it merely runs out of threads.
 - [x] The badge's ground and text follow the `Theme colour` selection immediately, on every surface that draws one, and match the mark's two values exactly.
-- [x] Row height stays `80` with the badge, and the content block is `55`.
+- [x] Row height is unchanged by the badge, and the content block is `55`. (`80` when this was checked; `72` since the row's air came down, and still the same with a badge and without one.)
 - [x] The footer's spoken line is `47` and its opened table is `19W + 30P + 17`.
 - [x] With every colour rendered as flat grey, no figure, name or state on the collapsed bar or the expanded panel becomes ambiguous.
 - [x] Settings has `Theme colour` and no `Distinguish products`, and an install carrying a stored `Colour bar` opens on the badge without a migration step.

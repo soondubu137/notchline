@@ -1046,20 +1046,15 @@ struct ExpandedPanelAnatomy: View {
         let scale = Self.scale
         let size = NotchSpecimen.windowSize(of: store)
         let header = store.compactHeight
-        // A row's three lines. The block is centred in the row's `80`, so the
-        // inset above it is half of what the lines leave.
-        let lines = PanelMetrics.sessionRowCaptionHeight
-            + PanelMetrics.sessionRowLineSpacing
-            + PanelMetrics.sessionRowTitleHeight
-            + PanelMetrics.sessionRowLineSpacing
-            + PanelMetrics.sessionRowPreviewHeight
-        let inset = (PanelMetrics.sessionRowHeight - lines) / 2
+        // The air a row keeps above its first line and below its last.
+        let inset = PanelMetrics.sessionRowVerticalPadding
         // **The first block's header stands between the band and the first
-        // row**, so every row pin below starts under it. Zero with one product
-        // connected, where nothing is grouped and this figure is the one it
-        // has always been.
+        // row**, so every row pin below starts under it. It is the short bar
+        // — the one that stands in for the panel's own top rule — and it is
+        // zero with one product connected, where nothing is grouped and this
+        // figure is the one it has always been.
         let blockHeader = store.groupsSessionsByProduct
-            ? PanelMetrics.productGroupHeaderHeight
+            ? PanelMetrics.leadingProductGroupHeaderHeight
             : 0
         let firstRow = header + blockHeader
         let secondRow = firstRow + PanelMetrics.sessionRowHeight
