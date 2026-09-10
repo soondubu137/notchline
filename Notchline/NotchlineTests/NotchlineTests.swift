@@ -527,7 +527,7 @@ struct NotchlineTests {
         // And no row draws a chip of its own while the list is grouped: the
         // heading above it has said which product it is, and the pin naming
         // the caption line says `Project` rather than `Product and project`.
-        #expect(hovered.showsProductAttribution)
+        #expect(hovered.groupsSessionsByProduct)
 
         // The panel's own footer, which the second page has the room to draw:
         // today's spend, and the control that opens one group per product --
@@ -3969,7 +3969,7 @@ struct NotchlineTests {
         #expect(store.connectedAgents == [.codex])
         #expect(store.sessions.map(\.agent) == [.codex])
         #expect(store.recentDepartures.map(\.session.agent) == [.claudeCode])
-        #expect(store.showsProductAttribution)
+        #expect(store.groupsSessionsByProduct)
     }
 
     /// A secondary click takes a row out of the queue, and that is the only way
@@ -4104,15 +4104,19 @@ struct NotchlineTests {
         #expect(PanelMetrics.requestBodyWidth == 579)
     }
 
-    /// Rows say which product they are for as long as both products are connected.
+    /// The list is blocked for as long as both products are connected.
     ///
-    /// This used to be keyed to the rows themselves — attribution appeared only
-    /// while two products each had one — and the mark then blinked out whenever
-    /// one product happened to have nothing running, with both still open. What
-    /// the user is telling apart is the pair of products, and that fact holds
-    /// still for as long as the pair is connected.
+    /// This used to be keyed to the rows themselves — the structure appeared
+    /// only while two products each had one — and it then collapsed whenever
+    /// one product happened to have nothing running, with both still open.
+    /// What the user is telling apart is the pair of products, and that fact
+    /// holds still for as long as the pair is connected.
+    ///
+    /// **It used to be the badge's gate too**, and is not any more: a row names
+    /// its product whatever is connected, so what is asked here is only whether
+    /// the name is said by a heading or by the row's own chip.
     @Test @MainActor
-    func rowsAreAttributedForAsLongAsBothProductsAreConnected() {
+    func theListIsGroupedForAsLongAsBothProductsAreConnected() {
         let store = MonitorStore(services: [])
         func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
             MonitoredSession(
@@ -4125,15 +4129,15 @@ struct NotchlineTests {
         store.applyForTesting(
             makeAgentSnapshot(.codex, availability: .ready, sessions: [session(.codex, "a")])
         )
-        #expect(!store.showsProductAttribution)
+        #expect(!store.groupsSessionsByProduct)
 
         // Connected but with nothing running: still two products to tell apart,
-        // and the Codex rows on screen keep their mark rather than losing it
+        // and the Codex rows on screen keep their heading rather than losing it
         // until Claude Code's next turn happens to start.
         store.applyForTesting(
             makeAgentSnapshot(.claudeCode, availability: .ready, sessions: [])
         )
-        #expect(store.showsProductAttribution)
+        #expect(store.groupsSessionsByProduct)
 
         store.applyForTesting(
             makeAgentSnapshot(
@@ -4142,23 +4146,23 @@ struct NotchlineTests {
                 sessions: [session(.claudeCode, "b")]
             )
         )
-        #expect(store.showsProductAttribution)
+        #expect(store.groupsSessionsByProduct)
 
-        // Closed, so there is one product again and no second mark to explain.
+        // Closed, so there is one product again and no second name to explain.
         store.applyForTesting(
             makeAgentSnapshot(.claudeCode, availability: .ready, presence: .closed)
         )
-        #expect(!store.showsProductAttribution)
+        #expect(!store.groupsSessionsByProduct)
 
     }
 
-    /// A closed product's rows still identify themselves while they are listed.
+    /// A closed product's rows keep their block while they are listed.
     ///
     /// Presence is the rule, but it is not the whole rule: a product can close
     /// with its finished rows still on screen, and a list that is visibly mixed
-    /// has to say which row is whose no matter what presence now reports.
+    /// keeps its headings no matter what presence now reports.
     @Test @MainActor
-    func rowsLeftBehindByAClosedProductKeepTheirMark() {
+    func rowsLeftBehindByAClosedProductKeepTheirBlock() {
         let store = MonitorStore(services: [])
         func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
             MonitoredSession(
@@ -4181,7 +4185,7 @@ struct NotchlineTests {
         )
 
         #expect(store.connectedAgents == [.codex])
-        #expect(store.showsProductAttribution)
+        #expect(store.groupsSessionsByProduct)
     }
 
     /// The live list is one block per product, in the fixed order, and no
@@ -4332,10 +4336,15 @@ struct NotchlineTests {
     /// A row is named exactly once: by its own chip, or by the heading above
     /// it, and never by both or by neither.
     ///
-    /// The two are gated on one question for this reason — a boundary after a
-    /// boundary is a mark doing nothing (`panel-v2.md` §3.4), and two gates,
-    /// however carefully written, eventually disagree about the row in the
-    /// middle.
+    /// One gate answers it for this reason — a boundary after a boundary is a
+    /// mark doing nothing (`panel-v2.md` §3.4), and two gates, however
+    /// carefully written, eventually disagree about the row in the middle.
+    ///
+    /// **Neither is the case that changed** (2026-09-09). One connected product
+    /// used to draw no chip and no heading, on the reasoning that a name with
+    /// nothing to tell it apart from is caption width spent for nothing; the
+    /// row is named there now, so the one question left is *which of the two
+    /// says it*.
     ///
     /// **The line does not move either way.** The caption is
     /// ``PanelMetrics/sessionRowCaptionHeight`` whether or not a chip is in it,
@@ -4351,7 +4360,7 @@ struct NotchlineTests {
             )
         }
         func drawsAChip(_ store: MonitorStore) -> Bool {
-            store.showsProductAttribution && !store.groupsSessionsByProduct
+            !store.groupsSessionsByProduct
         }
 
         store.applyForTesting(
@@ -4359,9 +4368,9 @@ struct NotchlineTests {
                 .codex, availability: .ready, sessions: [session(.codex, "a")]
             )
         )
-        // One product: no chip and no heading, because there is nothing to
-        // tell apart.
-        #expect(!drawsAChip(store))
+        // One product: the row's own chip names it, and there is no heading
+        // to say it a second time.
+        #expect(drawsAChip(store))
         #expect(store.sessionGroups.isEmpty)
 
         store.applyForTesting(
@@ -4369,18 +4378,16 @@ struct NotchlineTests {
                 .claudeCode, availability: .ready, sessions: [session(.claudeCode, "b")]
             )
         )
-        // Two: the heading names them, so the chip goes -- and it is the same
+        // Two: the heading names them, so the chip goes -- and it is one
         // question answered once, not two questions that happen to agree.
         #expect(!drawsAChip(store))
         #expect(!store.sessionGroups.isEmpty)
-        #expect(store.groupsSessionsByProduct == store.showsProductAttribution)
 
         // Below the seam nothing is grouped, so the chip stays exactly where
         // it was: the queue's whole reading is an age, and the ages are one
         // descent that a heading would restart at every block. The queue asks
-        // `showsProductAttribution` alone, which is still true here, and its
-        // own viewport still answers to a row count and nothing else.
-        #expect(store.showsProductAttribution)
+        // nothing at all now, and its own viewport still answers to a row
+        // count and nothing else.
         #expect(
             PanelMetrics.recentViewportHeight(retiredRowCount: 4)
                 == PanelMetrics.retiredRowHeight * 4
@@ -4693,6 +4700,10 @@ struct NotchlineTests {
     /// should start exactly like a fresh one: this only proves that setting
     /// it does not crash construction, since nothing on the store can read it
     /// back any more to disagree.
+    ///
+    /// What is asked of the store instead is the one presence question left,
+    /// which is where the list is blocked rather than whether a row is named
+    /// — a row is named always (2026-09-09).
     @Test @MainActor
     func aStoredAttributionStyleIsIgnoredRatherThanMigrated() {
         let defaults = UserDefaults(suiteName: "rail-\(UUID().uuidString)")!
@@ -4700,12 +4711,12 @@ struct NotchlineTests {
         defaults.set("steel", forKey: "aggregateInk")
 
         let store = MonitorStore(services: [], preferences: defaults)
-        // Nothing on the store answers to either retired key any more, so a
-        // row's badge is drawn on presence alone.
-        #expect(!store.showsProductAttribution)
+        // Nothing on the store answers to either retired key any more, so the
+        // list is blocked on presence alone.
+        #expect(!store.groupsSessionsByProduct)
         store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
         store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
-        #expect(store.showsProductAttribution)
+        #expect(store.groupsSessionsByProduct)
     }
 
     /// Every surface says the whole name, the notch included.

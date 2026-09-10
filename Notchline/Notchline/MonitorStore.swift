@@ -3089,57 +3089,45 @@ final class MonitorStore: ObservableObject {
         return max(now, start)
     }
 
-    /// Whether rows say which product they belong to.
+    /// Whether the live list is drawn as one block per product.
     ///
-    /// Only while there are two products to tell apart — but that is a fact
-    /// about what is **connected**, not about which product happens to have a
-    /// row this second. Ordering is by urgency and not by product, so the list
-    /// is interleaved and every row has to identify itself; with one product
-    /// connected there is nothing to disambiguate and the mark would cost
-    /// caption width for no reason.
+    /// **This is the presence rule, and it is now the only thing on the panel
+    /// asking it.** It used to be `showsProductAttribution` — one question
+    /// answering both "does a row name its product" and "is the list grouped"
+    /// — on the reasoning that the two are exactly complementary and a row
+    /// could then never end up with neither. The first half of that is gone: a
+    /// row names its product always, whatever is connected, so the pair is
+    /// complementary in the only direction that ever mattered — a grouped row
+    /// gives its chip up to the heading above it, and an ungrouped one draws
+    /// its own. Neither is still impossible, and one gate is still what makes
+    /// it so.
     ///
-    /// It used to read `Set(sessions.map(\.agent)).count > 1`, which made the
-    /// mark come and go while both products stayed open: Claude Code finishing
-    /// its last row silently un-marked every Codex row, and the mark returned
-    /// on the next Claude Code turn. That is motion the user cannot account
-    /// for, and it contradicts the surface's own presence rule — the collapsed
-    /// matrices and the footer rules are already drawn per *connected* product
-    /// (``footerRules``), so the rows were the one place answering a different
-    /// question. Keyed to presence, the answer holds still for as long as both
-    /// products are open, which is the span over which the user is actually
-    /// telling rows apart.
+    /// What survives whole is *why* this is keyed to what is **connected**
+    /// rather than to who has a row this second. Written as
+    /// `Set(sessions.map(\.agent)).count > 1` the structure came and went while
+    /// both products stayed open: Claude Code finishing its last row collapsed
+    /// every Codex row back into a flat list, and the heading returned on the
+    /// next Claude Code turn. That is motion the user cannot account for, and
+    /// it contradicts the surface's own presence rule — the collapsed matrices
+    /// and the footer rules are already drawn per connected product
+    /// (``footerRules``), so the list was the one place answering a different
+    /// question.
     ///
     /// The second clause covers the reverse case: a product that closed while
     /// its rows are still listed. The list is visibly mixed, so it still has to
-    /// identify itself, whatever presence now says.
+    /// be told apart, whatever presence now says.
     ///
     /// **The second clause reaches below the seam**, and for the reason it was
-    /// written: a retired row names its product on the same presence rule
-    /// (`expanded-panel-v2.md` §8.6), so a queue holding both products under
-    /// one connected product is exactly the "visibly mixed list that still has
-    /// to identify itself" the paragraph above describes.
-    var showsProductAttribution: Bool {
-        connectedAgents.count > 1 || attributedAgents.count > 1
-    }
-
-    /// Whether the live list is drawn as one block per product.
-    ///
-    /// **The badge's own gate, and deliberately the same one**, because the two
-    /// are exactly complementary: a live row draws its chip only while the list
-    /// is *not* grouped, and the block's header names the product for every row
-    /// under it while it is. Tying them to one question is what makes it
-    /// impossible for a row to end up with neither — which two gates, however
-    /// carefully written, eventually would.
-    ///
-    /// It follows that this is keyed to **presence** rather than to who has a
-    /// row this second, which is what keeps the whole structure from appearing
-    /// and vanishing as one product's rows drain while both stay open.
+    /// written: a queue holding both products under one connected product is
+    /// exactly the visibly mixed list the paragraph above describes.
     ///
     /// **The Recent queue is not grouped and keeps its chip** — see
     /// ``MonitorAggregation/SessionGroup``. Below the seam the reading is an
     /// age and the ages are one descent; that column is the queue's whole
     /// value and a header would restart it at every block.
-    var groupsSessionsByProduct: Bool { showsProductAttribution }
+    var groupsSessionsByProduct: Bool {
+        connectedAgents.count > 1 || attributedAgents.count > 1
+    }
 
     /// The live list as blocks, or nothing at all while it is not grouped.
     var sessionGroups: [MonitorAggregation.SessionGroup] {

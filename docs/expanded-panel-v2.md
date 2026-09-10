@@ -68,7 +68,7 @@ A label, a hairline and a chevron, on one `32` pt line at the foot of the live l
 
 ### 2.3 A retired row
 
-One line: **product · project · subject**, `13` pt Regular. ~~The product name takes that product's caption ink (`#4D81B7` / `#9C553E`)~~ — **the product is a badge** ([`colour-v2.md`](colour-v2.md) §5), ground and text from the `Theme colour` pair, drawn only while more than one product is connected. `· project ·` takes `#7C7C80`, and the subject takes `#C7C7CC` — one step below a live title's white-at-98% and one step above a caption. It ends in a fade like every other line here.
+One line: **product · project · subject**, `13` pt Regular. ~~The product name takes that product's caption ink (`#4D81B7` / `#9C553E`)~~ — **the product is a badge** ([`colour-v2.md`](colour-v2.md) §5), ground and text from the `Theme colour` pair, ~~drawn only while more than one product is connected~~ **drawn always** (2026-09-09; nothing below the seam is grouped, so this is the only place the product is ever said here). `· project ·` takes `#7C7C80`, and the subject takes `#C7C7CC` — one step below a live title's white-at-98% and one step above a caption. It ends in a fade like every other line here.
 
 **The badge is `16` on a `13` pt line**, which is the same two points a live row's caption pays (§2.1). The line's own ~~`40`~~ **`36`** is measured from the half-row it has to equal rather than from its text, so it moved when the live row did and for no reason of its own — and `16` still clears it, with `10` above and `10` below.
 
@@ -236,7 +236,7 @@ its own rule exactly as it always has.
 
 | | Rule | |
 | --- | --- | --- |
-| 01 | **Headings are drawn on `showsProductAttribution` and nowhere else** — the same gate the chip already answers to, so the two are exactly complementary and a row can never end up with neither. Keyed to presence, so the structure does not appear and vanish as one product's rows drain while both stay open. With one product connected the list is the flat one it has always been | §8.6 |
+| 01 | **Headings are drawn on `MonitorStore.groupsSessionsByProduct` and nowhere else** — ~~`showsProductAttribution`, the same gate the chip already answers to~~ (renamed 2026-09-09 when the chip stopped answering to anything: a row names its product always, and this decides only whether the name is said by the heading or by the row). The two are still exactly complementary and a row can still never end up with neither. Keyed to presence, so the structure does not appear and vanish as one product's rows drain while both stay open. With one product connected the list is the flat one it has always been, **and its rows carry their own chips** | §8.6 |
 | 02 | **The block order is fixed** — `AgentKind`'s own, Codex then Claude Code, never re-ordered by state. The precedent is `MonitorStore.footerRules`; the argument is [`dual-agent-design.md`](dual-agent-design.md) §3.1's about the collapsed marks, on a much larger object | |
 | 03 | **Inside a block nothing changes.** `MonitorAggregation.rowOrder` as it stands ([`PRD.md`](PRD.md) §6.2). A status change re-sorts a row inside its own block and never across a heading, which is a shorter journey than the one it makes today | |
 | 04 | **A product with no rows draws no heading.** Nothing is drawn while it has nothing to say; the band already counts what is running. The cap falls by that heading's own height at the same moment the row that emptied the block left, so the two changes are one change | |
@@ -456,7 +456,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 ### 8.6 Two smaller reaches
 
 - **Membership gains a second question, answered in memory.** The store holds every departure of the past five hours in order, with what took each of them out and when, and answers navigation for them from what the product last vouched for. Nothing is persisted and nothing is re-read at launch — and the store now has a clock, since it is the only thing that can drop its own members.
-- **Product attribution reaches below the seam.** ~~All four presentations apply: `Name and colour` and `Name only` land on the breadcrumb's prefix, `Badge` replaces that prefix, and `Colour bar` becomes a `2` pt bar the height of the one line.~~ **There is one presentation** ([`colour-v2.md`](colour-v2.md) §5): the badge replaces the breadcrumb's prefix, on the same presence rule as a live row's, and the setting that chose between four is retired ([`dual-agent-design.md`](dual-agent-design.md) §4).
+- **Product attribution reaches below the seam.** ~~All four presentations apply: `Name and colour` and `Name only` land on the breadcrumb's prefix, `Badge` replaces that prefix, and `Colour bar` becomes a `2` pt bar the height of the one line.~~ **There is one presentation** ([`colour-v2.md`](colour-v2.md) §5): the badge replaces the breadcrumb's prefix, ~~on the same presence rule as a live row's~~ **on no rule at all** (2026-09-09) — which is still the same as a live row's, both of them naming their product whatever is connected — and the setting that chose between four is retired ([`dual-agent-design.md`](dual-agent-design.md) §4).
 
 ## 9. Verification
 

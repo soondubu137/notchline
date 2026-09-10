@@ -6,6 +6,10 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ## Unreleased
 
+### Changed
+
+- **A row names its product whatever is connected.** The badge was drawn only while a second product was open, on the reading that a name with nothing to tell it apart from is caption width spent for nothing. It is a label rather than a comparison. The one thing that still takes a chip off a live row is a block heading that has already said the name. (`docs/colour-v2.md` §4.)
+
 ### Fixed
 
 - **A read Codex thread leaves the notch again.** Codex Desktop `26.903.61454` moved its blue-dot set out of the renderer's atom map into a top-level `electron-thread-read-state-v1`, keyed by account identity above host, and deleted the key this app read. Every reading came back unreadable, and an unreadable reading may retire nothing — so a Completed Codex row stayed listed however thoroughly it had been read. Both shapes are read now. (`docs/adr/0002-use-desktop-unread-state-for-monitor-membership.md`.)

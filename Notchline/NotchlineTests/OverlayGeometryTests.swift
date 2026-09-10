@@ -538,6 +538,110 @@ struct OverlayGeometryTests {
         )
     }
 
+    /// **A row names its product with only one product connected** (2026-09-09).
+    ///
+    /// The chip used to be gated on there being a second product to tell this
+    /// row apart from, on the reading that a name with nothing to compare it
+    /// against is caption width spent for nothing. It is drawn always now, and
+    /// the one state that still drops it is a grouped list — where the heading
+    /// above the row has already said it.
+    ///
+    /// **Read off the drawing rather than off the gate**, because the gate can
+    /// be true while the chip is not reached: the caption's two forms are told
+    /// apart by ink alone, the chip's text being ``NotchPalette/themeInk``'s
+    /// lit value and the Project beside it the caption grey, so the brightest
+    /// pixel on that line says which of the two was drawn. Both stores draw the
+    /// same `72` pt row from the same session — only what is connected differs.
+    @Test @MainActor
+    func aRowNamesItsProductWithOnlyOneProductConnected() throws {
+        func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: id, turnID: "u-\(id)", projectName: "notchline",
+                title: "A title", preview: "A preview", status: .running,
+                startedAt: nil
+            )
+        }
+        func snapshot(_ agent: AgentKind, _ sessions: [MonitoredSession]) -> AgentSnapshot {
+            AgentSnapshot(
+                agent: agent, availability: .ready, sessions: sessions,
+                quota: .unavailable, diagnostic: nil, setupStatus: .active,
+                presence: .open
+            )
+        }
+        /// The brightest ink on the caption line, inside the width a chip
+        /// would take and below the row's own `8.5` of air.
+        func captionPeak(_ store: MonitorStore) throws -> CGFloat {
+            let row = try #require(store.sessions.first)
+            let width = PanelMetrics.sessionViewportWidth(
+                panelWidth: store.currentPanelSize.width
+            )
+            let host = NSHostingView(
+                rootView: SessionRowContent(session: row, isHovered: false)
+                    .frame(width: width, height: PanelMetrics.sessionRowHeight)
+                    .environmentObject(store)
+                    .background(Color.black)
+            )
+            host.frame = NSRect(
+                x: 0, y: 0, width: width, height: PanelMetrics.sessionRowHeight
+            )
+            host.appearance = NSAppearance(named: .darkAqua)
+            host.layoutSubtreeIfNeeded()
+
+            let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+            host.cacheDisplay(in: host.bounds, to: rep)
+            let across = CGFloat(rep.pixelsWide) / host.bounds.width
+            let down = CGFloat(rep.pixelsHigh) / host.bounds.height
+
+            // A box rather than a line: a `10` pt glyph crossed by one row of
+            // pixels samples whatever antialiasing that row carries, which
+            // would make this a weak test of a strong claim.
+            //
+            // The band is the row's own arithmetic, and it holds only because
+            // the session carries a preview: a row of three lines fills its
+            // `72` and its caption stands on the row's top padding, where a
+            // two-line row centres its block and puts the caption `10` lower.
+            let top = PanelMetrics.sessionRowVerticalPadding + 1.5
+            let bottom = top + PanelMetrics.sessionRowCaptionHeight - 3
+            var found: CGFloat = 0
+            for x in stride(from: PanelMetrics.sessionRowPadding + 1, to: 60.0, by: 1) {
+                for y in stride(from: top, to: bottom, by: 1) {
+                    guard
+                        let colour = rep
+                            .colorAt(x: Int(x * across), y: Int(y * down))?
+                            .usingColorSpace(.deviceRGB)
+                    else { continue }
+                    found = max(found, colour.brightnessComponent)
+                }
+            }
+            return found
+        }
+
+        let alone = MonitorStore(services: [], preferences: nil)
+        alone.isExpanded = true
+        alone.applyForTesting(snapshot(.codex, [session(.codex, "a")]))
+        #expect(!alone.groupsSessionsByProduct)
+        let named = try captionPeak(alone)
+        #expect(named > 0.8, "the row drew no chip — brightest value was \(named)")
+
+        // And the one state that takes it off again: a second product, so the
+        // list is blocked and the heading above this row carries the name.
+        // What is left on the line is the Project, in the caption's own grey.
+        let grouped = MonitorStore(services: [], preferences: nil)
+        grouped.isExpanded = true
+        grouped.applyForTesting(snapshot(.codex, [session(.codex, "a")]))
+        grouped.applyForTesting(snapshot(.claudeCode, [session(.claudeCode, "b")]))
+        #expect(grouped.groupsSessionsByProduct)
+        let plain = try captionPeak(grouped)
+        let caption = try #require(
+            NotchPalette.labelDrawingColor.usingColorSpace(.deviceRGB)
+        )
+        #expect(
+            plain < caption.brightnessComponent * 1.25,
+            "a grouped row drew more than its Project — brightest value was \(plain)"
+        )
+    }
+
     @Test @MainActor
     func aStandaloneListStillUsesItsSpecimensChosenWidth() {
         let store = MonitorStore(preferences: nil)

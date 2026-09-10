@@ -1664,10 +1664,7 @@ private struct SessionRow: View {
         // block, has no surface to compare this line against, and the product
         // is the first thing that says where clicking would go -- which is the
         // argument ``RetiredRow`` already makes one rule down.
-        let product = store.showsProductAttribution
-            ? "\(session.agent.displayName), "
-            : ""
-        return "\(product)\(session.projectName), \(session.title), "
+        return "\(session.agent.displayName), \(session.projectName), \(session.title), "
             + "\(session.status.displayName)\(elapsed)\(took)\(subagents)\(blocked)\(preview)"
     }
 }
@@ -1767,7 +1764,7 @@ struct OpenRow: View {
                 // attribution in every state that scrolls.
                 SessionRowCaption(
                     session: session,
-                    showsAttribution: store.showsProductAttribution,
+                    showsAttribution: true,
                     isEmphasized: true
                 )
                 Spacer(minLength: 8)
@@ -3438,14 +3435,13 @@ private struct RetiredRowContent: View {
     /// **product · project · subject**, in the three inks the panel already has.
     ///
     /// It overflows and fades rather than truncating, like every other line
-    /// here. The badge follows the live row's presence rule exactly (§8.6): the
-    /// surface names products while more than one is on it, and stops when
-    /// there is nothing to tell apart.
+    /// here. The badge is drawn on every row and asks nothing (§8.6): it used
+    /// to follow the live row's presence rule and stop while there was only
+    /// one product to name, and nothing below the seam is grouped, so this is
+    /// the only place the product is ever said here.
     private var breadcrumb: some View {
         HStack(spacing: 6) {
-            if store.showsProductAttribution {
-                ProductBadge(name: departure.session.agent.displayName)
-            }
+            ProductBadge(name: departure.session.agent.displayName)
 
             (
                 Text("\(departure.session.projectName) · ")
@@ -3513,7 +3509,8 @@ struct SessionRowContent: View {
                 VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
                     SessionRowCaption(
                         session: session,
-                        // **Not `showsProductAttribution` on its own.** A
+                        // **The one state that drops the chip**, and it is
+                        // not about how many products are connected. A
                         // boundary after a boundary is a mark doing nothing
                         // (`panel-v2.md` §3.4): while the list is grouped the
                         // block's own header names this product for every row
@@ -3522,8 +3519,7 @@ struct SessionRowContent: View {
                         // line stays `16` either way, so nothing moves
                         // vertically at the moment a second product connects
                         // -- the Project simply starts on the row's own `12`.
-                        showsAttribution: store.showsProductAttribution
-                            && !store.groupsSessionsByProduct,
+                        showsAttribution: !store.groupsSessionsByProduct,
                         isEmphasized: isEmphasized
                     )
 
