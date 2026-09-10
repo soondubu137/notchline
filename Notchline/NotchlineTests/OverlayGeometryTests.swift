@@ -119,26 +119,31 @@ struct OverlayGeometryTests {
         #expect(store.sessionGroupHeaderCount == 2)
     }
 
-    /// The heading is the `32` the arithmetic above spends on it, it draws the
-    /// chip that makes it one, and **all of its slack is above that chip**.
+    /// The heading is the height the arithmetic above spends on it, it draws
+    /// the chip that makes it one, and **all of its slack is above that chip**.
     ///
     /// Read off the bitmap rather than off the metric, because the metric is
-    /// the thing under test: `productGroupHeaderHeight` is `recentSeamHeight`
-    /// by definition and would agree with itself however the bar were drawn.
-    /// What cannot agree with itself is where the ink lands — and where it
-    /// lands is the whole of the decision. Centred, the chip stood `8` under
-    /// the band's hairline and `20.5` from the caption it heads, which is a
-    /// heading nearer to what precedes it than to what it heads; taking the
-    /// slack above inverts that to `16` and `12.5`, the second of which is the
-    /// row's own padding and nothing added. So the top third of the bar has to
-    /// be empty and the bottom `16` has to carry the chip, and this checks
-    /// both rather than only that something was drawn.
+    /// the thing under test: `productGroupHeaderHeight` is the chip plus the
+    /// slack by definition and would agree with itself however the bar were
+    /// drawn. What cannot agree with itself is where the ink lands — and where
+    /// it lands is the whole of the decision. Centred, the chip stood nearer
+    /// to the band's hairline than to the caption it heads, which is a heading
+    /// nearer to what precedes it than to what it heads; taking the slack
+    /// above inverts that, and what falls below the chip is the row's own
+    /// padding and nothing added. So the slack at the top of the bar has to be
+    /// empty and the bottom `16` has to carry the chip, and this checks both
+    /// rather than only that something was drawn.
+    ///
+    /// It is written off the metrics for that reason and not out of
+    /// squeamishness about constants: halving the slack from `16` to `8` moved
+    /// every figure in the paragraph above and none of the claims, and this
+    /// test went green without a line changed.
     ///
     /// No run loop is turned here: the bar is not in a `ScrollView`, so it is
     /// laid out and drawn in the same pass. See ``AnatomyFigureRenderer`` for
     /// what a specimen that does hold the actor costs the answering suite.
     @Test @MainActor
-    func theBlockHeadingIsThirtyTwoAndDrawsItsChip() throws {
+    func theBlockHeadingIsItsChipAndItsSlackAboveIt() throws {
         let header = ProductGroupHeader(
             group: MonitorAggregation.SessionGroup(
                 agent: .codex,

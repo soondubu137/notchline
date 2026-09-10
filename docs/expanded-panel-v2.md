@@ -11,6 +11,7 @@
 | Amended | **`No active sessions` is drawn whenever nothing is live, queue or no queue** (2026-09-05). §2 let the seam take the sentence's place, on the reading that a list continuing past its own end is a better answer than an apology. It is a better answer to a different question: what has left is not what is running, and the panel was left unable to say the one thing it exists to say for as long as anything sat under the rule. The apology becomes the empty list's own first line, above the seam and inside the same scroller. Touched: §2.4 rule 02, §2.6, §4, §9, §10. **No metric moves, and the floor comes back up** — `178` again rather than `162`, with a folded queue `32` above it; the fold with nothing live is four rows rather than five, because `48 + 32 + 4 × 40` is the `240` cap exactly. |
 | Amended | **A row's air comes down, and the first block's heading takes the panel's own top rule over** (2026-09-08). Two changes, both cosmetic, both in §2.1 and §4.2. A live row is `72` rather than `80` — `8.5` above its three lines and `8.5` below, where it was `12.5` — so a retired row is `36`, the live viewport's cap is `216` and the queue's is `180`; nothing about what either viewport *draws* moves, still three rows and five. And the first block's heading is drawn without its `16` of slack, `16` rather than `32`: its chip's top edge stands where the panel's own hairline was, its rule stands `8` under that, and the panel stops drawing that hairline while a heading is there to draw one. The panel is `300` at every connected form where it was `324`. Touched: §2.1, §2.3, §2.4 rules 02 and 04, §4.2, §4.3 (new rule 11), §4.4, §9. **One figure follows and is not a choice:** an approval's body is the viewport less the row's fixed parts (`answer-in-notch.md` §4.1), so it is `124` where it was `140` — held at `140` a maximal approval would stand `16` taller than the list it opens in. |
 | Amended | **A washed row's ground stands `2` off its own frame** (2026-09-09). §4.2 gives a block's heading all of its slack above the chip and none below, on the reading that the row beneath brings its own top padding — true until the row is under the pointer, when its ground fills the whole `72` and meets the bottom edge of the chip's own ground. Two filled shapes sharing an edge read as one shape with a notch cut out of it. The wash is inset `2` top and bottom on every row that draws one, live, open and retired: no metric moves, no glyph comes near a ground's edge, and the air the heading is relying on survives the row being looked at. Pinned by `aWashedRowsGroundStandsOffTheChipAboveIt`. |
+| Amended | **A block heading's slack is halved, `16` to `8`** (2026-09-09). §4.2 gives the heading all of its slack above the chip, and inherited the figure from the seam it is built out of — where `16` was `8 + 8` of centring and had never been asked to separate two things. Moved wholly above, and on top of the row's own `8.5`, it made a block boundary `24.5` of black against the `17` between two rows: the largest empty space on the panel, between two things that belong to the same list. At `8` the chip keeps `16.5` above and `8.5` below, so it is still twice as near to what it heads, and a block boundary costs what a row boundary costs. The bar is `24` where it was `32`, and is now composed from the slack rather than divided into it; the grouped viewport is unaffected — §4.6 caps it at `16 + 288 + 16` and pays for no heading out of rows — so no panel height moves except a short list's, which loses `8` per block past the first. Touched: §4.2. |
 | Amended | **The heading's separator is the seam's dot** (2026-09-09), which withdraws half of the amendment below. It stays *drawn* — that was for the line it sits on — but it gives up the hairline's value and its `3` pt for the caption's ink and the seam's `2`. §4.2 is §2.2's bar with a chip where the label stands, and one bar draws one mark; a chip and a count are held apart by whatever holds a word and a count apart. The count does not move: the dot still stands on the middle of the gap the glyph run held. |
 | Amended | **The seam's separator is drawn, at the retired row's size** (2026-09-09). `Recent · N` set its `·` in the caption's face, which put a `1.13` pt mark `0.77` pt off the line its own hairline runs along, and put it two thirds the size of the dot the queue draws in every row underneath it. It is a `2` pt disc now, in the caption's own ink, standing in the middle of the gap the glyph run held — so the word and the figure have not moved, the rule runs through the mark rather than past it, and the seam and the rows below it separate things the same way. §2.2 and §4.2; pinned by `theSeamsSeparatorIsTheRowsDotOnTheRulesOwnLine`. |
 | Amended | **The heading's separator becomes chrome, and a finished row's ground becomes a dot** (2026-09-08, with the row above). `Codex · 3` set its separator in the caption's ink, which made it a third piece of text on a line already carrying a chip and a figure; it is a `3` pt disc at the hairline's own `15%` white now, on the rule's own line and in the middle of the gap the glyph held, so the count does not move and the mark stops competing with what it separates (§4.2). And a finished row's reading gives up its dim tile for a still `4` pt dot in front of the digits — the mark the collapsed bar already drew for the same fact ([`compact-view-v2.md`](compact-view-v2.md) §4.2 and §4.3), in the sessions numeral's `#C7C7CC`, so the two surfaces stop saying one thing two ways. With the tile went its `6` of padding, which puts a running row's digits and a finished row's on the same column for the first time. |
@@ -148,8 +149,8 @@ the list above the seam.
 chevron taken off:
 
 ```
-32  =  16  +  badge 16  +  0           (the seam's own bar height, unchanged)
-16  =   0  +  badge 16  +  0           (the first block's, amended 2026-09-08)
+~~32~~ 24  =  ~~16~~ 8  +  badge 16  +  0     (amended 2026-09-09)
+16        =        0  +  badge 16  +  0     (the first block's, amended 2026-09-08)
 [Codex] ·  3  ────────────────────────────────────────────────────────  508
 ```
 
@@ -160,8 +161,24 @@ caption it heads, because the row beneath brings its own top padding. A heading
 nearer to what precedes it than to what it heads is a heading attached to the
 wrong thing. Centring is right for a bar that *closes* a list and wrong for one
 that *opens* a block, and this is the only bar of the second kind on the panel.
-Taking the whole `16` above inverts it — `16` clear of the band, and the row's
-own padding and nothing added to the caption below.
+Taking the whole of the slack above inverts it — the slack clear of the band,
+and the row's own padding and nothing added to the caption below.
+
+**~~The slack is the seam's `16`.~~ It is `8`** (amended 2026-09-09). The
+inversion above is right and the figure it inherited was not. The bar took its
+height from the seam because it *is* the seam with a chip where the label
+stands — but the seam's `16` was `8 + 8` of centring, and moving all of it to
+one side made a number that had never been asked to separate two things do
+exactly that. A row already ends on its own `8.5`, so `16` of slack put `24.5`
+of black between one block's last word and the next block's chip: half again
+the `17` the list spends between two rows, and by a wide margin the largest
+empty space on the panel. A gap that big stops reading as *a new block begins
+here* and starts reading as *the list ended*. Halved, the chip keeps `16.5`
+above and `8.5` below — still twice as near to what it heads as to what it
+follows, which is the whole of the claim — and a block boundary costs what a
+row boundary costs instead of half again more. The bar's height now follows
+from the slack rather than the slack from the bar's height, which is the same
+direction §2.1 turned a row's own.
 
 **The first block's bar is that bar with the slack taken off** (amended
 2026-09-08). The slack is what separates a heading from what precedes it, and

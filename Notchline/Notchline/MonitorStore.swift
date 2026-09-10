@@ -439,25 +439,50 @@ enum PanelMetrics {
     static func productBadgeWidth(_ name: String) -> CGFloat {
         productBadgePadding * 2 + textWidth(name, font: productBadgeFont)
     }
-    /// The bar a product's block on the live list is headed with.
+    /// The air a block's heading keeps above its chip, and the whole of what
+    /// separates one product's block from the one above it
+    /// (`expanded-panel-v2.md` §4.2).
     ///
-    /// **``recentSeamHeight`` rather than a constant of its own, because it is
-    /// that bar**: the same `32`, the same caption idiom, the same hairline —
-    /// with the product's badge standing where the seam's label stands, and
-    /// the chevron taken off. `8` + the badge's own ``productBadgeHeight`` +
-    /// `8` lands on the same figure the seam's `9 + 14 + 9` does, so the two
-    /// bars are one bar and nothing new is measured.
+    /// **`8`, where it was `16`.** The bar took its height from
+    /// ``recentSeamHeight`` — the Recent seam with a chip standing where the
+    /// seam's label stands — and then moved the seam's `8 + 8` of centring
+    /// wholly above the chip, on the reading that a heading has to stand
+    /// nearer to what it heads than to what precedes it. The inversion is
+    /// right and the figure was not: a row already ends on
+    /// ``sessionRowVerticalPadding``, so `16` of slack put `24.5` of black
+    /// between one block's last word and the next block's chip — half again
+    /// the `17` the list spends between two rows, and the largest empty space
+    /// on the surface by a wide margin. A gap that big stops reading as *a new
+    /// block begins here* and starts reading as *the list ended*.
     ///
-    /// What it does **not** take from the seam is the control: no chevron at
+    /// `8` keeps the statement and drops the waste: `16.5` above the chip and
+    /// `8.5` below it, so the heading is still twice as close to the block it
+    /// heads as to the one it follows, and a block boundary now costs what a
+    /// row boundary costs rather than half again more. It also leaves `10`
+    /// between the chip's own ground and a washed row's — see
+    /// ``sessionRowGroundInset``, which is the value that stops two grounds
+    /// from sharing an edge.
+    static let productGroupHeaderSlack: CGFloat = 8
+    /// The bar a product's block on the live list is headed with: its chip,
+    /// with the slack above it.
+    ///
+    /// **Composed from the slack rather than divided into it.** It was
+    /// ``recentSeamHeight``, a height chosen first and then spent — which
+    /// meant the air between two blocks could only be changed by changing a
+    /// number that says nothing about air, and could not be changed at all
+    /// without claiming this bar was no longer the seam. The same move
+    /// ``sessionRowHeight`` made: the padding is the decision and the height
+    /// follows it.
+    ///
+    /// What it still takes from the seam is everything that is not the
+    /// figure — the caption idiom, the hairline, the chip standing where the
+    /// label stands. What it does **not** take is the control: no chevron at
     /// `492`, and so the hairline runs on to the content box's own trailing
     /// edge instead of stopping `8` short of one. A bar that washes under the
     /// pointer and then does nothing is a promise made quietly
     /// (`answer-in-notch.md` §11 rule 03), and there is nothing to fold yet.
-    static var productGroupHeaderHeight: CGFloat { recentSeamHeight }
-    /// The whole of that bar which is not its chip: the slack, all of it above
-    /// (`expanded-panel-v2.md` §4.2).
-    static var productGroupHeaderSlack: CGFloat {
-        productGroupHeaderHeight - productBadgeHeight
+    static var productGroupHeaderHeight: CGFloat {
+        productBadgeHeight + productGroupHeaderSlack
     }
     /// The bar the **first** block is headed with, which is the bar with its
     /// slack taken off: the chip alone, `16`.
@@ -465,9 +490,10 @@ enum PanelMetrics {
     /// A heading's slack is what separates it from what precedes it, and the
     /// first heading is preceded by the band — which already brings its own
     /// air, half the difference between the menu bar's height and the `16.6`
-    /// matrix standing in the middle of it. Spending `16` more on top of that
+    /// matrix standing in the middle of it. Spending the slack on top of that
     /// put the first chip `26` under the matrix and left the panel opening on
-    /// a stripe of black.
+    /// a stripe of black — which is what the figure was when the slack was
+    /// `16`, and is the reason this end of it is `0` rather than half.
     ///
     /// It is also what lets the panel's own top hairline come off. That rule
     /// and this bar's rule are the same `1` pt of white at `15%` on the same

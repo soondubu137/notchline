@@ -25,6 +25,18 @@ struct ProductTrailLayoutTests {
         return MonitorAggregation.groups(of: sessions)
     }
 
+    /// Where the second block's chip stands in the flow: the leading heading,
+    /// the first block's rows, and the second heading's own slack.
+    ///
+    /// Composed rather than tabulated, because the slack is §4.2's to choose —
+    /// it was halved on 2026-09-09 and every literal `392` and `16 + 72 + 16`
+    /// in this file was a restatement of a number the flow already knows.
+    private func secondChip(after rows: Int) -> CGFloat {
+        PanelMetrics.leadingProductGroupHeaderHeight
+            + PanelMetrics.sessionRowHeight * CGFloat(rows)
+            + PanelMetrics.productGroupHeaderSlack
+    }
+
     private func snapshot(_ agent: AgentKind, _ sessions: [MonitoredSession]) -> AgentSnapshot {
         AgentSnapshot(
             agent: agent, availability: .ready, sessions: sessions,
@@ -63,17 +75,22 @@ struct ProductTrailLayoutTests {
         #expect(PanelMetrics.sessionViewportCap == PanelMetrics.sessionRowHeight * 4)
         #expect(PanelMetrics.groupedSessionViewportCap == CGFloat(16 + 288 + 16))
 
-        // Grouped: two blocks and eight rows ask for `16 + 360 + 32 + 216`
-        // and are given the cap.
+        // Grouped: two blocks and eight rows ask for `16 + 576 + 24` and are
+        // given the cap. The headings are named rather than added up, because
+        // what they cost is §4.2's decision and not this test's — the claim
+        // here is that the *cap* does not move when it changes, and that only
+        // reads if the two are written differently.
         #expect(
-            PanelMetrics.sessionListContentHeight(liveRowCount: 8, groupHeaderCount: 2) == 624
+            PanelMetrics.sessionListContentHeight(liveRowCount: 8, groupHeaderCount: 2)
+                == PanelMetrics.sessionRowHeight * 8 + PanelMetrics.groupHeadingsHeight(count: 2)
         )
         #expect(
             PanelMetrics.sessionViewportHeight(liveRowCount: 8, groupHeaderCount: 2) == 320
         )
         // A list that fits is given what it asks for, and no more.
         #expect(
-            PanelMetrics.sessionViewportHeight(liveRowCount: 2, groupHeaderCount: 2) == 192
+            PanelMetrics.sessionViewportHeight(liveRowCount: 2, groupHeaderCount: 2)
+                == PanelMetrics.sessionRowHeight * 2 + PanelMetrics.groupHeadingsHeight(count: 2)
         )
         // Flat: the same eight rows are four rows on screen.
         #expect(PanelMetrics.sessionViewportHeight(liveRowCount: 8) == 288)
@@ -82,7 +99,7 @@ struct ProductTrailLayoutTests {
         // heading, so nothing is left for a rail to offer.
         #expect(
             PanelMetrics.sessionViewportHeight(liveRowCount: 1, openRowHeight: 400, groupHeaderCount: 1)
-                == 416
+                == 400 + PanelMetrics.leadingProductGroupHeaderHeight
         )
     }
 
@@ -114,35 +131,38 @@ struct ProductTrailLayoutTests {
         #expect(claude.isOnTrail)
         // Its chip's own place in the flow: the first heading, five rows and
         // its own slack.
-        #expect(claude.flowChip == CGFloat(16 + 5 * 72 + 16))
+        #expect(claude.flowChip == secondChip(after: 5))
     }
 
     /// **Lifting off is the foot line's docking played upward**: over the
-    /// bar's own `32` the badge rises at the flow's `x` while its count and
+    /// bar's own height the badge rises at the flow's `x` while its count and
     /// rule come in, and it is in the flow — whole — after that.
     @Test
     func aPendingBadgeLiftsStraightUpIntoItsBar() {
         let blocks = groups(first: 5, second: 3)
-        let footLine: CGFloat = 320 - 16
+        let footLine: CGFloat = 320 - PanelMetrics.productTrailHeight
+        let half = PanelMetrics.productTrailDockingDistance / 2
+        let chip = secondChip(after: 5)
 
-        // Halfway: the chip is `16` above the foot line, half its tail drawn.
-        let lifting = layout(blocks, offset: 392 - (footLine - 16)).headings[1]
+        // Halfway: the chip is half the travel above the foot line, half its
+        // tail drawn.
+        let lifting = layout(blocks, offset: chip - (footLine - half)).headings[1]
         #expect(lifting.x == PanelMetrics.sessionRowPadding)
-        #expect(abs(lifting.y - (footLine - 16)) < 0.001)
+        #expect(abs(lifting.y - (footLine - half)) < 0.001)
         #expect(abs(lifting.tail - 0.5) < 0.001)
         #expect(abs(lifting.trailed - 0.5) < 0.001)
 
         // Free of the foot: in the flow, at its flow position, whole.
         let free = layout(blocks, offset: 200)
         let flowing = free.headings[1]
-        #expect(flowing.y == CGFloat(392 - 200))
+        #expect(flowing.y == chip - 200)
         #expect(flowing.tail == 1)
         #expect(flowing.trailed == 0)
         #expect(!free.drawsFootLine, "nothing is pending, so no foot line")
         #expect(free.drawsTopStrip)
     }
 
-    /// **Docking is scroll-linked over the bar's own `32`**: the arriving chip
+    /// **Docking is scroll-linked over the bar's own height**: the arriving chip
     /// slides right into its slot faster than it rises — so it never crosses
     /// the badge already there — while the heading it replaces gives up its
     /// count and rule over the same travel. Docked, the top strip is the
@@ -155,11 +175,13 @@ struct ProductTrailLayoutTests {
         let codexWidth = PanelMetrics.productBadgeWidth(AgentKind.codex.displayName)
         let slot = PanelMetrics.sessionRowPadding + codexWidth + PanelMetrics.productBadgePadding
 
-        // Halfway: the chip is `16` from the top, and `x` is already most of
-        // the way there.
-        let halfway = layout(blocks, offset: 392 - 16)
+        // Halfway: the chip is half the travel from the top, and `x` is
+        // already most of the way there.
+        let half = PanelMetrics.productTrailDockingDistance / 2
+        let chip = secondChip(after: 5)
+        let halfway = layout(blocks, offset: chip - half)
         let arriving = halfway.headings[1]
-        #expect(abs(arriving.y - 16) < 0.001)
+        #expect(abs(arriving.y - half) < 0.001)
         let expectedX = PanelMetrics.sessionRowPadding + (slot - PanelMetrics.sessionRowPadding) * ProductTrailLayout.ease(0.5)
         #expect(abs(arriving.x - expectedX) < 0.001)
         #expect(arriving.tail == 1, "the arriving heading is whole")
@@ -174,7 +196,7 @@ struct ProductTrailLayoutTests {
         #expect(leaving.y == 0)
 
         // Docked: one line, two names, one tail.
-        let docked = layout(blocks, offset: 430)
+        let docked = layout(blocks, offset: chip + PanelMetrics.productTrailDockingDistance)
         let active = docked.headings[1]
         #expect(active.x == slot)
         #expect(active.y == 0)
@@ -187,7 +209,7 @@ struct ProductTrailLayoutTests {
 
         // And a click on either badge has somewhere to go: the offset that
         // puts its chip on the top strip.
-        #expect(docked.headings.map(\.flowChip) == [0, 392])
+        #expect(docked.headings.map(\.flowChip) == [0, chip])
     }
 
     /// **A list that fits pins nothing.** Every position is the flow position
@@ -201,7 +223,7 @@ struct ProductTrailLayoutTests {
         #expect(!fits.scrolls)
         #expect(!fits.drawsTopStrip)
         #expect(!fits.drawsFootLine)
-        #expect(fits.headings.map(\.y) == [0, CGFloat(16 + 72 + 16)])
+        #expect(fits.headings.map(\.y) == [0, secondChip(after: 1)])
         #expect(fits.headings.map(\.x) == [PanelMetrics.sessionRowPadding, PanelMetrics.sessionRowPadding])
         #expect(fits.headings.map(\.tail) == [1, 1])
         #expect(fits.headings.map(\.trailed) == [0, 0])
@@ -249,8 +271,8 @@ struct ProductTrailLayoutTests {
     }
 
     /// **The trails are drawn, at the height the panel was sized to.** Five
-    /// Codex rows and one of Claude Code's is `480` of list in a `320`
-    /// viewport: at rest the top strip carries Codex's chip whole, and the
+    /// Codex rows and one of Claude Code's is six rows and two headings of
+    /// list in a `320` viewport: at rest the top strip carries Codex's chip whole, and the
     /// foot line carries Claude Code's — dimmed, a name alone — where the
     /// pinned list used to show nothing of it at all.
     ///
@@ -264,7 +286,10 @@ struct ProductTrailLayoutTests {
         store.isExpanded = true
         store.applyForTesting(snapshot(.codex, (0..<5).map { session(.codex, "c\($0)") }))
         store.applyForTesting(snapshot(.claudeCode, [session(.claudeCode, "k")]))
-        #expect(store.sessionListContentHeight == 480)
+        #expect(
+            store.sessionListContentHeight
+                == PanelMetrics.sessionRowHeight * 6 + PanelMetrics.groupHeadingsHeight(count: 2)
+        )
         #expect(store.sessionViewportHeight == PanelMetrics.groupedSessionViewportCap)
 
         let width = PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width)

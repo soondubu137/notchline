@@ -3141,13 +3141,23 @@ struct OptionRow: View {
 /// nothing about it is visible until something slides beneath.
 ///
 /// **All of the bar's slack sits above the chip, and none below it.** Centred,
-/// the `32` put `8` over the chip and `8` under — and the row beneath brings
-/// its own top padding, so the chip stood `8` from the rule above it and
-/// `20.5` from the caption it was heading. A heading nearer to what precedes
-/// it than to what it heads is a heading attached to the wrong thing; centring
-/// is right for a bar that closes a list and wrong for one that opens a block.
-/// Taking the whole `16` above inverts it — `16` clear of what came before,
-/// and the row's own padding and nothing added to the caption below.
+/// the bar put half its slack over the chip and half under — and the row
+/// beneath brings its own top padding, so the chip stood nearer to the rule
+/// above it than to the caption it was heading. A heading nearer to what
+/// precedes it than to what it heads is a heading attached to the wrong thing;
+/// centring is right for a bar that closes a list and wrong for one that opens
+/// a block. Taking the whole of the slack above inverts it — the slack clear
+/// of what came before, and the row's own padding and nothing added to the
+/// caption below.
+///
+/// **The slack is `8`, where it was `16`** — see
+/// ``PanelMetrics/productGroupHeaderSlack``. At `16` the inversion was right
+/// and the figure was not: a row ends on its own `8.5`, so a block boundary
+/// cost `24.5` of black against the `17` the list spends between two rows, and
+/// the largest gap on the surface fell between two things that belong to the
+/// same list. Halved, the chip keeps `16.5` above and `8.5` below — still
+/// twice as near to what it heads — and a block boundary now costs what a row
+/// boundary costs.
 ///
 /// **The first block's bar is that bar with the slack taken off**, `16` and
 /// the chip alone (``PanelMetrics/leadingProductGroupHeaderHeight``). The
