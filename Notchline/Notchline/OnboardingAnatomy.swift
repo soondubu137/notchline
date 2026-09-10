@@ -1051,11 +1051,10 @@ struct ExpandedPanelAnatomy: View {
         // **The first block's header stands between the band and the first
         // row**, so every row pin below starts under it. It is the short bar
         // — the one that stands in for the panel's own top rule — and it is
-        // zero with one product connected, where nothing is grouped and this
-        // figure is the one it has always been.
-        let blockHeader = store.groupsSessionsByProduct
-            ? PanelMetrics.leadingProductGroupHeaderHeight
-            : 0
+        // drawn at every product count, one included: the list is one block
+        // per product always, so this figure is the general one rather than
+        // the two-product one.
+        let blockHeader = PanelMetrics.leadingProductGroupHeaderHeight
         let firstRow = header + blockHeader
         let secondRow = firstRow + PanelMetrics.sessionRowHeight
         let caption = firstRow + inset + PanelMetrics.sessionRowCaptionHeight / 2
@@ -1119,22 +1118,21 @@ struct ExpandedPanelAnatomy: View {
         }
 
         // The block heading, which is also why the rows under it no longer
-        // name their own product. Drawn only while the list is grouped, and
-        // the key renumbers behind it so the figure is never keyed `1, 2, 4`.
-        var key: [AnatomyPin] = [
+        // name their own product. Always drawn, because the list is always
+        // grouped — the `if` that used to stand here, and the renumbering
+        // behind it, went with the flat one-product list.
+        let key: [AnatomyPin] = [
             left(1, header / 2, "Same as above"),
-            right(2, header / 2, "Settings")
+            right(2, header / 2, "Settings"),
+            left(3, header + blockHeader / 2, "Whose these are")
         ]
-        if store.groupsSessionsByProduct {
-            key.append(left(3, header + blockHeader / 2, "Whose these are"))
-        }
         let next = key.count + 1
         return key + [
             // One pin, two feet: the Project only says which thing the title
             // is on, so they are one reading rather than two. **The product is
-            // no longer one of them while the list is grouped** — the heading
-            // above has said it, and a chip repeating it on every line is the
-            // boundary after a boundary `panel-v2.md` §3.4 deleted.
+            // no longer one of them** — the heading above has said it, and a
+            // chip repeating it on every line is the boundary after a boundary
+            // `panel-v2.md` §3.4 deleted.
             AnatomyPin(
                 id: next,
                 x: leftMargin * scale,
@@ -1144,9 +1142,7 @@ struct ExpandedPanelAnatomy: View {
                     spread: (title - caption) / 2 * scale,
                     foot: forkFoot
                 ),
-                label: store.groupsSessionsByProduct
-                    ? "Project and title"
-                    : "Product, Project, title"
+                label: "Project and title"
             ),
             left(next + 1, lastSaid, "The last thing said"),
             // The row's own control, and the one part of either drawing that

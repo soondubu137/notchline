@@ -3509,17 +3509,16 @@ struct SessionRowContent: View {
                 VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
                     SessionRowCaption(
                         session: session,
-                        // **The one state that drops the chip**, and it is
-                        // not about how many products are connected. A
-                        // boundary after a boundary is a mark doing nothing
-                        // (`panel-v2.md` §3.4): while the list is grouped the
-                        // block's own header names this product for every row
-                        // under it, and a chip repeating it on each line is
-                        // the separator that decision already deleted. The
-                        // line stays `16` either way, so nothing moves
-                        // vertically at the moment a second product connects
-                        // -- the Project simply starts on the row's own `12`.
-                        showsAttribution: !store.groupsSessionsByProduct,
+                        // **A closed live row never draws a chip**, because
+                        // the heading above it has always just said the name:
+                        // the list is one block per product at every count,
+                        // one product included. A boundary after a boundary is
+                        // a mark doing nothing (`panel-v2.md` §3.4), and a
+                        // chip repeating the heading on each line is the
+                        // separator that decision already deleted. ``OpenRow``
+                        // is the one row that keeps its own, and the reason is
+                        // written there.
+                        showsAttribution: false,
                         isEmphasized: isEmphasized
                     )
 

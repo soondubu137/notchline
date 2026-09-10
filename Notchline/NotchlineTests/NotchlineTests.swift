@@ -499,7 +499,6 @@ struct NotchlineTests {
         // which is what puts both headings on the figure with three rows
         // between them, and the fourth row under the rail rather than under
         // the fold with nothing to say it is there.
-        #expect(hovered.groupsSessionsByProduct)
         let blocks = hovered.sessionGroups
         #expect(blocks.map(\.agent) == [.codex, .claudeCode])
         #expect(blocks.map(\.sessions.count) == [3, 1])
@@ -524,10 +523,10 @@ struct NotchlineTests {
         #expect(badged.showsSubagentBadge)
         #expect(MonitorAggregation.effectiveStatus(of: badged) == .running)
 
-        // And no row draws a chip of its own while the list is grouped: the
-        // heading above it has said which product it is, and the pin naming
-        // the caption line says `Project` rather than `Product and project`.
-        #expect(hovered.groupsSessionsByProduct)
+        // And no row draws a chip of its own: the heading above it has said
+        // which product it is, and the pin naming the caption line says
+        // `Project` rather than `Product and project`.
+        #expect(!hovered.sessionGroups.isEmpty)
 
         // The panel's own footer, which the second page has the room to draw:
         // today's spend, and the control that opens one group per product --
@@ -3985,7 +3984,7 @@ struct NotchlineTests {
         #expect(store.connectedAgents == [.codex])
         #expect(store.sessions.map(\.agent) == [.codex])
         #expect(store.recentDepartures.map(\.session.agent) == [.claudeCode])
-        #expect(store.groupsSessionsByProduct)
+        #expect(store.sessionGroups.map(\.agent) == [.codex])
     }
 
     /// A secondary click takes a row out of the queue, and that is the only way
@@ -4120,19 +4119,23 @@ struct NotchlineTests {
         #expect(PanelMetrics.requestBodyWidth == 579)
     }
 
-    /// The list is blocked for as long as both products are connected.
+    /// The list is blocked at every product count, and nothing takes that away.
     ///
-    /// This used to be keyed to the rows themselves — the structure appeared
-    /// only while two products each had one — and it then collapsed whenever
-    /// one product happened to have nothing running, with both still open.
-    /// What the user is telling apart is the pair of products, and that fact
-    /// holds still for as long as the pair is connected.
+    /// **Two gates stood here in turn and both are gone.** It was first keyed
+    /// to the rows — the structure appeared only while two products each had
+    /// one, and collapsed whenever one of them happened to have nothing
+    /// running with both still open. Presence answered that and was wrong in a
+    /// smaller way: the structure still arrived and left, just at connect and
+    /// disconnect instead. It is unconditional now (2026-09-09), so one product
+    /// draws the general list with one block in it rather than a flat list of
+    /// its own, and the only thing still following the rows is *how many*
+    /// blocks there are.
     ///
-    /// **It used to be the badge's gate too**, and is not any more: a row names
-    /// its product whatever is connected, so what is asked here is only whether
-    /// the name is said by a heading or by the row's own chip.
+    /// **It used to be the badge's gate too**, and that went first: a row names
+    /// its product whatever is connected, and the heading is where a live row's
+    /// name is written.
     @Test @MainActor
-    func theListIsGroupedForAsLongAsBothProductsAreConnected() {
+    func theListIsBlockedAtEveryProductCount() {
         let store = MonitorStore(services: [])
         func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
             MonitoredSession(
@@ -4142,18 +4145,24 @@ struct NotchlineTests {
             )
         }
 
+        // One product, one block, one heading -- where this drew a flat list
+        // and no heading at all.
         store.applyForTesting(
             makeAgentSnapshot(.codex, availability: .ready, sessions: [session(.codex, "a")])
         )
-        #expect(!store.groupsSessionsByProduct)
+        #expect(store.sessionGroups.map(\.agent) == [.codex])
+        #expect(store.sessionGroupHeaderCount == 1)
+        #expect(store.listLeadsWithABlockHeading)
 
-        // Connected but with nothing running: still two products to tell apart,
-        // and the Codex rows on screen keep their heading rather than losing it
-        // until Claude Code's next turn happens to start.
+        // A second product connects with nothing running: it has no rows, so
+        // it gets no heading (§4.3 rule 04), and the Codex block is untouched.
+        // **Nothing on the panel moves at this moment**, which is the whole of
+        // what the presence gate was buying and is now free.
         store.applyForTesting(
             makeAgentSnapshot(.claudeCode, availability: .ready, sessions: [])
         )
-        #expect(store.groupsSessionsByProduct)
+        #expect(store.sessionGroups.map(\.agent) == [.codex])
+        #expect(store.sessionGroupHeaderCount == 1)
 
         store.applyForTesting(
             makeAgentSnapshot(
@@ -4162,14 +4171,16 @@ struct NotchlineTests {
                 sessions: [session(.claudeCode, "b")]
             )
         )
-        #expect(store.groupsSessionsByProduct)
+        #expect(store.sessionGroups.map(\.agent) == [.codex, .claudeCode])
+        #expect(store.sessionGroupHeaderCount == 2)
 
-        // Closed, so there is one product again and no second name to explain.
+        // Closed, and its row goes with it: back to one block, which is the
+        // same shape the panel opened on.
         store.applyForTesting(
             makeAgentSnapshot(.claudeCode, availability: .ready, presence: .closed)
         )
-        #expect(!store.groupsSessionsByProduct)
-
+        #expect(store.sessionGroups.map(\.agent) == [.codex])
+        #expect(store.sessionGroupHeaderCount == 1)
     }
 
     /// A closed product's rows keep their block while they are listed.
@@ -4201,7 +4212,8 @@ struct NotchlineTests {
         )
 
         #expect(store.connectedAgents == [.codex])
-        #expect(store.groupsSessionsByProduct)
+        #expect(store.sessionGroups.map(\.agent) == [.codex, .claudeCode])
+        #expect(store.sessionGroupHeaderCount == 2)
     }
 
     /// The live list is one block per product, in the fixed order, and no
@@ -4263,23 +4275,33 @@ struct NotchlineTests {
         #expect(store.sessionGroups.map(\.wantsAttention) == [true, false])
 
         // Claude Code drains but stays open: one block, one heading, and the
-        // structure does not flicker back to a flat list -- the gate is
-        // presence, like the chip's.
+        // structure does not flicker back to a flat list. **It cannot** --
+        // there is no flat list to flicker back to, which is what removing
+        // the gate bought (2026-09-09); it used to be presence that answered
+        // this, and presence could still be asked the wrong question.
         store.applyForTesting(
             makeAgentSnapshot(.claudeCode, availability: .ready, sessions: [])
         )
-        #expect(store.groupsSessionsByProduct)
         #expect(store.sessionGroups.map(\.agent) == [.codex])
         #expect(store.sessionGroupHeaderCount == 1)
 
-        // And with one product connected there is nothing to tell apart: no
-        // block, no heading, and the flat list the panel has always drawn.
+        // And Claude Code closes, leaving one product connected: the same one
+        // block and the same one heading. One product is the general form with
+        // one block in it, not a form of its own.
         store.applyForTesting(
             makeAgentSnapshot(.claudeCode, availability: .ready, presence: .closed)
         )
-        #expect(!store.groupsSessionsByProduct)
+        #expect(store.sessionGroups.map(\.agent) == [.codex])
+        #expect(store.sessionGroupHeaderCount == 1)
+
+        // With nothing live at all there is no block to head -- the one case
+        // where the panel draws its own top rule rather than a heading's.
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [])
+        )
         #expect(store.sessionGroups.isEmpty)
         #expect(store.sessionGroupHeaderCount == 0)
+        #expect(!store.listLeadsWithABlockHeading)
     }
 
     /// A heading is chrome, and is never paid for out of rows.
@@ -4305,15 +4327,23 @@ struct NotchlineTests {
             )
         }
 
-        // One product: today's panel, figure for figure.
+        // One product, which is one block: the three rows plus the short
+        // heading over them. **This used to be the ungrouped panel, three rows
+        // and nothing above them** — the arithmetic below is the same rule
+        // applied to a count of one rather than a second rule (2026-09-09).
         store.applyForTesting(
             makeAgentSnapshot(
                 .codex, availability: .ready,
                 sessions: [session(.codex, "a"), session(.codex, "b"), session(.codex, "c")]
             )
         )
-        #expect(store.sessionViewportHeight == PanelMetrics.sessionViewportCap)
-        #expect(store.sessionListContentHeight == PanelMetrics.sessionRowHeight * 3)
+        let leading = PanelMetrics.groupHeadingsHeight(count: 1)
+        #expect(leading == PanelMetrics.leadingProductGroupHeaderHeight)
+        #expect(store.sessionGroupHeaderCount == 1)
+        #expect(store.sessionViewportHeight == PanelMetrics.sessionViewportCap + leading)
+        #expect(
+            store.sessionListContentHeight == PanelMetrics.sessionRowHeight * 3 + leading
+        )
 
         // Two, and the viewport grows by exactly the two headings -- so three
         // rows are still drawn whole rather than two and a fraction.
@@ -4349,24 +4379,25 @@ struct NotchlineTests {
         #expect(store.sessionViewportHeight == PanelMetrics.thinExpandedBodyHeight)
     }
 
-    /// A row is named exactly once: by its own chip, or by the heading above
-    /// it, and never by both or by neither.
+    /// A live row is named by the heading above it, at every product count.
     ///
-    /// One gate answers it for this reason — a boundary after a boundary is a
-    /// mark doing nothing (`panel-v2.md` §3.4), and two gates, however
-    /// carefully written, eventually disagree about the row in the middle.
+    /// **Two questions became none.** A boundary after a boundary is a mark
+    /// doing nothing (`panel-v2.md` §3.4), so the chip and the heading were
+    /// tied to one gate to keep them from ever disagreeing about the row in the
+    /// middle. Both halves of that gate are gone: a row names its product
+    /// whatever is connected, and the list is blocked whatever is connected, so
+    /// **every live row is under a heading and none of them carries a chip** —
+    /// which cannot come apart, because neither side is deciding anything any
+    /// more.
     ///
-    /// **Neither is the case that changed** (2026-09-09). One connected product
-    /// used to draw no chip and no heading, on the reasoning that a name with
-    /// nothing to tell it apart from is caption width spent for nothing; the
-    /// row is named there now, so the one question left is *which of the two
-    /// says it*.
+    /// What is asked here is that no product count is an exception, `1`
+    /// included: a heading over every block, a block over every row.
     ///
     /// **The line does not move either way.** The caption is
     /// ``PanelMetrics/sessionRowCaptionHeight`` whether or not a chip is in it,
-    /// so nothing on a row shifts at the instant a second product connects.
+    /// so a row is the same height under a heading as it was without one.
     @Test @MainActor
-    func aRowIsNamedByItsChipOrByItsHeadingAndNeverByBoth() {
+    func everyLiveRowIsUnderAHeadingAtEveryProductCount() {
         let store = MonitorStore(services: [])
         func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
             MonitoredSession(
@@ -4375,8 +4406,11 @@ struct NotchlineTests {
                 preview: nil, status: .running, startedAt: nil
             )
         }
-        func drawsAChip(_ store: MonitorStore) -> Bool {
-            !store.groupsSessionsByProduct
+        /// Every live row, and the heading it is drawn under.
+        func headedRows(_ store: MonitorStore) -> [(AgentKind, String)] {
+            store.sessionGroups.flatMap { group in
+                group.sessions.map { (group.agent, $0.threadID) }
+            }
         }
 
         store.applyForTesting(
@@ -4384,20 +4418,20 @@ struct NotchlineTests {
                 .codex, availability: .ready, sessions: [session(.codex, "a")]
             )
         )
-        // One product: the row's own chip names it, and there is no heading
-        // to say it a second time.
-        #expect(drawsAChip(store))
-        #expect(store.sessionGroups.isEmpty)
+        // One product: one heading, and the row is under it. This drew a flat
+        // list with a chip on the row until 2026-09-09.
+        #expect(headedRows(store).map(\.1) == ["a"])
+        #expect(store.sessionGroupHeaderCount == 1)
 
         store.applyForTesting(
             makeAgentSnapshot(
                 .claudeCode, availability: .ready, sessions: [session(.claudeCode, "b")]
             )
         )
-        // Two: the heading names them, so the chip goes -- and it is one
-        // question answered once, not two questions that happen to agree.
-        #expect(!drawsAChip(store))
-        #expect(!store.sessionGroups.isEmpty)
+        // Two: the same arrangement with a second block in it, and no row on
+        // the panel has changed what it draws.
+        #expect(headedRows(store).map(\.0) == [.codex, .claudeCode])
+        #expect(headedRows(store).count == store.sessions.count)
 
         // Below the seam nothing is grouped, so the chip stays exactly where
         // it was: the queue's whole reading is an age, and the ages are one
@@ -4717,9 +4751,9 @@ struct NotchlineTests {
     /// it does not crash construction, since nothing on the store can read it
     /// back any more to disagree.
     ///
-    /// What is asked of the store instead is the one presence question left,
-    /// which is where the list is blocked rather than whether a row is named
-    /// — a row is named always (2026-09-09).
+    /// What is asked of the store instead is that a row is named and blocked
+    /// the way every install's is: neither answers to a stored key, and
+    /// neither answers to a product count either (2026-09-09).
     @Test @MainActor
     func aStoredAttributionStyleIsIgnoredRatherThanMigrated() {
         let defaults = UserDefaults(suiteName: "rail-\(UUID().uuidString)")!
@@ -4727,12 +4761,30 @@ struct NotchlineTests {
         defaults.set("steel", forKey: "aggregateInk")
 
         let store = MonitorStore(services: [], preferences: defaults)
-        // Nothing on the store answers to either retired key any more, so the
-        // list is blocked on presence alone.
-        #expect(!store.groupsSessionsByProduct)
-        store.applyForTesting(makeAgentSnapshot(.codex, availability: .ready))
-        store.applyForTesting(makeAgentSnapshot(.claudeCode, availability: .ready))
-        #expect(store.groupsSessionsByProduct)
+        // Nothing on the store answers to either retired key any more. A store
+        // built without snapshots carries the preview seed, which is Codex's
+        // alone -- one block, headed, where a stored `Colour bar` once decided
+        // what a row drew and one product once decided whether it was blocked
+        // at all.
+        #expect(store.sessionGroups.map(\.agent) == [.codex])
+        #expect(store.sessionGroupHeaderCount == 1)
+        func session(_ agent: AgentKind) -> MonitoredSession {
+            MonitoredSession(
+                agent: agent,
+                threadID: "t-\(agent)", turnID: "u", projectName: "p", title: "t",
+                preview: nil, status: .running, startedAt: nil
+            )
+        }
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, availability: .ready, sessions: [session(.codex)])
+        )
+        #expect(store.sessionGroups.map(\.agent) == [.codex])
+        store.applyForTesting(
+            makeAgentSnapshot(
+                .claudeCode, availability: .ready, sessions: [session(.claudeCode)]
+            )
+        )
+        #expect(store.sessionGroups.map(\.agent) == [.codex, .claudeCode])
     }
 
     /// Every surface says the whole name, the notch included.
@@ -10862,8 +10914,14 @@ struct NotchlineTests {
             // (`expanded-panel-v2.md` §2.1). A test that asked the metric for
             // the number would agree with any answer it gave.
             let visibleSessionCount = min(sessionCount, 3)
+            // Plus the one block's heading, which every live list has carried
+            // since 2026-09-09 — one product is the general list with one
+            // block in it. `groupHeadingsHeight` is asked for the same reason
+            // the `3` above is written out: the count is the claim, and the
+            // shape of a heading is not what this test is about.
             let expectedContentHeight = CGFloat(visibleSessionCount)
                 * PanelMetrics.sessionRowHeight
+                + PanelMetrics.groupHeadingsHeight(count: 1)
                 + store.expandedFooterHeight
             #expect(store.expandedContentHeight == expectedContentHeight)
             #expect(

@@ -3089,60 +3089,52 @@ final class MonitorStore: ObservableObject {
         return max(now, start)
     }
 
-    /// Whether the live list is drawn as one block per product.
+    /// The live list as blocks: one per product that has a row, always.
     ///
-    /// **This is the presence rule, and it is now the only thing on the panel
-    /// asking it.** It used to be `showsProductAttribution` — one question
-    /// answering both "does a row name its product" and "is the list grouped"
-    /// — on the reasoning that the two are exactly complementary and a row
-    /// could then never end up with neither. The first half of that is gone: a
-    /// row names its product always, whatever is connected, so the pair is
-    /// complementary in the only direction that ever mattered — a grouped row
-    /// gives its chip up to the heading above it, and an ungrouped one draws
-    /// its own. Neither is still impossible, and one gate is still what makes
-    /// it so.
+    /// **There is no gate on this, and that is the decision** (2026-09-09).
+    /// The list used to be grouped only while more than one product was
+    /// connected — `groupsSessionsByProduct`, keyed to presence — so a machine
+    /// running one product drew a flat list its rows named themselves on, and
+    /// the whole structure arrived at the moment a second product connected.
+    /// That made one product a form of its own rather than the general form
+    /// with one block in it, and the two forms disagreed about where the
+    /// product's name is written, whether the panel draws its own top rule, and
+    /// how tall the list is.
     ///
-    /// What survives whole is *why* this is keyed to what is **connected**
-    /// rather than to who has a row this second. Written as
-    /// `Set(sessions.map(\.agent)).count > 1` the structure came and went while
-    /// both products stayed open: Claude Code finishing its last row collapsed
-    /// every Codex row back into a flat list, and the heading returned on the
-    /// next Claude Code turn. That is motion the user cannot account for, and
-    /// it contradicts the surface's own presence rule — the collapsed matrices
-    /// and the footer rules are already drawn per connected product
-    /// (``footerRules``), so the list was the one place answering a different
-    /// question.
+    /// **One product is the degenerate case, not a special case.** One block,
+    /// one heading, and every other rule below it unchanged: rows keep
+    /// ``MonitorAggregation/rowOrder`` inside their block, the heading names
+    /// the product for every row under it, and nothing on the panel has to ask
+    /// how many products there are to know what it is drawing.
     ///
-    /// The second clause covers the reverse case: a product that closed while
-    /// its rows are still listed. The list is visibly mixed, so it still has to
-    /// be told apart, whatever presence now says.
-    ///
-    /// **The second clause reaches below the seam**, and for the reason it was
-    /// written: a queue holding both products under one connected product is
-    /// exactly the visibly mixed list the paragraph above describes.
+    /// **What the presence rule was protecting is protected by construction
+    /// now.** Written as a gate on `Set(sessions.map(\.agent)).count > 1` the
+    /// structure came and went while both products stayed open: Claude Code
+    /// finishing its last row collapsed every Codex row back into a flat list,
+    /// and the heading returned on the next Claude Code turn — motion the user
+    /// cannot account for. Keying the gate to presence answered that, and
+    /// removing the gate answers it completely: a list that is always grouped
+    /// cannot stop being grouped. What still follows the rows is only *how
+    /// many* blocks there are, which is `expanded-panel-v2.md` §4.3 rule 04 —
+    /// a product with no rows draws no heading, because nothing is drawn while
+    /// it has nothing to say.
     ///
     /// **The Recent queue is not grouped and keeps its chip** — see
     /// ``MonitorAggregation/SessionGroup``. Below the seam the reading is an
     /// age and the ages are one descent; that column is the queue's whole
     /// value and a header would restart it at every block.
-    var groupsSessionsByProduct: Bool {
-        connectedAgents.count > 1 || attributedAgents.count > 1
-    }
-
-    /// The live list as blocks, or nothing at all while it is not grouped.
     var sessionGroups: [MonitorAggregation.SessionGroup] {
-        guard groupsSessionsByProduct else { return [] }
-        return MonitorAggregation.groups(of: sessions)
+        MonitorAggregation.groups(of: sessions)
     }
 
     /// How many headers the live list draws, without building the blocks.
     ///
     /// Read by three height accessors on every pass the panel is sized on, so
     /// it counts the products rather than allocating a row array per product
-    /// and asking how many survived.
+    /// and asking how many survived. Zero with nothing live, which is what
+    /// keeps a heading from ever standing over the apology.
     var sessionGroupHeaderCount: Int {
-        guard groupsSessionsByProduct else { return 0 }
-        return Set(sessions.map(\.agent)).count
+        Set(sessions.map(\.agent)).count
     }
 
     /// Whether the first thing under the band is a block's heading rather than
@@ -3158,16 +3150,13 @@ final class MonitorStore: ObservableObject {
     ///
     /// So the heading takes the job over, and takes the position with it —
     /// ``PanelMetrics/leadingProductGroupHeaderHeight`` is the other half of
-    /// this answer. With nothing live the apology is what stands there, and
+    /// this answer. ~~With nothing live the apology is what stands there, and
     /// with one product connected the list is flat: neither draws a rule of its
-    /// own, so the panel keeps drawing its own.
+    /// own, so the panel keeps drawing its own.~~ **There is one case left**
+    /// (2026-09-09): nothing live, where the apology stands under the band and
+    /// draws no rule of its own, so the panel keeps drawing its own. A list
+    /// with rows on it always leads with a heading, whatever is connected.
     var listLeadsWithABlockHeading: Bool { sessionGroupHeaderCount > 0 }
-
-    /// Every product named anywhere on the list, above the rule and below it.
-    private var attributedAgents: Set<AgentKind> {
-        Set(sessions.map(\.agent))
-            .union(recentDepartures.map(\.session.agent))
-    }
 
     /// One group per connected product, in Settings' order, each holding its
     /// own windows in the order the product published them.

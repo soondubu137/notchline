@@ -759,7 +759,7 @@ struct ReadmeAnatomyCard: View {
             // One live row, line by line.
             AnatomyCallout(
                 id: 0,
-                text: a.store.groupsSessionsByProduct ? "Project" : "Product and project",
+                text: "Project",
                 side: .leading,
                 target: CGPoint(x: a.rowTextLeft, y: a.rowCaptionY(0)),
                 stem: 26,
@@ -853,9 +853,10 @@ struct ReadmeAnatomyCard: View {
                 stem: 34
             )
         ]
-        // The heading callout is only on the figure while the list is grouped,
-        // so the key is numbered after the fact rather than by hand.
-        .filter { $0.text != "One block per product" || a.store.groupsSessionsByProduct }
+        // The key is numbered after the fact rather than by hand, which is
+        // what let the heading's callout come and go while the list could be
+        // ungrouped. It cannot any more — one block per product is drawn at
+        // every count — and the numbering stays derived.
         .enumerated()
         .map { index, callout in
             var renumbered = callout

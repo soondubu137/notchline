@@ -175,9 +175,12 @@ were the same `1` pt of white at `15%` between the same two `x` values, `24`
 apart, with nothing said between them: one boundary drawn twice
 ([`panel-v2.md`](panel-v2.md) §3.4). The heading's is the one that carries a
 name, so it takes the job over and — the slack being gone — very nearly the
-position: `8` lower, which is the chip's own half. With nothing live, or with
+position: `8` lower, which is the chip's own half. ~~With nothing live, or with
 one product connected and a flat list, no heading is drawn and the panel draws
-its own rule exactly as it always has.
+its own rule exactly as it always has.~~ **One case, not two** (2026-09-09):
+with nothing live there is no block to head, and the apology stands under the
+panel's own rule exactly as it always has. A list with rows on it leads with a
+heading at every product count.
 
 - The badge is [`colour-v2.md`](colour-v2.md) §5's chip unchanged — `16` tall,
   corner `5`, `6` of padding, `10` pt Medium, `#DEE8E0` on `#1B1F1C` — on the
@@ -236,7 +239,7 @@ its own rule exactly as it always has.
 
 | | Rule | |
 | --- | --- | --- |
-| 01 | **Headings are drawn on `MonitorStore.groupsSessionsByProduct` and nowhere else** — ~~`showsProductAttribution`, the same gate the chip already answers to~~ (renamed 2026-09-09 when the chip stopped answering to anything: a row names its product always, and this decides only whether the name is said by the heading or by the row). The two are still exactly complementary and a row can still never end up with neither. Keyed to presence, so the structure does not appear and vanish as one product's rows drain while both stay open. With one product connected the list is the flat one it has always been, **and its rows carry their own chips** | §8.6 |
+| 01 | ~~**Headings are drawn on `showsProductAttribution` and nowhere else** — the same gate the chip already answers to, so the two are exactly complementary and a row can never end up with neither. Keyed to presence… With one product connected the list is the flat one it has always been~~ **Headings are drawn on nothing** (2026-09-09). Both gates went, a day apart and for one reason: a row names its product always, and the list is one block per product always, so **every live row is under a heading and none of them carries a chip**. That cannot come apart, because neither side is deciding anything. What the presence rule was buying — a structure that does not appear and vanish as one product's rows drain while both stay open — is bought completely by a structure that is always there. **One product is the degenerate case**: one block, one heading, every other rule below unchanged. The only thing still following the rows is *how many* blocks there are, which is rule 04 | §8.6 |
 | 02 | **The block order is fixed** — `AgentKind`'s own, Codex then Claude Code, never re-ordered by state. The precedent is `MonitorStore.footerRules`; the argument is [`dual-agent-design.md`](dual-agent-design.md) §3.1's about the collapsed marks, on a much larger object | |
 | 03 | **Inside a block nothing changes.** `MonitorAggregation.rowOrder` as it stands ([`PRD.md`](PRD.md) §6.2). A status change re-sorts a row inside its own block and never across a heading, which is a shorter journey than the one it makes today | |
 | 04 | **A product with no rows draws no heading.** Nothing is drawn while it has nothing to say; the band already counts what is running. The cap falls by that heading's own height at the same moment the row that emptied the block left, so the two changes are one change | |
@@ -256,13 +259,20 @@ live viewport  =  min(content,  max(216, open row) + 16 + 32 × (headings − 1)
 
 | The state | Live | Panel | At `80` rows and `32` headings |
 | --- | --- | --- | --- |
-| One product connected | 216 | **300** | 324 |
+| ~~One product connected~~ **One product holding rows** | ~~216~~ **232** | ~~**300**~~ **316** | ~~324~~ **356** |
 | Both connected, one holding rows | 232 | **316** | 356 |
 | Both connected, both holding rows | 264 | **348** | 388 |
 | …with a queue folded under it | 264 | **380** | 420 |
 
-**One number: `48`, once, at two products** — `16` while only one of them is
-holding rows, and nothing at all at one connected product. ~~`64`, `32`~~: the
+**Amended 2026-09-09, and the table is now two rows saying one thing**: a list
+is billed for the blocks that hold rows, and one connected product is billed
+for its one block like anything else. The row that moved is the first — a
+one-product panel is `316` where it was `300`, which is exactly the `316` two
+products holding one block's worth of rows already drew.
+
+~~**One number: `48`, once, at two products** — `16` while only one of them is
+holding rows, and nothing at all at one connected product.~~ **`16` per block,
+always**, so `16` at one and `48` at two. ~~`64`, `32`~~: the
 first heading gives its slack back, so the structure costs a third less than it
 did when it was built (amended 2026-09-08). It is paid against
 [`panel-v2.md`](panel-v2.md) §4's own direction of travel, which took this panel
@@ -462,7 +472,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 
 - [ ] A live row is ~~`80`~~ `72`, the seam `32`, a retired row ~~`40`~~ `36`, at every menu bar height.
 - [ ] The viewport is its content capped at ~~`240`~~ `216`, and is `72 × min(rows, 3)` when nothing has retired.
-- [ ] The first block's heading is `16` and every one after it `32`; the panel draws its own top hairline with nothing live and with a flat list, and draws none while a heading leads the list.
+- [ ] The first block's heading is `16` and every one after it `32`; the panel draws its own top hairline with nothing live — the one case left since 2026-09-09 — and draws none while a heading leads the list, which is every list with a row on it.
 - [ ] The panel is `178` with nothing live and nothing retired, `210` with nothing live and the queue folded, and `148` with the quota folded too — and `No active sessions` is drawn in all three.
 - [ ] Three live rows draw no seam and cost the queue nothing; the third retiring puts the seam back inside the viewport.
 - [ ] A retiring row halves in place and the seam rises over it; nothing travels the length of the panel.

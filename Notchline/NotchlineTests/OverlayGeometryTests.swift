@@ -538,71 +538,83 @@ struct OverlayGeometryTests {
         )
     }
 
-    /// **A row names its product with only one product connected** (2026-09-09).
+    /// **One product is drawn as one block, not as a list of its own**
+    /// (2026-09-09).
     ///
-    /// The chip used to be gated on there being a second product to tell this
-    /// row apart from, on the reading that a name with nothing to compare it
-    /// against is caption width spent for nothing. It is drawn always now, and
-    /// the one state that still drops it is a grouped list — where the heading
-    /// above the row has already said it.
+    /// The list used to be grouped only while more than one product was
+    /// connected: a machine running one product drew a flat list whose rows
+    /// named themselves, and connecting a second rebuilt the whole structure —
+    /// the heading arrived, the row's chip left, the panel gave up its own top
+    /// rule and the viewport grew. One product is the general form with one
+    /// block in it now, and none of that happens at the moment a second
+    /// product connects.
     ///
-    /// **Read off the drawing rather than off the gate**, because the gate can
-    /// be true while the chip is not reached: the caption's two forms are told
-    /// apart by ink alone, the chip's text being ``NotchPalette/themeInk``'s
-    /// lit value and the Project beside it the caption grey, so the brightest
-    /// pixel on that line says which of the two was drawn. Both stores draw the
-    /// same `72` pt row from the same session — only what is connected differs.
+    /// **Read off the drawing rather than off the store**, because the store
+    /// can group a list the view never heads: the heading's chip and a row's
+    /// caption are told apart by ink, the chip's text being
+    /// ``NotchPalette/themeInk``'s lit value and the Project the caption grey.
+    /// So the top band is scanned for the chip and the row's own caption line
+    /// for the absence of one, on a list hosted at the height the panel would
+    /// give it.
     @Test @MainActor
-    func aRowNamesItsProductWithOnlyOneProductConnected() throws {
-        func session(_ agent: AgentKind, _ id: String) -> MonitoredSession {
-            MonitoredSession(
-                agent: agent,
-                threadID: id, turnID: "u-\(id)", projectName: "notchline",
-                title: "A title", preview: "A preview", status: .running,
-                startedAt: nil
-            )
-        }
-        func snapshot(_ agent: AgentKind, _ sessions: [MonitoredSession]) -> AgentSnapshot {
+    func aOneProductListIsDrawnAsOneBlock() throws {
+        let store = MonitorStore(services: [], preferences: nil)
+        store.isExpanded = true
+        store.applyForTesting(
             AgentSnapshot(
-                agent: agent, availability: .ready, sessions: sessions,
+                agent: .codex,
+                availability: .ready,
+                sessions: [
+                    MonitoredSession(
+                        agent: .codex,
+                        threadID: "a", turnID: "u", projectName: "notchline",
+                        title: "A title", preview: "A preview",
+                        status: .running, startedAt: nil
+                    )
+                ],
                 quota: .unavailable, diagnostic: nil, setupStatus: .active,
                 presence: .open
             )
-        }
-        /// The brightest ink on the caption line, inside the width a chip
-        /// would take and below the row's own `8.5` of air.
-        func captionPeak(_ store: MonitorStore) throws -> CGFloat {
-            let row = try #require(store.sessions.first)
-            let width = PanelMetrics.sessionViewportWidth(
-                panelWidth: store.currentPanelSize.width
-            )
-            let host = NSHostingView(
-                rootView: SessionRowContent(session: row, isHovered: false)
-                    .frame(width: width, height: PanelMetrics.sessionRowHeight)
-                    .environmentObject(store)
-                    .background(Color.black)
-            )
-            host.frame = NSRect(
-                x: 0, y: 0, width: width, height: PanelMetrics.sessionRowHeight
-            )
-            host.appearance = NSAppearance(named: .darkAqua)
-            host.layoutSubtreeIfNeeded()
+        )
+        // One connected product, one block, and a heading leading the list --
+        // which is also what takes the panel's own top rule away.
+        #expect(store.sessionGroups.map(\.agent) == [.codex])
+        #expect(store.sessionGroupHeaderCount == 1)
+        #expect(store.listLeadsWithABlockHeading)
 
-            let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
-            host.cacheDisplay(in: host.bounds, to: rep)
-            let across = CGFloat(rep.pixelsWide) / host.bounds.width
-            let down = CGFloat(rep.pixelsHigh) / host.bounds.height
+        let width = PanelMetrics.sessionViewportWidth(
+            panelWidth: store.currentPanelSize.width
+        )
+        let height = store.sessionViewportHeight
+        // The list is the leading heading and the row, and nothing else: the
+        // viewport it asks for is exactly those two, which is the first thing
+        // the drawing has to agree with.
+        #expect(
+            height
+                == PanelMetrics.leadingProductGroupHeaderHeight
+                    + PanelMetrics.sessionRowHeight
+        )
 
-            // A box rather than a line: a `10` pt glyph crossed by one row of
-            // pixels samples whatever antialiasing that row carries, which
-            // would make this a weak test of a strong claim.
-            //
-            // The band is the row's own arithmetic, and it holds only because
-            // the session carries a preview: a row of three lines fills its
-            // `72` and its caption stands on the row's top padding, where a
-            // two-line row centres its block and puts the caption `10` lower.
-            let top = PanelMetrics.sessionRowVerticalPadding + 1.5
-            let bottom = top + PanelMetrics.sessionRowCaptionHeight - 3
+        let host = NSHostingView(
+            rootView: ActiveSessionList()
+                .environmentObject(store)
+                .environment(\.overlayBodyWidth, store.currentPanelSize.width)
+                .frame(width: width, height: height)
+                .background(Color.black)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.layoutSubtreeIfNeeded()
+
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let across = CGFloat(rep.pixelsWide) / host.bounds.width
+        let down = CGFloat(rep.pixelsHigh) / host.bounds.height
+
+        /// The brightest ink in a box, taken across the width a chip stands
+        /// in. A box rather than a line: a `10` pt glyph crossed by one row of
+        /// pixels samples whatever antialiasing that row happens to carry.
+        func peak(from top: CGFloat, to bottom: CGFloat) -> CGFloat {
             var found: CGFloat = 0
             for x in stride(from: PanelMetrics.sessionRowPadding + 1, to: 60.0, by: 1) {
                 for y in stride(from: top, to: bottom, by: 1) {
@@ -617,28 +629,24 @@ struct OverlayGeometryTests {
             return found
         }
 
-        let alone = MonitorStore(services: [], preferences: nil)
-        alone.isExpanded = true
-        alone.applyForTesting(snapshot(.codex, [session(.codex, "a")]))
-        #expect(!alone.groupsSessionsByProduct)
-        let named = try captionPeak(alone)
-        #expect(named > 0.8, "the row drew no chip — brightest value was \(named)")
+        // The leading heading is the chip alone, its slack taken off.
+        let heading = peak(from: 1.5, to: PanelMetrics.leadingProductGroupHeaderHeight - 1.5)
+        #expect(heading > 0.8, "the list drew no heading — brightest value was \(heading)")
 
-        // And the one state that takes it off again: a second product, so the
-        // list is blocked and the heading above this row carries the name.
-        // What is left on the line is the Project, in the caption's own grey.
-        let grouped = MonitorStore(services: [], preferences: nil)
-        grouped.isExpanded = true
-        grouped.applyForTesting(snapshot(.codex, [session(.codex, "a")]))
-        grouped.applyForTesting(snapshot(.claudeCode, [session(.claudeCode, "b")]))
-        #expect(grouped.groupsSessionsByProduct)
-        let plain = try captionPeak(grouped)
+        // And the row under it draws the Project alone. The band is the row's
+        // own arithmetic, offset by the heading: three lines fill the row's
+        // `72` and the caption stands on its top padding, where a two-line row
+        // would centre its block and put the caption `10` lower.
+        let captionTop = PanelMetrics.leadingProductGroupHeaderHeight
+            + PanelMetrics.sessionRowVerticalPadding
+            + 1.5
+        let row = peak(from: captionTop, to: captionTop + PanelMetrics.sessionRowCaptionHeight - 3)
         let caption = try #require(
             NotchPalette.labelDrawingColor.usingColorSpace(.deviceRGB)
         )
         #expect(
-            plain < caption.brightnessComponent * 1.25,
-            "a grouped row drew more than its Project — brightest value was \(plain)"
+            row < caption.brightnessComponent * 1.25,
+            "the row drew more than its Project — brightest value was \(row)"
         )
     }
 

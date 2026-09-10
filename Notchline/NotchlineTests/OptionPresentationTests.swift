@@ -109,9 +109,14 @@ struct OptionPresentationTests {
         #expect(row > PanelMetrics.sessionViewportCap)
 
         // The one open row is the whole of the list, and the list is given all
-        // of it: nothing is left below the fold for a rail to offer.
-        #expect(store.sessionListContentHeight == row)
-        #expect(store.sessionViewportHeight == row)
+        // of it: nothing is left below the fold for a rail to offer. **Plus
+        // its block's heading** — the list is one block per product at every
+        // count since 2026-09-09, and a heading is chrome that is never paid
+        // for out of the row (`expanded-panel-v2.md` §4.3 rule 07), so it is
+        // added to both sides rather than taken out of the row's own room.
+        let headed = row + PanelMetrics.groupHeadingsHeight(count: 1)
+        #expect(store.sessionListContentHeight == headed)
+        #expect(store.sessionViewportHeight == headed)
         #expect(!(store.sessionListContentHeight > store.sessionViewportHeight))
 
         // And the panel is that room and its footer, with nothing unpainted.
@@ -124,7 +129,7 @@ struct OptionPresentationTests {
         // right when this broke, and only the drawn list disagreed with it.
         let host = NSHostingView(rootView: ActiveSessionList().environmentObject(store))
         host.layoutSubtreeIfNeeded()
-        #expect(abs(host.fittingSize.height - row) < 0.5)
+        #expect(abs(host.fittingSize.height - headed) < 0.5)
     }
 
     /// The open row's body is laid out once per change, never once per read.
