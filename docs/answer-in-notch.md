@@ -534,11 +534,12 @@ Every open row is `100` plus its body.
 At the `46` pt menu bar reference with both products connected and the footer at rest — `22`, [`quota-footer-v2.md`](quota-footer-v2.md) §2:
 
 > **The panel column below is the arithmetic of 2026-09-07 and is kept as the
-> record.** Three things have moved under it: the footer at rest is `38` rather
-> than `22`, the Recent seam is its own section rather than a line inside the
-> live viewport, and a row's air came down (§4.1, 2026-09-08). The viewport
-> figures still say the thing the table is for — which row heights push past
-> the cap, and which do not.
+> record.** Three things have moved under it: the footer at rest is `35` rather
+> than `22` (`38` until its bottom inset came down to the panel's own side
+> padding on 2026-09-09), the Recent seam is its own section rather than a line
+> inside the live viewport, and a row's air came down (§4.1, 2026-09-08). The
+> viewport figures still say the thing the table is for — which row heights push
+> past the cap, and which do not.
 
 | The list | Panel | Note |
 | --- | --- | --- |

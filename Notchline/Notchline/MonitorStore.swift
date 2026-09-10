@@ -655,7 +655,17 @@ enum PanelMetrics {
     static let footerCaptionHeight: CGFloat = 14
 
     /// The inset below the resting footer's 32 pt spend line.
-    static let footerBottomMargin: CGFloat = 6
+    ///
+    /// **`3`, chosen so the clearance it produces is the panel's own side
+    /// margin.** The number that is read off the screen is not this one: the
+    /// spend line centres its caption inside a `32` pt bar, so what stands
+    /// between the last line of text and the panel's bottom edge is this inset
+    /// plus the bar's own `9` pt of inner air. At `6` that clearance was `15`,
+    /// half again the ``expandedHorizontalPadding`` every column on this panel
+    /// is set from, and the footer read as a table with a blank line under it.
+    /// At `3` it is `12` — the same margin left, right and below, which is what
+    /// makes the bottom edge look like an edge rather than a gap.
+    static let footerBottomMargin: CGFloat = 3
     /// Match the resting caption's bottom clearance when the table is open.
     /// The resting caption is centred inside the spend line; table captions
     /// occupy only their own line height, so they need that inner inset too.
@@ -775,8 +785,9 @@ enum PanelMetrics {
 
     /// The footer at rest: today's spend, the control, and nothing else.
     ///
-    /// **`38`, at every connected form** — every product count, every window
-    /// count, and every share. It is the only closed height the footer has:
+    /// **`35`, at every connected form** — every product count, every window
+    /// count, and every share. ~~`38`~~ was the same line over a `6` pt inset;
+    /// see ``footerBottomMargin`` for why the inset is `3`. It is the only closed height the footer has:
     /// no window speaks, because there is no threshold for one to cross
     /// (`quota-footer-v2.md` §4), so nothing the machine observes changes this
     /// figure at all.
@@ -792,11 +803,14 @@ enum PanelMetrics {
 
     /// Footer height: the resting line, or the table somebody opened.
     ///
-    /// **`38`, or `19W + 28P + 42`**. The opened form composes as the spend
+    /// **`35`, or `19W + 28P + 39`**. The opened form composes as the spend
     /// line and its gap (`32 + 9`), then one group per product — a caption
     /// line at `14`, and `19` for each of its windows — with `14` of air
-    /// between groups and `15` below the last line. Multiplied out that is
-    /// `56 + Σ(14 + 19w) + 14(P − 1)`, which is `19W + 28P + 42`.
+    /// between groups and `12` below the last line. Multiplied out that is
+    /// `53 + Σ(14 + 19w) + 14(P − 1)`, which is `19W + 28P + 39`.
+    ///
+    /// ~~`38`, or `19W + 28P + 42`~~ was the same composition with `15` below
+    /// the last line rather than `12` (``footerBottomMargin``).
     ///
     /// **`28P` is the arithmetic `quota-footer-v2.md` was written with**, before
     /// §2 added a point to every product line so a badge would fit on it. The

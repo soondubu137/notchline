@@ -2512,8 +2512,10 @@ struct NotchlineTests {
         #expect(spent.spokenTimer == "unavailable")
     }
 
-    /// **The footer is `38` for every connected form**, and there is no second
-    /// closed height.
+    /// **The footer is `35` for every connected form**, and there is no second
+    /// closed height. ~~`38`~~ was the same line over a `6` pt inset; the
+    /// inset is `3` now, so every clearance on this panel — left, right and
+    /// below — is ``PanelMetrics/expandedHorizontalPadding``.
     ///
     /// This replaces `aFoldedFooterIsTheSameHeightForEveryShape`, which pinned
     /// something weaker: that *folding* made the four footers one height. The
@@ -2521,7 +2523,7 @@ struct NotchlineTests {
     /// the claim is unconditional — every product count, every window count,
     /// and, by `noShareReachesTheClosedFooter`, every share.
     @Test @MainActor
-    func theFooterIsThirtyEightForEveryConnectedForm() {
+    func theFooterIsThirtyFiveForEveryConnectedForm() {
         func panelHeight(_ shape: [FooterRule], expanded: Bool) -> CGFloat {
             PanelMetrics.referenceCompactHeight
                 + PanelMetrics.expandedContentHeight(
@@ -2533,8 +2535,8 @@ struct NotchlineTests {
         }
 
         for shape in Self.everyFooterShape {
-            #expect(PanelMetrics.footerHeight(rules: shape) == 38)
-            #expect(panelHeight(shape, expanded: false) == 300)
+            #expect(PanelMetrics.footerHeight(rules: shape) == 35)
+            #expect(panelHeight(shape, expanded: false) == 297)
         }
 
         // Nothing connected is no footer, so there is nothing for the control
@@ -2601,7 +2603,7 @@ struct NotchlineTests {
         )
     }
 
-    /// The opened table is `19W + 28P + 42`, composed as the view lays it out.
+    /// The opened table is `19W + 28P + 39`, composed as the view lays it out.
     ///
     /// Written longhand here rather than restating the closed form in
     /// `PanelMetrics`, so this is a claim about what is drawn: the spend line
@@ -2629,7 +2631,7 @@ struct NotchlineTests {
                 + CGFloat(products - 1) * PanelMetrics.footerCaptionHeight
             let opened = PanelMetrics.footerHeight(rules: shape, isExpanded: true)
 
-            #expect(opened == 19 * CGFloat(windows) + 28 * CGFloat(products) + 42)
+            #expect(opened == 19 * CGFloat(windows) + 28 * CGFloat(products) + 39)
             // And the last line stands the panel's own margin above the edge,
             // in the opened form and the closed one alike.
             let closedCaptionBottom = (PanelMetrics.recentSeamHeight
@@ -2637,17 +2639,20 @@ struct NotchlineTests {
             let closedClearance = PanelMetrics.footerHeight(rules: shape)
                 - closedCaptionBottom
             #expect(opened - drawn == closedClearance)
-            #expect(closedClearance == 15)
+            // And that margin is the panel's own side padding, so the footer
+            // sits in a box with one clearance rather than three.
+            #expect(closedClearance == 12)
+            #expect(closedClearance == PanelMetrics.expandedHorizontalPadding)
         }
 
         // The documented shapes retain the same caption clearance.
-        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.codex, 1)]), isExpanded: true) == 89)
-        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.claudeCode, 2)]), isExpanded: true) == 108)
+        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.codex, 1)]), isExpanded: true) == 86)
+        #expect(PanelMetrics.footerHeight(rules: Self.footerShape([(.claudeCode, 2)]), isExpanded: true) == 105)
         #expect(
             PanelMetrics.footerHeight(
                 rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
                 isExpanded: true
-            ) == 155
+            ) == 152
         )
         // And the shape this machine actually reports, now that Claude Code's
         // per-model week is drawn rather than dropped: one window and three.
@@ -2655,7 +2660,7 @@ struct NotchlineTests {
             PanelMetrics.footerHeight(
                 rules: Self.footerShape([(.codex, 1), (.claudeCode, 3)]),
                 isExpanded: true
-            ) == 174
+            ) == 171
         )
     }
 
@@ -3041,7 +3046,7 @@ struct NotchlineTests {
         #expect(store.showsQuotaFoldControl)
     }
 
-    /// **The panel is `300` on every connected form**, and only the user can
+    /// **The panel is `297` on every connected form**, and only the user can
     /// take it past that.
     ///
     /// This replaces `theDualProductPanelIsTallerByTheExtraFooterRules`, which
@@ -3056,25 +3061,27 @@ struct NotchlineTests {
     /// (``PanelMetrics/sessionRowVerticalPadding``) rather than a height
     /// chosen: what is pinned here is still the property — one panel height at
     /// every connected form — and it is now pinned at the figure that falls
-    /// out of a row's own padding.
+    /// out of a row's own padding. ~~`300`~~ until the footer's bottom inset
+    /// came down to `3`, which is the same kind of change: one figure
+    /// (``PanelMetrics/footerBottomMargin``), and the property is unmoved.
     ///
     /// Two states can exceed it and both are somebody opening the table. It is
     /// not reached by owning a second product, by a window running low, or by
     /// a reading failing.
     @Test @MainActor
-    func thePanelIsThreeHundredOnEveryConnectedForm() {
+    func thePanelIsTwoHundredAndNinetySevenOnEveryConnectedForm() {
         for shape in Self.everyFooterShape {
             let closed = PanelMetrics.expandedContentHeight(
                 liveRowCount: 3,
                 footerHeight: PanelMetrics.footerHeight(rules: shape)
             )
-            #expect(PanelMetrics.referenceCompactHeight + closed == 300)
+            #expect(PanelMetrics.referenceCompactHeight + closed == 297)
 
             let opened = PanelMetrics.expandedContentHeight(
                 liveRowCount: 3,
                 footerHeight: PanelMetrics.footerHeight(rules: shape, isExpanded: true)
             )
-            #expect(PanelMetrics.referenceCompactHeight + opened > 300)
+            #expect(PanelMetrics.referenceCompactHeight + opened > 297)
         }
 
         // Two products with three windows, including the shared caption clearance.
@@ -3086,7 +3093,7 @@ struct NotchlineTests {
                         rules: Self.footerShape([(.codex, 1), (.claudeCode, 2)]),
                         isExpanded: true
                     )
-                ) == 417
+                ) == 414
         )
     }
 

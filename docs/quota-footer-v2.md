@@ -92,7 +92,7 @@ and there is no threshold left to put it on the surface (§4).
 | A table line, and the gap after it | `14 + 5` | `footerCaptionHeight` + `footerCaptionSpacing` |
 | Between one product and the next | `14` | `footerCaptionHeight` — one line of air |
 | The window column's indent | `12` | `expandedHorizontalPadding`, a second step |
-| Below the last line | `6` | `footerBottomMargin` |
+| Below the last line | ~~`6`~~ `3` | `footerBottomMargin` — see the 2026-09-09 amendment |
 
 A product group is `14 + 19w`, so the table is `31 + Σ(14 + 19w) + 14(P − 1)` = **`19W + 28P + 17`**.
 
@@ -496,3 +496,43 @@ The collapsed footer remains **38 pt**; the opened footer is now
 **`19W + 28P + 42`**, 9 pt taller than before. One product with one or two
 windows is 89 or 108 pt; two products with three or four windows are 155 or
 174 pt. These values supersede the earlier opened-height figures above.
+
+### Quota footer bottom clearance, again (2026-09-09)
+
+**One clearance, and it is the panel's side padding.** The 2026-09-07 entry
+above made the two states agree at `15` pt of caption-to-edge clearance, which
+was the right property and the wrong figure: `15` is one and a quarter times
+the `12` that `expandedHorizontalPadding` sets every column on this panel from,
+so the footer read as a table with a blank line under it rather than a table
+that ends. The bottom edge is the one edge on the panel a reader can compare
+against two others at a glance — left and right are both `12` and they are on
+screen at the same time.
+
+`footerBottomMargin` goes **`6` → `3`**. The number nobody reads is the inset;
+the number everybody reads is the inset plus the `9` pt of inner air the `32` pt
+spend line puts under its centred caption, and that is now `12` in both states
+— `footerCaptionBottomMargin` composes from `footerBottomMargin` and follows on
+its own, which is why the collapsed and opened forms cannot drift apart.
+
+| | Was | Is |
+| --- | --- | --- |
+| `footerBottomMargin` | `6` | **`3`** |
+| Caption-to-edge clearance, both states | `15` | **`12`** |
+| Collapsed footer | `38` | **`35`** |
+| Opened footer | `19W + 28P + 42` | **`19W + 28P + 39`** |
+| One product, one window | `89` | **`86`** |
+| One product, two windows | `108` | **`105`** |
+| Two products, three windows | `155` | **`152`** |
+| Two products, four windows | `174` | **`171`** |
+| Panel, every connected form | `300` | **`297`** |
+
+The two tests that named a figure are renamed with it —
+`theFooterIsThirtyEightForEveryConnectedForm` and
+`thePanelIsThreeHundredOnEveryConnectedForm` become
+`...ThirtyFive...` and `thePanelIsTwoHundredAndNinetySevenOnEveryConnectedForm`.
+Neither changes what it claims: one closed footer height and one panel height at
+every connected form. `theOpenedTableIsNineteenAWindowAndTwentyEightAProduct`
+now asserts the clearance **equals** `expandedHorizontalPadding` rather than the
+literal `12`, so the two can no longer drift.
+
+These values supersede every height above, the 2026-09-07 entry included.
