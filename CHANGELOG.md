@@ -4,25 +4,33 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
-## Unreleased
+## 0.2.5 Alpha — 2026-09-10
+
+**Every product's name is on screen at every scroll offset, and grouping is now something you can turn off.** The live list keeps one badge line above it and one below, so no block is ever out of sight and each badge scrolls to its own. Underneath, Codex Desktop's latest update moved the blue-dot record this app reads, which had left every thoroughly-read Codex row stuck on the notch.
 
 ### Added
 
-- **Every product's heading stays on screen while the list scrolls.** The block you are in holds the line under the notch, the blocks you have passed stand beside its badge as dimmed names, and the blocks still to come wait on the viewport's last line as names alone — the same badge, with no count and no rule. A heading slides into its place beside the last one as it arrives and lifts straight off the foot as its rows come up, all of it driven by the offset so scrolling back plays it in reverse. Every badge on either line scrolls its block to the top when clicked, and a block holding a row that wants a person flips its badge bright instead of dimming. (`docs/expanded-panel-v2.md` §4.6.)
+- **Every product's heading stays on screen while the list scrolls.** The block you are in holds the line under the notch, the blocks you have passed stand beside its badge as dimmed names, and the blocks still to come wait on the viewport's last line as names alone. The motion is a pure function of the offset, so scrolling back plays it in reverse. Every badge on either line scrolls its block to the top when clicked, and a block holding a row that wants a person flips its badge bright instead of dimming. (`docs/expanded-panel-v2.md` §4.6.)
 - **`Group by product` is a switch.** Settings, the Display card. Off, the live list is one list in order of urgency with a badge on every row, under the panel's own top rule, as it was before grouping. The Recent queue is one list either way. Default on.
 
 ### Changed
 
 - **The live list shows four rows, not three.** The grouped viewport is a badge line, four rows and a badge line — `320` — at every product count, where it was three rows plus a whole bar per block; the flat list shows the same four at `288`, so the switch never changes how many rows are on screen. An approval's body, which is the viewport less the row's fixed parts, follows to `196`. (`docs/expanded-panel-v2.md` §4.6.)
-
 - **A block heading no longer opens on a stripe of black.** Its slack is `8` where it was `16`, all of it still above the chip. A row already ends on `8.5` of its own, so the old figure put `24.5` between one block's last word and the next block's badge — half again the `17` the list keeps between two rows, and the largest empty space on the panel. The heading is still twice as near to what it heads as to what it follows. (`docs/expanded-panel-v2.md` §4.2.)
 - **The Completed mark is the app's own logo.** The Terrace is drawn on this same 5×5 grid — a mass hanging from the top edge, columns `5 4 3 2 1` — so the crest frame is the mark itself, breathing once every `2.4 s` with its tall step held lit between crests. It replaces the bloom's cross. Fifteen lit cells against nine costs mean level, bought back in time at white. (`docs/figma-design.md` §4.1.)
-- **One connected product is drawn like two.** A single product had a panel of its own: a flat list, a badge on each row, no heading and the panel's own top rule, all of it rebuilt the moment a second connected. There is one form now: one block per product at every count, its heading naming every row under it, the queue and an open row keeping their own badge. The panel is `316` where it was `300`. (`docs/expanded-panel-v2.md` §4.3.)
+- **One connected product is drawn like two.** A single product had a panel of its own: a flat list, a badge on each row, no heading and the panel's own top rule, all of it rebuilt the moment a second connected. There is one form now: one block per product at every count, its heading naming every row under it, the queue and an open row keeping their own badge. (`docs/expanded-panel-v2.md` §4.3.)
+- **A row names its product whether or not a second one is connected.** The chip was gated on there being something to tell the row apart from; it is a label rather than a comparison, and the spoken form has always said the product whichever way the drawing went. A grouped row still gives its chip up to the heading above it, and every other row — ungrouped, open, or below the seam — draws its own. The caption line is `16` either way.
+- **The quota footer closes on the panel's own margin.** It left `15` pt between its last line of text and the bottom edge, against the `12` every column on this panel is set from, so the foot read as a blank line under a table rather than as the table ending. The clearance is `12` in both states now and the closed footer is `35`, where it was `38`. (`docs/quota-footer-v2.md`.)
+- **Codex is no longer asked about the threads it says it is not writing down.** A thread Codex will not materialise — a side chat, an ephemeral fork — carries a null `transcript_path` on every hook event, where a persisted thread carries its rollout path. That null is read on the first event and the thread's metadata read, live-progress read and membership sweep are all skipped, instead of asking every 10 s and being refused every time. It decides what is asked, never what is drawn: no row anywhere changes. (`docs/non-public-codex-integration-features.md`.)
 
 ### Fixed
 
 - **A read Codex thread leaves the notch again.** Codex Desktop `26.903.61454` moved its blue-dot set out of the renderer's atom map into a top-level `electron-thread-read-state-v1`, keyed by account identity above host, and deleted the key this app read. Every reading came back unreadable, and an unreadable reading may retire nothing — so a Completed Codex row stayed listed however thoroughly it had been read. Both shapes are read now. (`docs/adr/0002-use-desktop-unread-state-for-monitor-membership.md`.)
 - **The finished-turn dot stands off a row's digits as far as it does the bar's.** It is one mark drawn twice, and the row's sat `4` nearer its reading. The collapsed wing spends `8` and then the `4` of padding inside the `.clear` ground its reading never leaves; a row's reading has no ground on most states, so the `8` was the whole gap. A row without one pays that padding itself now, and its digits do not move for it. (`docs/compact-view-v2.md` §4.3.)
+
+### Known limitations
+
+Everything listed under `0.2.4` and earlier still stands, unchanged.
 
 ## 0.2.4 Alpha — 2026-09-09
 
