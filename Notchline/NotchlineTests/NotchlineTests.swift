@@ -10053,6 +10053,12 @@ struct NotchlineTests {
         // opening one takes a rollout and a service rather than a payload.
     }
 
+    /// The pre-migration schema, still read for a Codex Desktop older than
+    /// `26.903.61454`.
+    ///
+    /// It is kept rather than replaced because the two cannot both be live:
+    /// the migration deletes this atom as it writes the new key, so a machine
+    /// carrying only this one has simply not upgraded yet.
     @Test @MainActor
     func desktopUnreadStateReadsOnlyTheLocalHostMembership() async throws {
         let root = FileManager.default.temporaryDirectory
@@ -10084,6 +10090,164 @@ struct NotchlineTests {
                 == Set(["thread-local-1", "thread-local-2"])
         )
         #expect(!snapshot.unreadThreadIDs.contains("thread-remote"))
+    }
+
+    /// Codex Desktop `26.903.61454` moved the blue-dot set out of the renderer
+    /// atom map into a top-level key, and this is the shape it moved it into.
+    ///
+    /// Every part of the read is asserted here because every part of it was a
+    /// choice: the identity above the host is merged rather than picked, the
+    /// host key is matched by prefix now that it names an execution host, and
+    /// a host that is not local is still not merged.
+    @Test @MainActor
+    func desktopUnreadStateReadsTheMigratedThreadReadState() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let data = try JSONSerialization.data(withJSONObject: [
+            "electron-thread-read-state-v1": [
+                "version": 1,
+                "unreadByIdentity": [
+                    "identity-a": [
+                        "local:092af2cb": ["thread-local-1", "thread-local-2"],
+                        "cloud:9f21": ["thread-remote"]
+                    ],
+                    "identity-b": [
+                        "local:092af2cb": ["thread-local-3"]
+                    ]
+                ]
+            ]
+        ])
+        try data.write(to: stateFile, options: .atomic)
+
+        let snapshot = await CodexDesktopUnreadStateRepository(
+            stateFileURL: stateFile
+        ).snapshot()
+
+        #expect(snapshot.source == .current)
+        #expect(
+            snapshot.unreadThreadIDs
+                == Set(["thread-local-1", "thread-local-2", "thread-local-3"]),
+            "an identity is not a host: every one of them speaks for this machine"
+        )
+        #expect(!snapshot.unreadThreadIDs.contains("thread-remote"))
+    }
+
+    /// `legacyMigration` records the adoption and is never revised afterwards,
+    /// so nothing may be read out of it.
+    ///
+    /// The file this is built from is the dangerous one: the migration record
+    /// still names a thread the live set has dropped, which is exactly the
+    /// state a machine is in the moment the user reads the first thread after
+    /// upgrading. Reading the record would leave that row on the notch for
+    /// good.
+    @Test @MainActor
+    func desktopUnreadStateIgnoresTheMigrationRecord() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let data = try JSONSerialization.data(withJSONObject: [
+            "electron-thread-read-state-v1": [
+                "version": 1,
+                "unreadByIdentity": [
+                    "identity-a": ["local:092af2cb": ["thread-still-unread"]]
+                ],
+                "legacyMigration": [
+                    "identityKey": "identity-a",
+                    "unreadThreadIdsByHostId": [
+                        "local": ["thread-still-unread", "thread-since-read"]
+                    ],
+                    "adoptedHostIds": ["local": "local:092af2cb"]
+                ]
+            ]
+        ])
+        try data.write(to: stateFile, options: .atomic)
+
+        let snapshot = await CodexDesktopUnreadStateRepository(
+            stateFileURL: stateFile
+        ).snapshot()
+
+        #expect(snapshot.source == .current)
+        #expect(snapshot.unreadThreadIDs == ["thread-still-unread"])
+    }
+
+    /// The migration writes the new key and deletes the atom in two updates,
+    /// so a file carrying both is one caught in between -- and the new key is
+    /// the half that has already absorbed the other.
+    @Test @MainActor
+    func desktopUnreadStateTakesTheMigratedKeyOverTheAtom() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let data = try JSONSerialization.data(withJSONObject: [
+            "electron-thread-read-state-v1": [
+                "version": 1,
+                "unreadByIdentity": [
+                    "identity-a": ["local:092af2cb": ["thread-migrated"]]
+                ]
+            ],
+            "electron-persisted-atom-state": [
+                "unread-thread-ids-by-host-v1": ["local": ["thread-stale"]]
+            ]
+        ])
+        try data.write(to: stateFile, options: .atomic)
+
+        let snapshot = await CodexDesktopUnreadStateRepository(
+            stateFileURL: stateFile
+        ).snapshot()
+
+        #expect(snapshot.source == .current)
+        #expect(snapshot.unreadThreadIDs == ["thread-migrated"])
+    }
+
+    /// A version this app has not read the shape of is unreadable, not empty.
+    ///
+    /// This is the alarm for the next move: the schema breaking has to reach
+    /// the user as a diagnostic and a row that stays, never as a set that
+    /// happens to be empty and retires everything.
+    @Test @MainActor
+    func desktopUnreadStateRefusesAnUnknownReadStateVersion() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let stateFile = root.appendingPathComponent(".codex-global-state.json")
+        let data = try JSONSerialization.data(withJSONObject: [
+            "electron-thread-read-state-v1": [
+                "version": 2,
+                "unreadByIdentity": [
+                    "identity-a": ["local:092af2cb": ["thread-1"]]
+                ]
+            ]
+        ])
+        try data.write(to: stateFile, options: .atomic)
+
+        let snapshot = await CodexDesktopUnreadStateRepository(
+            stateFileURL: stateFile
+        ).snapshot()
+
+        #expect(snapshot.source == .unavailable)
+        #expect(snapshot.unreadThreadIDs.isEmpty)
+        #expect(snapshot.diagnostic?.contains("schema is not compatible") == true)
+        #expect(snapshot.diagnostic?.contains("Finished sessions have been kept") == true)
     }
 
     /// A reading reaches exactly as far forward as the file it came from was

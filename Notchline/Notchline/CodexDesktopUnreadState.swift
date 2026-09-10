@@ -381,11 +381,73 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
         let fileNumber: UInt64?
     }
 
+    /// The blue-dot set, out of whichever shape Codex Desktop keeps it in.
+    ///
+    /// **Desktop moved it, and that is the defect this decodes two shapes
+    /// for.** Up to `26.820.60940` the set lived in the renderer's persisted
+    /// atom map, at `electron-persisted-atom-state.unread-thread-ids-by-host-v1`,
+    /// keyed by host id. `26.903.61454` (measured 2026-09-09, the day it
+    /// installed) migrates it to a **top-level** `electron-thread-read-state-v1`
+    /// and *deletes* the atom, so the old reader threw `incompatibleSchema` on
+    /// every read: the state was unavailable, the membership gate can hide
+    /// nothing on an unauthoritative reading, and every Completed Codex row
+    /// stayed on the notch however thoroughly the user read it.
+    ///
+    /// The new shape adds an identity above the host:
+    ///
+    /// ```
+    /// electron-thread-read-state-v1: {
+    ///   version: 1,
+    ///   unreadByIdentity: { <identityKey>: { <executionHostKey>: [threadId] } },
+    ///   legacyMigration?: { identityKey, unreadThreadIdsByHostId, adoptedHostIds, cleared? }
+    /// }
+    /// ```
+    ///
+    /// Three readings of it are deliberate.
+    ///
+    /// **Every identity is merged, rather than one being chosen.** The
+    /// `identityKey` is a SHA-256 over the signed-in account, which this app
+    /// could only reproduce by reading Desktop's auth material -- it will not.
+    /// It does not have to: a thread id belongs to exactly one identity, so a
+    /// union adds nothing that is not this user's, and an identity left behind
+    /// by an account switch can only *keep* a row listed. Logging out deletes
+    /// that identity's entry outright, so it does not even accumulate. This
+    /// restores exactly the old schema's answer, which had no identity in it.
+    ///
+    /// **`legacyMigration` is read for nothing.** It is tempting -- it holds
+    /// `unreadThreadIdsByHostId` in the old shape, and today it matches. It is
+    /// a record of the adoption, written once and never revised: Desktop's
+    /// change path only ever rewrites `unreadByIdentity`. Reading it would
+    /// freeze the answer at the instant the user upgraded, which retires every
+    /// row read since immediately and never retires the ones unread then.
+    ///
+    /// **The new key wins when both are present.** The migration writes the
+    /// new key and deletes the atom in two updates that may land in one file
+    /// or two, and it has already merged the old set into the new one, so a
+    /// file carrying both is mid-migration and the new key is the complete
+    /// half.
     private struct GlobalState: Decodable {
-        let unreadThreadIDsByHost: [String: [String]]
+        /// One host's unread array, lifted out of whatever nests it.
+        ///
+        /// Flattened rather than merged so that the checks below stay per
+        /// array: two identities naming the same thread is not a duplicate id
+        /// in the sense this rejects a file for, and merging first would make
+        /// it look like one.
+        struct HostMembership {
+            let hostKey: String
+            let threadIDs: [String]
+        }
+
+        let memberships: [HostMembership]
 
         private enum CodingKeys: String, CodingKey {
+            case threadReadState = "electron-thread-read-state-v1"
             case persistedAtomState = "electron-persisted-atom-state"
+        }
+
+        private struct ThreadReadState: Decodable {
+            let version: Int
+            let unreadByIdentity: [String: [String: [String]]]
         }
 
         private struct PersistedAtomState: Decodable {
@@ -409,20 +471,62 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
 
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
+
+            if container.contains(.threadReadState) {
+                let state = try container.decode(
+                    ThreadReadState.self,
+                    forKey: .threadReadState
+                )
+                // Desktop declares this a literal `1` and drops the key
+                // wholesale when it does not parse. A version this does not
+                // know is a shape this cannot read, and guessing at it is the
+                // one thing worse than reporting nothing.
+                guard state.version == 1 else {
+                    throw UnreadStateError.incompatibleSchema
+                }
+                memberships = try state.unreadByIdentity
+                    .flatMap { identityKey, byHost -> [HostMembership] in
+                        guard !identityKey.trimmingCharacters(
+                            in: .whitespacesAndNewlines
+                        ).isEmpty else {
+                            throw UnreadStateError.invalidIdentityKey
+                        }
+                        return byHost.map {
+                            HostMembership(hostKey: $0.key, threadIDs: $0.value)
+                        }
+                    }
+                return
+            }
+
             guard container.contains(.persistedAtomState) else {
                 throw UnreadStateError.incompatibleSchema
             }
-            unreadThreadIDsByHost = try container.decode(
+            memberships = try container.decode(
                 PersistedAtomState.self,
                 forKey: .persistedAtomState
-            ).unreadThreadIDsByHost
+            ).unreadThreadIDsByHost.map {
+                HostMembership(hostKey: $0.key, threadIDs: $0.value)
+            }
         }
+    }
+
+    /// Whether a host key names the Codex running on this machine.
+    ///
+    /// V1 consumes the local host and merges no other, which was one string
+    /// comparison while host ids were bare. The migration re-keys them by
+    /// *execution* host -- `local` became
+    /// `local:092af2cb…` here, and Desktop's other by-host maps write
+    /// `local:/Users/…/.codex` -- so the same rule is now a prefix. The bare
+    /// form stays legal because the pre-migration schema is still read above.
+    nonisolated private static func isLocalHost(_ hostKey: String) -> Bool {
+        hostKey == "local" || hostKey.hasPrefix("local:")
     }
 
     private enum UnreadStateError: LocalizedError {
         case incompatibleSchema
         case oversizedFile(Int)
         case unsafeFile
+        case invalidIdentityKey
         case invalidHostIdentifier
         case invalidThreadIdentifier
         case duplicateThreadIdentifier
@@ -435,6 +539,8 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
                 "The Desktop unread state file is implausibly large (\(size) bytes)."
             case .unsafeFile:
                 "The Desktop unread state file is not a regular file owned by the current user."
+            case .invalidIdentityKey:
+                "The Desktop unread state contains an empty identity key."
             case .invalidHostIdentifier:
                 "The Desktop unread state contains an empty host identifier."
             case .invalidThreadIdentifier:
@@ -540,22 +646,31 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
         let (data, writtenAt) = try readValidatedData(from: url)
         let state = try JSONDecoder().decode(GlobalState.self, from: data)
 
-        for (hostID, threadIDs) in state.unreadThreadIDsByHost {
-            guard !hostID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+        // Every host is checked and only the local one is kept: a snapshot
+        // holds entirely or not at all, so a malformed array under a host this
+        // app never consults still rejects the file rather than being skipped
+        // past.
+        var localUnreadThreadIDs: Set<String> = []
+        for membership in state.memberships {
+            guard !membership.hostKey.trimmingCharacters(
+                in: .whitespacesAndNewlines
+            ).isEmpty else {
                 throw UnreadStateError.invalidHostIdentifier
             }
-            guard threadIDs.allSatisfy({
+            guard membership.threadIDs.allSatisfy({
                 !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             }) else {
                 throw UnreadStateError.invalidThreadIdentifier
             }
-            guard Set(threadIDs).count == threadIDs.count else {
+            guard Set(membership.threadIDs).count == membership.threadIDs.count else {
                 throw UnreadStateError.duplicateThreadIdentifier
             }
+            guard Self.isLocalHost(membership.hostKey) else { continue }
+            localUnreadThreadIDs.formUnion(membership.threadIDs)
         }
 
         return DesktopUnreadStateSnapshot(
-            unreadThreadIDs: Set(state.unreadThreadIDsByHost["local"] ?? []),
+            unreadThreadIDs: localUnreadThreadIDs,
             source: source,
             // Codex Desktop rewrites this file whole, every time, from one
             // in-memory map -- so the instant it was last written is the

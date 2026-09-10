@@ -4,6 +4,12 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## Unreleased
+
+### Fixed
+
+- **A read Codex thread leaves the notch again.** Codex Desktop `26.903.61454` moved its blue-dot set out of the renderer's atom map into a top-level `electron-thread-read-state-v1`, keyed by account identity above host, and deleted the key this app read. Every reading came back unreadable, and an unreadable reading may retire nothing — so a Completed Codex row stayed listed however thoroughly it had been read. Both shapes are read now. (`docs/adr/0002-use-desktop-unread-state-for-monitor-membership.md`.)
+
 ## 0.2.4 Alpha — 2026-09-09
 
 **The app can say what it is, and a blank quota rule can say why it is blank.** A second control on the band opens the first region here that reports on this application rather than on the work passing through it — name, version, licence, repository. Underneath it, Claude Code's two rules had gone blank on a machine using Claude Code all day, and the app was right to draw them that way.

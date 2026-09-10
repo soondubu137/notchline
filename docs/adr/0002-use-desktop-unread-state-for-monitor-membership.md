@@ -43,3 +43,31 @@ Either way the user read the answer, the subagent finished afterwards, and the r
 - A row whose Turn was read *before* it finished is unaffected — a focus earlier than the `Stop` never showed anybody this answer, and still reads as unread.
 - The narrower consequence is deliberate: once the thread stops working, a Turn already read stays read. A user who read the answer and then wanted to be told about the subagent's own outcome is not served by this row, and never was — the row reports its Turn.
 
+
+## Addendum, 2026-09-09: the set moved, and this decision no longer rests on a debounced projection
+
+Codex Desktop `26.903.61454` — installed this morning, up from the `26.820.60940` the addendum above was measured on — moved the blue-dot set out of the renderer's persisted atom map and into a top-level `electron-thread-read-state-v1`, then **deleted** `electron-persisted-atom-state.unread-thread-ids-by-host-v1` as it went. The reader threw `incompatibleSchema` on every pass. Everything downstream then did precisely what it was built to do: an unreadable state is never authoritative, an unauthoritative reading may hide nothing, and so every Completed Codex row stayed on the notch however thoroughly its thread had been read. Reported by the user the same day.
+
+The new shape adds an account identity above the host:
+
+```
+electron-thread-read-state-v1: {
+  version: 1,
+  unreadByIdentity: { <identityKey>: { <executionHostKey>: [threadId] } },
+  legacyMigration?: { identityKey, unreadThreadIdsByHostId, adoptedHostIds, cleared? }
+}
+```
+
+**Decision: read both shapes, take the new key when a file carries both, and merge every identity.**
+
+- The `identityKey` is a SHA-256 over the signed-in account. This app could only reproduce it by reading Desktop's auth material, and will not — nor does it need to. A thread id belongs to exactly one identity, so a union adds nothing that is not this user's, and an identity left behind by an account switch can only *keep* a row listed. Logging out deletes that identity's entry outright, so nothing accumulates. The union is exactly the answer the old schema gave, which had no identity in it at all.
+- `legacyMigration` is read for nothing. It holds the old set in the old shape and today matches the live one, which is what makes it dangerous: it records the adoption and is never revised, because the change path only ever rewrites `unreadByIdentity`. Reading it would freeze the answer at the instant the user upgraded — retiring every row read since, and never retiring the ones unread then.
+- Host ids became execution host keys — `local` became `local:092af2cb…`, and Desktop's other by-host maps write `local:/Users/…/.codex` — so the "consume only the local host" rule is now a prefix match, with the bare form still legal because the pre-migration schema is still read.
+- A `version` this app does not know rejects the file. That is the alarm for the next move: a schema break has to reach the user as a stale row and a diagnostic, never as an empty set that retires everything.
+
+**The 2026-08-26 addendum's measurement no longer describes this set, and its decision stands anyway.** The 500 ms trailing debounce with no max-wait belongs to the key `electron-persisted-atom-state`, and to that key alone: Desktop's global-state store routes every other top-level key straight to a queued write, so the read state is now persisted on every change with nothing able to starve it. The composer draft can no longer hold a blue dot off disk for 45 seconds. `currentAsOf` is kept regardless — it costs one `stat` field already being read, and it is the only thing standing between this product and any future write delay, including one nobody has measured yet.
+
+**Costs and boundaries.**
+
+- A Codex that has never marked a thread unread writes neither key, and the reading is unavailable rather than empty. That fails closed, and it clears itself the first time a Turn completes into an unread thread — which is the first moment a row could need retiring.
+- Nothing here changes what the membership gate does with a reading. This addendum is about getting one at all.
