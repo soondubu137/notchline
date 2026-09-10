@@ -1765,6 +1765,33 @@ struct HookTurnState: Sendable {
     /// behaviour: a build that stops sending the field puts the flicker back
     /// and invents nothing.
     var pausedForBackgroundWork: Bool = false
+    /// Whether the product says it is writing this thread down nowhere.
+    ///
+    /// **A fact about the thread**, carried across turn boundaries like the
+    /// subagent facts above and unlike the turn's own previews: a thread the
+    /// product will not write down is not written down for one turn.
+    ///
+    /// It answers [ADR 0017](../../docs/adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)'s
+    /// question a round trip early. A row requires a Thread the App Server
+    /// vouches for, and the threads that never get one -- a Codex side chat,
+    /// and the internal threads Desktop runs alongside a user's -- are refused
+    /// with `-32600 "thread not loaded"` once per metadata interval for as
+    /// long as they run. `transcript_path: null` is the same answer from the
+    /// product itself, on the thread's first event, so those reads stop being
+    /// issued at all.
+    ///
+    /// **It decides what is asked, never what is drawn.** Whether a row exists
+    /// stays with the Thread the App Server hands over, which is ADR 0017
+    /// unchanged: this only says the App Server will not be asked, and a
+    /// thread nobody asked about has no Thread and therefore no row.
+    ///
+    /// **Latest wins, and false is the answer with nothing behind it.** A
+    /// build that does not send the key leaves it false and every read goes
+    /// out exactly as before. An event Codex delivers under this thread's id
+    /// that a nested agent produced names *that* agent's file, and the worst
+    /// that can do is put the thread back on the ordinary path -- one
+    /// `thread/read`, refused, which is where this started.
+    var threadHasNoTranscript: Bool = false
     /// A prompt this thread was told about while its own turn was still open.
     ///
     /// **The one thing a nested agent can do that `agent_id` does not label.**
@@ -2150,6 +2177,28 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
     let toolUseID: String?
     let permissionMode: String?
     let workingDirectory: String?
+    /// Whether the product named a file it is writing this thread down to.
+    ///
+    /// **Three answers arrive, and this is two of them plus a silence.** A
+    /// path is the ordinary answer; an explicit `null` is the product saying
+    /// there is no such file; a build that does not send the key says nothing
+    /// at all. Only the middle one is worth anything here, so the path itself
+    /// is dropped -- nothing in this app reads it, and the rollout a Codex
+    /// thread is written to already arrives on the Thread the App Server hands
+    /// over -- and `nil` is the silence.
+    ///
+    /// **What `null` is evidence of.** Codex requires this field on every one
+    /// of its twelve hook events and allows it to be null (read out of CLI
+    /// `0.153.4`'s embedded JSON schemas, 2026-09-09), and its Thread schema
+    /// documents `ephemeral` as "should not be materialized on disk". A thread
+    /// Codex is not writing down is one it will not hand over either, so this
+    /// is the answer `thread/read` gives, arriving on the thread's first event
+    /// rather than a round trip later. See
+    /// ``HookTurnState/threadHasNoTranscript``.
+    ///
+    /// Claude Code's schema requires a path and permits no null, so this is
+    /// `true` on every event of that product.
+    let namesATranscript: Bool?
     let prompt: String?
     let lastAssistantMessage: String?
     let messageID: String?
@@ -2222,6 +2271,7 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
         case toolUseID = "tool_use_id"
         case permissionMode = "permission_mode"
         case workingDirectory = "cwd"
+        case transcriptPath = "transcript_path"
         case prompt
         case lastAssistantMessage = "last_assistant_message"
         case messageID = "message_id"
@@ -2290,6 +2340,15 @@ nonisolated struct HookPayload: Sendable, Decodable, Equatable {
         toolUseID = try container.decodeIfPresent(String.self, forKey: .toolUseID)
         permissionMode = try container.decodeIfPresent(String.self, forKey: .permissionMode)
         workingDirectory = try container.decodeIfPresent(String.self, forKey: .workingDirectory)
+        // Asked in two questions because `decodeIfPresent` answers both with
+        // nil, and the whole of this field is telling them apart: a key that
+        // never arrived is a build that does not send it, and a key that
+        // arrived null is the product saying there is no such file.
+        if container.contains(.transcriptPath) {
+            namesATranscript = try !container.decodeNil(forKey: .transcriptPath)
+        } else {
+            namesATranscript = nil
+        }
         prompt = try container.decodeIfPresent(String.self, forKey: .prompt)
         lastAssistantMessage = try container.decodeIfPresent(
             String.self,
@@ -2391,7 +2450,7 @@ nonisolated enum HookPayloadDistiller {
     /// How long a value that is an identity may be before it is refused.
     ///
     /// Session and turn ids are UUIDs, tool call ids are short strings, `cwd`
-    /// is a path. Anything past this is none of those.
+    /// and `transcript_path` are paths. Anything past this is none of those.
     nonisolated static let maximumIdentityBytes = 1_024
 
     /// How long a list may be before it is refused whole.
@@ -3731,6 +3790,7 @@ actor HookEventRepository {
                 runningSubagentIDs: current.runningSubagentIDs,
                 lastSubagentBoundaryAt: current.lastSubagentBoundaryAt,
                 subagentSlots: current.subagentSlots,
+                threadHasNoTranscript: current.threadHasNoTranscript,
                 heldTurnIDs: heldTurnIDs
             )
         }
@@ -4099,6 +4159,10 @@ actor HookEventRepository {
             // thread has done since -- so the set crosses this boundary the way
             // the subagent facts above it do.
             let heldTurnIDs = turnsByThreadID[threadID]?.heldTurnIDs ?? []
+            // And so does what the product last said about writing this thread
+            // down, which the tail of this reducer restates from this event.
+            let threadHasNoTranscript = turnsByThreadID[threadID]?
+                .threadHasNoTranscript ?? false
             if let current = turnsByThreadID[threadID] {
                 if current.turnID == turnID {
                     guard receivedAt >= current.lastEventAt else { return true }
@@ -4190,6 +4254,7 @@ actor HookEventRepository {
                 runningSubagentIDs: runningSubagentIDs,
                 lastSubagentBoundaryAt: lastSubagentBoundaryAt,
                 subagentSlots: subagentSlots,
+                threadHasNoTranscript: threadHasNoTranscript,
                 heldTurnIDs: heldTurnIDs
             )
         case .approvalWaitInferred:
@@ -4439,6 +4504,18 @@ actor HookEventRepository {
         case .subagentStarted, .subagentStopped, .inert:
             // All three are answered above, before the turn identity gate.
             break
+        }
+        // What the product says about writing this thread down, restated by
+        // every event that carries it. Written here rather than in each arm
+        // because it is a fact about the thread and not about any of them, and
+        // after the switch rather than before it because two of these arms
+        // create the state it is written on.
+        //
+        // A prompt this thread held back never reaches this line -- that arm
+        // returns from inside the switch -- which is right: the file a nested
+        // agent's event names is the nested agent's.
+        if let namesATranscript = event.namesATranscript {
+            turnsByThreadID[threadID]?.threadHasNoTranscript = !namesATranscript
         }
         return true
     }
@@ -4776,6 +4853,7 @@ actor HookEventRepository {
                     runningSubagentIDs: current.runningSubagentIDs,
                     lastSubagentBoundaryAt: current.lastSubagentBoundaryAt,
                     subagentSlots: current.subagentSlots,
+                    threadHasNoTranscript: current.threadHasNoTranscript,
                     heldTurnIDs: heldTurnIDs
                 )
             }

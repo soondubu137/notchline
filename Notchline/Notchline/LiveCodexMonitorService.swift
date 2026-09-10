@@ -97,6 +97,13 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// the second one settles anything: it is what stops this service asking
     /// again in a loop, and what keeps a thread Codex will never list from
     /// re-paginating the user's whole history on every refresh.
+    ///
+    /// A third fact never reaches this table at all: a thread the product's own
+    /// hooks say it is writing down nowhere is not asked about, so it has no
+    /// record and needs none (``HookTurnState/threadHasNoTranscript``). It
+    /// settles what a refusal settles, one round trip earlier, and leaving the
+    /// record absent is what keeps a thread nothing will ever re-read out of
+    /// the metadata staleness `nextRefreshDeadline()` measures.
     private struct ThreadRecord: Sendable {
         let thread: JSONValue?
         let observedAt: Date
@@ -544,12 +551,19 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
                 hookTrackedThreadIDs = hookThreadIDs
                 // A thread the last sweep did not carry is a reason to sweep
                 // again -- unless the App Server has already answered that it
-                // has no such thread. Re-paginating the user's whole history to
-                // look for a thread its owner says does not exist buys nothing,
-                // and a Codex side chat would otherwise ask for that sweep on
-                // every refresh for as long as it ran.
-                let containsUnlistedHookThread = hookThreadIDs.contains { threadID in
+                // has no such thread, or the product has said the same thing
+                // itself. Re-paginating the user's whole history to look for a
+                // thread its owner says does not exist buys nothing, and a
+                // Codex side chat would otherwise ask for that sweep on every
+                // refresh for as long as it ran.
+                //
+                // The second of those arrives on the thread's first event and
+                // the first only after a round trip, so this is also the sweep
+                // a side chat used to get before the refusal landed.
+                let containsUnlistedHookThread = hookState.turns.contains { state in
+                    let threadID = state.threadID
                     guard !listedThreadIDs.contains(threadID) else { return false }
+                    guard !state.threadHasNoTranscript else { return false }
                     guard let record = threadRecords[threadID] else { return true }
                     return record.isAddressable
                 }
@@ -1329,9 +1343,10 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             // Status is the reducer's alone: an independent App Server reports
             // every thread as `notLoaded` even while a turn is running, so it
             // has no runtime evidence to correct with. The thread record is
-            // what says the row may exist at all -- both "not asked yet" and
-            // "asked, and Codex has no such thread" arrive here as no payload,
-            // and neither is grounds for a row (see
+            // what says the row may exist at all -- "not asked yet", "asked,
+            // and Codex has no such thread" and "Codex says it is writing this
+            // thread down nowhere, so it was never asked" all arrive here as no
+            // payload, and none of the three is grounds for a row (see
             // ``CodexSnapshotParser/session(from:thread:projectName:approvalsReachTheUser:liveProgress:)``).
             guard let session = CodexSnapshotParser.session(
                 from: state,
@@ -1453,6 +1468,20 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         var observedThreadIDs: Set<String> = []
         for state in states {
             let threadID = state.threadID
+            // **A thread the product says it is writing down nowhere is never
+            // asked about.** This read is the one a row waits on, and its
+            // answer for such a thread is already known: `thread/read` refuses
+            // it, once per interval for as long as it runs, and the row it
+            // would decide is a row that is not drawn either way. See
+            // ``HookTurnState/threadHasNoTranscript``.
+            //
+            // No record is written in its place. "The product says there is
+            // nothing to ask about" and "asked, and the answer was no" reach
+            // every consumer as the same absence of a Thread -- no row, no
+            // rollout to read -- and leaving the record absent is what keeps
+            // this thread out of `nextRefreshDeadline()`'s metadata staleness,
+            // which measures stamps that only a read can move.
+            guard !state.threadHasNoTranscript else { continue }
             observedThreadIDs.insert(threadID)
             // A read already out for this thread is going to write the record
             // the checks below are looking for, stamped when it was issued.
@@ -1620,11 +1649,13 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             guard state.status != .completed else { continue }
             // A thread that has already refused is not asked twice.
             guard !threadsWithoutItemsRead.contains(state.threadID) else { continue }
-            // Neither is one the App Server has said it does not have. This
-            // read fetches the third line of a row that is not being drawn.
+            // Neither is one the App Server has said it does not have, nor one
+            // the product says it is writing down nowhere. This read fetches
+            // the third line of a row that is not being drawn.
             if let record = threadRecords[state.threadID], !record.isAddressable {
                 continue
             }
+            guard !state.threadHasNoTranscript else { continue }
             let held = turnProgressByThreadID[state.threadID]
             if held?.turnID == state.turnID,
                held?.readAtEventStamp == state.lastEventAt {
@@ -2429,6 +2460,12 @@ enum CodexSnapshotParser {
     /// Hook fires (measured 2026-08-25, CLI `0.149.0-alpha.4.3`: at
     /// `UserPromptSubmit` the rollout exists and an independent App Server
     /// reads the thread), so the wait this adds is one local `thread/read`.
+    ///
+    /// **And on the threads it exists to stop, not even that.** Those hooks
+    /// carry `transcript_path: null`, which is the product saying the same
+    /// thing the App Server would, so the read is not issued at all and this
+    /// check answers on an absent Thread as before
+    /// (``HookTurnState/threadHasNoTranscript``).
     ///
     /// `approvalsReachTheUser` is the one exception, and it subtracts rather
     /// than adds: the reducer proves a permission pipeline opened over a call

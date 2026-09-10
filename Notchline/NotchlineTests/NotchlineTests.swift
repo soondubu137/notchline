@@ -11838,6 +11838,161 @@ struct NotchlineTests {
         )
     }
 
+    /// What the product says about writing a thread down, and its three
+    /// answers.
+    ///
+    /// Codex requires `transcript_path` on every one of its hook events and
+    /// allows it to be null (CLI `0.153.4`'s embedded JSON schemas, read
+    /// 2026-09-09), and a thread it will not materialise -- a side chat, and
+    /// the internal threads Desktop runs -- carries the null on every one of
+    /// them. A build that does not send the key at all says nothing, which is
+    /// the shape every other test in this file replays and the reason none of
+    /// them changed: silence leaves the thread on the ordinary path.
+    @Test @MainActor
+    func aThreadIsWrittenDownNowhereOnlyWhileTheProductSaysSo() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let repository = HookEventRepository(paths: paths)
+        var clock = 5_000.0
+        func emit(_ event: [String: Any]) throws {
+            clock += 1
+            var payload = event
+            payload["received_at"] = clock
+            payload["session_id"] = "thread-side"
+            payload["turn_id"] = "turn-side"
+            try JSONSerialization.data(withJSONObject: payload).deliver(to: repository)
+        }
+
+        try emit([
+            "hook_event_name": "UserPromptSubmit",
+            "prompt": "Summarise this file",
+            "transcript_path": NSNull()
+        ])
+        #expect(
+            await repository.drainDeliveredEvents().turns.first?
+                .threadHasNoTranscript == true
+        )
+
+        // A build that leaves the key out says nothing about the thread, and
+        // must not be read as a retraction of what was said.
+        try emit([
+            "hook_event_name": "PreToolUse",
+            "tool_name": "shell",
+            "tool_use_id": "call-1"
+        ])
+        #expect(
+            await repository.drainDeliveredEvents().turns.first?
+                .threadHasNoTranscript == true
+        )
+
+        // And a path is the retraction. Nothing measured produces this on a
+        // thread that has already answered null; it is here because the rule
+        // is "the latest answer wins" and not "once refused, always refused".
+        try emit([
+            "hook_event_name": "Stop",
+            "transcript_path": "/tmp/rollout-2026-09-09-thread-side.jsonl",
+            "last_assistant_message": "Summarised."
+        ])
+        #expect(
+            await repository.drainDeliveredEvents().turns.first?
+                .threadHasNoTranscript == false
+        )
+    }
+
+    /// A thread Codex writes down nowhere costs no read at all.
+    ///
+    /// [ADR 0017](../../docs/adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)
+    /// draws no row for such a thread, and paid one `thread/read` per metadata
+    /// interval to find out: the App Server answers `-32600 "thread not
+    /// loaded"`, and the refusal is recorded rather than settled, so a side
+    /// chat running for ten minutes is asked about again and again. Its own
+    /// hooks have said so from the first event since CLI `0.153.4`.
+    ///
+    /// The row is unchanged, which is the half worth pinning: the real thread
+    /// in the same batch is read and drawn exactly as before, and the side
+    /// chat draws nothing from its first hook to its last.
+    @Test @MainActor
+    func aThreadTheProductWritesDownNowhereIsNeverAskedAbout() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+
+        // The App Server would answer for the ordinary thread and refuse the
+        // side chat. It is never given the chance to refuse.
+        let client = CodexAppServerStub(
+            listedThreads: [codexRootThread(id: "thread-main", name: "Real work")],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+
+        let timestamp = Date().timeIntervalSince1970
+        for event in [
+            [
+                "received_at": timestamp,
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "thread-main",
+                "turn_id": "turn-main",
+                "transcript_path": "/tmp/rollout-2026-09-09-thread-main.jsonl"
+            ] as [String: Any],
+            [
+                "received_at": timestamp,
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "thread-side",
+                "turn_id": "turn-side",
+                "transcript_path": NSNull()
+            ] as [String: Any]
+        ] {
+            try JSONSerialization.data(withJSONObject: event).deliver(to: repository)
+        }
+
+        let running = await snapshotWithSessions(from: service)
+        #expect(running.sessions.map(\.threadID) == ["thread-main"])
+
+        // The side chat's turn ends, and several refreshes pass. The read is
+        // not merely deferred to one of them.
+        try JSONSerialization.data(withJSONObject: [
+            "received_at": Date().timeIntervalSince1970,
+            "hook_event_name": "Stop",
+            "session_id": "thread-side",
+            "turn_id": "turn-side",
+            "transcript_path": NSNull(),
+            "last_assistant_message": "Answered in the side chat."
+        ]).deliver(to: repository)
+
+        for _ in 0 ..< 3 {
+            let snapshot = await service.fetchSnapshot()
+            #expect(snapshot.sessions.map(\.threadID) == ["thread-main"])
+        }
+
+        let readThreadIDs = await client.recordedThreadReadParams()
+            .compactMap { $0["threadId"]?.stringValue }
+        await service.disconnect()
+
+        #expect(
+            !readThreadIDs.contains("thread-side"),
+            "a thread Codex says it is writing down nowhere was asked about"
+        )
+        // And the ordinary thread was asked about, so this is not a service
+        // that stopped reading.
+        #expect(readThreadIDs.contains("thread-main"))
+    }
+
     @Test
     func closesWithoutOpensReportTheUntrustedPreToolUseHook() async throws {
         // Codex trusts hook definitions by content hash. Rewriting one stops it

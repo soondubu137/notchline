@@ -27,12 +27,24 @@ The incidental cost sat in the same place: a Hook thread absent from the last li
 - **The notch is silent while a side chat runs**, including when it wants input or approval. Accepted: it is open in the window the user is already looking at, it is read-only by design, and this app could not offer a way back to it regardless — which is half the reason a row exists.
 - **The App Server moved from decoration to gate.** The old division had Hooks providing low latency and the App Server only decorating. Now a row needs its assent. The practical impact is smaller than it sounds: with the App Server unreachable no new row could be drawn anyway (that path holds the last trustworthy snapshot).
 
+## The product answers first (2026-09-09)
+
+Codex's hooks carry the answer this ADR paid a round trip for. Every one of CLI `0.153.4`'s twelve `*.command.input` schemas **requires** `transcript_path` and allows it to be null, and a thread Codex will not materialise carries the null on every event it fires (measured 2026-09-09 on Desktop `26.903.61454` / CLI `0.153.4`, with a live side chat and an isolated `thread/fork {ephemeral: true}` probe; a persisted thread carries its rollout path). The protocol schema says why: `Thread.ephemeral` is "should not be materialized on disk", and a thread Codex is not writing down is one it will not hand over.
+
+So the reducer records it (`HookTurnState.threadHasNoTranscript`) and the service asks nothing about such a thread: no `thread/read`, no `thread/items/list`, and no membership sweep requested to look for it. The three costs above are unchanged for every real thread, and none of them is paid here.
+
+Three properties keep it honest:
+
+- **It decides what is asked, never what is drawn.** A row still requires a Thread the App Server hands over. A thread nobody asked about has no Thread, so this reaches the row builder as the same absence a refusal did — this ADR's rule, unweakened.
+- **Silence is not an answer.** The key not arriving means an older build, and leaves the thread on the ordinary path. Every test in the suite that predates this sends no `transcript_path` at all, and none of them changed.
+- **The latest answer wins.** A path retracts a null. Nothing measured produces one on a thread that has already answered null; the rule is written that way so that an event Codex delivers under this thread's id but belonging to a nested agent — which names *that* agent's file — can do no worse than put the thread back on the path it was on before.
+
 ## No wording, no error codes
 
 The rejection test is "`thread/read` returned a remote error", reading neither its text nor its code: whatever the reason, a thread the App Server will not hand over is a thread this app cannot navigate to. That also keeps Codex's error wording out of [`non-public-codex-integration-features.md`](../non-public-codex-integration-features.md). A transport failure (timeout, connection reset) is not an answer, is not recorded, and is asked again at the next refresh.
 
 ## Status
 
-Implemented. Rejections are recorded, so they are not re-asked every refresh and no longer paginate all of history for a thread the product itself says does not exist. Tests: `aThreadTheAppServerRefusesDrawsNoRowAtAnyPointInItsTurn`, `aSessionThatStopsRenderingStopsSchedulingWakeUps`, `idleToRunningDoesNotWaitForSlowThreadList`.
+Implemented. Rejections are recorded, so they are not re-asked every refresh and no longer paginate all of history for a thread the product itself says does not exist; and since 2026-09-09 a thread whose hooks say `transcript_path: null` is not asked about at all. Tests: `aThreadTheAppServerRefusesDrawsNoRowAtAnyPointInItsTurn`, `aThreadTheProductWritesDownNowhereIsNeverAskedAbout`, `aThreadIsWrittenDownNowhereOnlyWhileTheProductSaysSo`, `aSessionThatStopsRenderingStopsSchedulingWakeUps`, `idleToRunningDoesNotWaitForSlowThreadList`.
 
 Subagents are unaffected: Codex stamps subagent hooks with the **parent** Thread's identity, so they already land on the parent's row, and the parent is an ordinary Thread that can be handed over.
