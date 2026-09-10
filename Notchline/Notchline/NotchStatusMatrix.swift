@@ -1607,8 +1607,10 @@ final class BreathingDotView: NSView {
 /// **The one pattern that argued for an exception did not survive it.** The
 /// quincunx drew Completed as five isolated single cells for a day, on the
 /// grounds that a die-five reads as one figure; at `2.89` it read as scattered
-/// specks. The bloom that replaced it is a whole row crossing a whole column.
-/// Take the rule as having no exceptions.
+/// specks. The bloom that replaced it was a whole row crossing a whole column,
+/// and the terrace drawing it now is a fifteen-cell connected mass. Neither
+/// asks the eye to resolve a cell on its own. Take the rule as having no
+/// exceptions.
 enum MatrixGrid {
     static let side = 5
     static let cellCount = side * side
@@ -1671,9 +1673,9 @@ enum NotchMatrixState: Equatable {
     /// **Two of the three moved when the wedge and the bars were replaced.**
     /// Input went `0.8` → `1`, which is `8` whole frames to a column rather
     /// than a front timed to cross in `0.8`; Completed went `2` → `2.4`. The
-    /// treatments have changed again since — Input to the glide, Completed to
-    /// the bloom — and both periods survived that, which is some evidence they
-    /// are the right two. Both are still ordered
+    /// treatments have changed again since — Input to the glide, and Completed
+    /// to the bloom and then to the terrace — and both periods survived every
+    /// one of those, which is some evidence they are the right two. Both are still ordered
     /// the way they have to be — the state that asks for nothing is much the
     /// slowest thing on the bar, and the state asking for the keyboard is
     /// faster than the two that share `1.2`. Completed's ceiling is the session
@@ -1699,23 +1701,23 @@ enum NotchMatrixState: Equatable {
 /// a column striking and the next taking it up, two diagonals trading about a
 /// centre — is the half that has to survive being read.
 ///
-/// The bloom is the one that needs more than a single curve: a cell's level
-/// depends on how far along its arm it sits, so it holds three, one per
-/// distance from the centre. It is still a curve and a rule for choosing it.
+/// The terrace is the one that needs more than a single curve: a cell's level
+/// depends on which column it stands in, so it holds five, one per step of the
+/// logo's ladder. It is still a curve and a rule for choosing it.
 ///
 /// **The offsets are whole frames**, and a pattern is sampled at whatever rate
 /// makes that true: the loom runs 48 frames at 40fps rather than 36 at 30
 /// because `1.2s` over sixteen outer cells is otherwise `2.25` frames a step.
 /// ~~One phase still does not land: the bars want their tiers `10.8` frames
 /// apart.~~ Void with the bars — every offset in the file is now exact. The
-/// glide takes `8` frames to a column, and the bloom needs no offsets at all —
-/// its arms move together, so every cell at a given distance draws the same
+/// glide takes `8` frames to a column, and the terrace needs no offsets at all
+/// — its steps move together, so every cell in a given column draws the same
 /// curve unshifted.
 ///
 /// **Three of the four share one scale, and the knock does not.** Each pattern
 /// was drawn against a floor and a ceiling that suited it alone; shipping four
 /// of them means the same cell value has to mean the same thing whichever
-/// state the mark is in, so loom, glide and bloom are each stretched linearly
+/// state the mark is in, so loom, glide and terrace are each stretched linearly
 /// until their dimmest cell sits at ``floor`` and their brightest at `1`. The
 /// stretch is linear, so no pattern's *shape* moves — only the two ends it is
 /// measured between.
@@ -1724,7 +1726,7 @@ enum NotchMatrixState: Equatable {
 /// the first thing to say when one is called too loud: lowering a peak is
 /// undone by the next stretch. What a treatment actually spends is lit area,
 /// time held at white, and how fast it moves — the three readings quoted on
-/// ``glide`` and ``bloom``, both of which were chosen against them.
+/// ``glide`` and ``terrace``, both of which were chosen against them.
 ///
 /// The knock keeps its own `0.05`. Approval is the one state whose silence has
 /// to stay darker than a resting mark: a mark asking for a person is twice as
@@ -1740,7 +1742,7 @@ enum NotchMatrixState: Equatable {
 /// not what keeps them apart. What keeps them apart is that none of the three
 /// is ever at its floor *everywhere at once*: the loom always has two ring
 /// heads and a lit pivot, the glide always has a rule crossing, and the
-/// bloom's centre never falls below `0.595`. A live mark always
+/// terrace's tall step never falls below `0.465`. A live mark always
 /// has a lit cell and a still one never does, which was the load-bearing half
 /// of that argument all along.
 private enum MatrixTrack {
@@ -1894,61 +1896,80 @@ private enum MatrixTrack {
         0.051, 0.050, 0.050, 0.050
     ]
 
-    // MARK: Completed — bloom
+    // MARK: Completed — terrace
 
-    /// **Bloom**, 72 frames over `2.4s`.
+    /// **Terrace**, 72 frames over `2.4s`. The app's own mark, breathing.
     ///
-    /// The middle row and the middle column swell from a shared core out to the
-    /// full width of the grid and draw back in, in step: a cross that grows
-    /// heavier and lighter without ever changing its silhouette. Nothing
-    /// travels, nothing turns, and there is no moment at which the figure is
-    /// assembling or coming apart.
+    /// **The logo is already drawn on this grid**, so there is nothing to
+    /// translate. It is one connected mass hanging from the top edge with
+    /// column heights `5 4 3 2 1` — exactly the cells where
+    /// `row + column <= 4` — and a level stepping down
+    /// `1.00 / .80 / .60 / .40 / .20` as the mass steps down. The crest frame
+    /// *is* that mark, at `1.00 / .82 / .64 / .46 / .28` once the shared scale
+    /// has lifted the ten cells off the mark up to ``floor``.
     ///
-    /// **It replaced the quincunx, which broke the rule the other patterns
-    /// keep.** The die-five measured well — mean `0.250`, only `5.9%` of the
-    /// grid at white — and still looked wrong, because the numbers do not see
-    /// size. It was built from five isolated single cells, and at a `2.89` cell
-    /// with a `0.54` gap its points sit at opposite corners with nothing
-    /// between them, so they read as scattered specks rather than as one
-    /// figure, and the two diagonals trading read as twinkling. A cross is a
-    /// whole row and a whole column, so ``MatrixGrid``'s constraint holds again
-    /// with no exception argued for it.
+    /// One soft crest a loop with a long tail, the ladder holding its ratio the
+    /// whole way, so the silhouette and the step gradient are the logo in every
+    /// frame. Nothing travels and nothing turns — which is what Completed has
+    /// to say, and the one thing it keeps from the bloom it replaced.
     ///
-    /// **Nine lit cells rather than five** — the horizontal arm on its own
-    /// measured `0.231` against this `0.244` — and the arms are what make it a
-    /// figure rather than a rule. The three distances from the centre are held
-    /// as three curves because that is all the pattern is: a cell's track
-    /// depends only on how far along its arm it sits.
-    static let bloom: (arms: [[Double]], dark: Double) = {
+    /// **The tall step is a pilot light.** It falls back only to `0.40` of its
+    /// own level between crests where the other four fall to `0.06`, so the
+    /// dimmest frame still holds a cell at `0.465` and the whole mark reads
+    /// `0.188` against the still's `0.10`. Same device as the bloom's centre at
+    /// `0.595`, and the same job: stop a dim frame reading as a mark with
+    /// nothing behind it.
+    ///
+    /// **The curve is the loom's, not a bump on a flat rest.** A crest built as
+    /// a power of a cosine flattens so hard through the trough that neighbouring
+    /// frames come out identical and the mark reads as held; the periodic
+    /// `exp(-(gap / tau)^p)` the rings already turn on never stops moving.
+    ///
+    /// **Fifteen lit cells against the bloom's nine, and that is the trade.**
+    /// On each pattern's own brightest frame, above the floor, the cross
+    /// carries `5.87` cell-units of light and this ladder carries `9.90`. The
+    /// one-scale rule pins both peaks at `1`, so the extra area cannot be paid
+    /// for at the ceiling — it comes out of duty and slew, which is why the
+    /// crest is brief and the tail long. Mean `0.279` against the bloom's
+    /// `0.244`, but *less* time at white — `3.8%` against `5.7%` — on an edge
+    /// of `1.23`/s that is still seven times slower than the glide's.
+    ///
+    /// **It witnesses the seam direction, where the bloom did not.** The bloom
+    /// was symmetric about both axes; this mass hangs from the top edge, so a
+    /// wrong `isFlipped` stands it on its head. That takes `figma-design.md`
+    /// §4.1's witnesses back from one to two.
+    static let terrace: (columns: [[Double]], dark: Double) = {
         let frames = 72
-        func arm(_ distance: Double) -> [Double] {
-            (0 ..< frames).map { frame in
-                let swell = 0.5 * (1 + cos(2 * .pi * Double(frame) / Double(frames)))
-                // The core never narrows past three cells, so the figure is a
-                // pair of strokes throughout and never collapses to a point.
-                let width = 1.1 + 1.4 * swell, amplitude = 0.55 + 0.45 * swell
-                return amplitude * exp(-pow(distance / width, 2))
+        func column(_ index: Int) -> [Double] {
+            // The logo's ladder across, and how far this column falls back
+            // between crests — the tall step much less far than the rest.
+            let level = 1 - 0.2 * Double(index), rest = index == 0 ? 0.40 : 0.06
+            return (0 ..< frames).map { frame in
+                let gap = Double(min(frame, frames - frame))   // the nearer way round
+                // `12` frames to fall to `1/e` -- a fifth of the loop, which is
+                // what makes the crest brief and the tail long -- and an
+                // exponent a little above `1` so the crest is rounded off
+                // rather than coming to a point.
+                return level * (rest + (1 - rest) * exp(-pow(gap / 12, 1.4)))
             }
         }
-        // The sixteen dark cells are stretched *with* the figure rather than
-        // set afterwards, which is what puts them at exactly `floor` while
-        // leaving the arms' tips well above them.
-        let all = stretched([arm(0), arm(1), arm(2), [0]], floor: floor)
-        return (Array(all[0 ..< 3]), all[3][0])
+        // The ten cells off the mark are stretched *with* the figure rather
+        // than set afterwards, which is what puts them at exactly `floor`
+        // while leaving even the shortest step above them.
+        let all = stretched((0 ..< MatrixGrid.side).map(column) + [[0]], floor: floor)
+        return (Array(all[0 ..< MatrixGrid.side]), all[MatrixGrid.side][0])
     }()
 
-    /// One cell's bloom track: how far it sits from the centre along its arm,
-    /// or the dark level if it is on neither arm.
+    /// One cell's terrace track: the column it stands in, or the dark level if
+    /// it is off the mark.
     ///
-    /// The centre belongs to both arms and is simply distance `0`.
-    static func bloomTrack(forCell index: Int) -> [Double] {
-        let middle = (MatrixGrid.side - 1) / 2
+    /// A cell's level depends only on its column, so a whole column draws one
+    /// curve unshifted and the pattern needs no offsets — as the bloom's arms
+    /// needed none.
+    static func terraceTrack(forCell index: Int) -> [Double] {
         let row = index / MatrixGrid.side, column = index % MatrixGrid.side
-        let onRow = row == middle, onColumn = column == middle
-        guard onRow || onColumn else { return [bloom.dark] }
-        let distance = onRow && onColumn ? 0
-            : onRow ? abs(column - middle) : abs(row - middle)
-        return bloom.arms[distance]
+        guard row + column <= MatrixGrid.side - 1 else { return [terrace.dark] }
+        return terrace.columns[column]
     }
 
     // MARK: Nothing running
@@ -1995,7 +2016,7 @@ extension NotchMatrixState {
         case .approvalNeeded:
             return MatrixTrack.doubleKnock
         case .completed:
-            return MatrixTrack.bloomTrack(forCell: index)
+            return MatrixTrack.terraceTrack(forCell: index)
         case .inactive:
             return [MatrixTrack.inactiveLevel]
         }

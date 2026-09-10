@@ -871,9 +871,9 @@ struct NotchlineTests {
 
     /// Each state draws the pattern the sheet draws.
     ///
-    /// Three of the four write one waveform at twenty-five offsets; the bloom
-    /// writes three, one per distance out along its arms, and needs no offsets
-    /// at all. The code holds the waveforms once and computes the rest, so what
+    /// Three of the four write one waveform at twenty-five offsets; the
+    /// terrace writes five, one per step of the logo's ladder, and needs no
+    /// offsets at all. The code holds the waveforms once and computes the rest, so what
     /// is computed is the half that can drift silently: a sign flipped on the
     /// loom's inner ring turns both gears the same way and still looks like a
     /// loom, and a glide whose columns lose their order still looks like
@@ -1004,50 +1004,66 @@ struct NotchlineTests {
             #expect(try values(cell) == knockTrack)
         }
 
-        // Bloom: 72 frames. The middle row and the middle column swell from a
-        // shared core to the full width of the grid and draw back in, together.
-        // A cell's track depends only on how far along its arm it sits, so
-        // there are three curves and no offsets at all.
-        let bloom = try cells(.completed)
-        let middle = (MatrixGrid.side - 1) / 2
-        func arm(_ index: Int) -> Int? {
+        // Terrace: 72 frames. The app's own mark, breathing — one connected
+        // mass hanging from the top edge with column heights 5 4 3 2 1, which
+        // is the cells where row + column <= 4. A cell's level depends only on
+        // its column, so there are five curves and no offsets at all.
+        let terrace = try cells(.completed)
+        /// The column a cell stands in, or `nil` if it is off the mark.
+        func step(_ index: Int) -> Int? {
             let row = index / MatrixGrid.side, column = index % MatrixGrid.side
-            let onRow = row == middle, onColumn = column == middle
-            guard onRow || onColumn else { return nil }
-            return onRow && onColumn ? 0 : onRow ? abs(column - middle) : abs(row - middle)
+            guard row + column <= MatrixGrid.side - 1 else { return nil }
+            return column
         }
-        // The three curves, read off the cells that carry them.
-        let arms = try (0 ... 2).map { d in
-            try values(bloom[bloom.indices.first { arm($0) == d }!])
+        // The five curves, read off the cells that carry them.
+        let steps = try (0 ..< MatrixGrid.side).map { column in
+            try values(terrace[terrace.indices.first { step($0) == column }!])
         }
-        for track in arms {
+        for track in steps {
             #expect(track.count == 73)
             #expect(track.first == track.last)
-            // The arms move together: every one crests on the opening frame.
+            // The steps move together: every one crests on the opening frame.
             #expect(track.firstIndex(of: try #require(track.max())) == 0)
         }
-        // The centre alone reaches full, and each step out along an arm is
-        // dimmer than the one inside it — which is what makes the figure a
-        // cross with a middle rather than five equal points.
-        #expect(close(try #require(arms[0].max()), 1))
-        #expect(close(try #require(arms[1].max()), 0.867, 5e-4))
-        #expect(close(try #require(arms[2].max()), 0.575, 5e-4))
-        #expect(arms[0].max()! > arms[1].max()! && arms[1].max()! > arms[2].max()!)
-        // Every cell of a given distance draws exactly the same curve.
-        for (index, cell) in bloom.enumerated() {
-            guard let distance = arm(index) else {
+        // **The crest frame is the logo.** Its ladder is 1.00 / .80 / .60 /
+        // .40 / .20, and the shared scale lifts the cells off the mark from `0`
+        // to the floor, which carries the ladder to exactly these five. This is
+        // the assertion that would catch the mark and the pattern drifting
+        // apart, so it is written out rather than derived.
+        #expect(zip(steps.map(\.first), [1.0, 0.82, 0.64, 0.46, 0.28])
+            .allSatisfy { close($0 ?? .nan, $1, 5e-4) })
+        // Each step out is dimmer than the one inside it, all the way down —
+        // which is what makes the figure a terrace rather than a triangle.
+        #expect(zip(steps, steps.dropFirst()).allSatisfy { $0.max()! > $1.max()! })
+        // Every cell of a given column draws exactly the same curve.
+        for (index, cell) in terrace.enumerated() {
+            guard let column = step(index) else {
                 #expect(cell.animation(forKey: "notch.matrix.opacity") == nil)
                 #expect(close(Double(cell.opacity), 0.10))
                 continue
             }
-            #expect(try values(cell) == arms[distance])
+            #expect(try values(cell) == steps[column])
         }
-        // Nine cells on the figure, sixteen dark: the cross is a whole row and
-        // a whole column, so nothing here is a lone cell.
-        #expect(bloom.indices.filter { arm($0) != nil }.count == 9)
-        // The core never narrows to a point — the centre stays well lit through
-        // the trough, so the mark keeps one silhouette the whole way round.
-        #expect(close(try #require(arms[0].min()), 0.595, 5e-4))
+        // Fifteen cells on the mark and ten dark, and the mark is one figure:
+        // every cell on it shares an edge with another, so nothing here is a
+        // lone cell and ``MatrixGrid``'s constraint holds with no exception.
+        #expect(terrace.indices.filter { step($0) != nil }.count == 15)
+        func isOnMark(row: Int, column: Int) -> Bool {
+            let side = 0 ..< MatrixGrid.side
+            guard side.contains(row), side.contains(column) else { return false }
+            return step(row * MatrixGrid.side + column) != nil
+        }
+        #expect(terrace.indices.filter { step($0) != nil }.allSatisfy { index in
+            let row = index / MatrixGrid.side, column = index % MatrixGrid.side
+            return isOnMark(row: row - 1, column: column)
+                || isOnMark(row: row + 1, column: column)
+                || isOnMark(row: row, column: column - 1)
+                || isOnMark(row: row, column: column + 1)
+        })
+        // The tall step is a pilot light and never goes out, so the mark keeps
+        // one silhouette the whole way round and no dim frame reads as a mark
+        // with nothing behind it.
+        #expect(close(try #require(steps[0].min()), 0.465, 5e-4))
 
         // Connected and disconnected: a still, at the level three of the four
         // patterns now floor at. That shared floor is why the old argument —
@@ -1087,10 +1103,10 @@ struct NotchlineTests {
         // darker on the bar without any pattern's shape changing,
         // so the same cell value means the same thing across all of them. This
         // is what makes the ceiling useless as a loudness lever, and it is why
-        // the glide and the bloom had to buy quiet with lit area and dwell
+        // the glide and the terrace had to buy quiet with lit area and dwell
         // instead. The knock is the standing exception and keeps its own
         // darker silence, asserted separately below.
-        for (name, mark) in [("loom", loom), ("glide", glide), ("bloom", bloom)] {
+        for (name, mark) in [("loom", loom), ("glide", glide), ("terrace", terrace)] {
             var levels: [Double] = []
             for cell in mark {
                 if cell.animation(forKey: "notch.matrix.opacity") == nil {
@@ -1104,7 +1120,7 @@ struct NotchlineTests {
         }
 
         #expect(try dimmestMark(glide) > resting)
-        #expect(try dimmestMark(bloom) > resting)
+        #expect(try dimmestMark(terrace) > resting)
         // And the one ordering that still has to hold on the level alone: a
         // mark waiting on a decision is darker in its silence than a mark with
         // nothing behind it, which is half of how Approval asks.

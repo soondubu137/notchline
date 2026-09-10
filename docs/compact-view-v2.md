@@ -39,7 +39,7 @@ Approval needed > Input needed > Running > Completed
 
 This is [`figma-design.md`](figma-design.md) §5.2's sort, deliberately, so the mark and the panel's first row can never disagree about what is most urgent. It is *not* `SessionStatus.transitioned`'s within-row rule, where an approval yields to an input ([`tech-design.md`](tech-design.md) §6.2); that governs one row's own status, this governs which row is first.
 
-The four animated patterns — Loom, Glide, Double Knock, Bloom (~~Wedge~~/~~Step~~ and ~~Bars~~/~~Quincunx~~ before them) — carry the whole state reading alone. **This is the one channel V2 does not touch**, though the patterns themselves have since been redrawn for the 5×5 grid ([`figma-design.md`](figma-design.md) §4.1); what V2 leaves alone is the channel, not the drawings.
+The four animated patterns — Loom, Glide, Double Knock, Terrace (~~Wedge~~/~~Step~~ and ~~Bars~~/~~Quincunx~~/~~Bloom~~ before them) — carry the whole state reading alone. **This is the one channel V2 does not touch**, though the patterns themselves have since been redrawn for the 5×5 grid ([`figma-design.md`](figma-design.md) §4.1); what V2 leaves alone is the channel, not the drawings.
 
 ### 2.2 Hue is no longer identity
 
