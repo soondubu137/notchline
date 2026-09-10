@@ -538,6 +538,122 @@ struct OverlayGeometryTests {
         )
     }
 
+    /// **One mark at one distance, on both surfaces.**
+    ///
+    /// The bar's finished-turn dot and a row's are the same `4` pt in the same
+    /// ink in front of the same `13` pt Light reading — `compact-view-v2.md`
+    /// §4.3 says so in as many words — and the row's was standing `4` nearer
+    /// its digits than the bar's.
+    ///
+    /// The reason is that the gap is a **drawn** distance made of two
+    /// laid-out ones. The wing spends ``PanelMetrics/buriedFinishDotSpacing``
+    /// and then stands its reading on a `.clear` ``ReadingGround`` it keeps
+    /// permanently for the width it bills, so that ground's padding is part of
+    /// the gap a person sees. A row's reading usually has no ground, and the
+    /// `8` was therefore the whole of it.
+    ///
+    /// So both surfaces are measured, and against each other rather than
+    /// against a shared constant: two numbers agreeing with one metric is not
+    /// the same as their agreeing with each other, and it was the metric that
+    /// was too small. The wing is read off its own laid-out views; the row's
+    /// dot is a SwiftUI shape with no view to ask, so it is read off the
+    /// drawing — the digits are an ``ElapsedReadoutView`` on both, so the box
+    /// the layout gives them is the same measurement in both places.
+    @Test @MainActor
+    func theFinishedDotStandsOffTheDigitsByTheSameGapOnBarAndRow() throws {
+        let started = Date(timeIntervalSince1970: 1_000)
+        let session = MonitoredSession(
+            agent: .codex,
+            threadID: "a", turnID: "u", projectName: "p", title: "t",
+            preview: nil, status: .completed,
+            startedAt: started, finishedAt: started.addingTimeInterval(83)
+        )
+        let store = MonitorStore(services: [], preferences: nil)
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .codex, availability: .ready, sessions: [session],
+                quota: .unavailable, diagnostic: nil, setupStatus: .active,
+                presence: .open
+            )
+        )
+        // Nothing is running, so the wing's reading is this turn's own frozen
+        // figure and the dot is drawn in front of it -- the same turn, the same
+        // digits and the same mark the row below draws.
+        #expect(store.compactTrailingReading.timerText == "1:23")
+        #expect(store.compactTrailingReading.drawsFinishedDot)
+
+        // The bar. Both parts are views of their own here, so no bitmap is
+        // needed: the dot is layer-backed and the digits are a raster in a
+        // layer, and what is being measured is where the layout put them.
+        let wing = NSHostingView(
+            rootView: CompactTrailingSlot().environmentObject(store)
+        )
+        wing.frame = NSRect(origin: .zero, size: wing.fittingSize)
+        wing.layoutSubtreeIfNeeded()
+        let wingDot = try #require(firstDescendant(BreathingDotView.self, in: wing))
+        let wingDigits = try #require(firstDescendant(ElapsedReadoutView.self, in: wing))
+        let wingGap = wingDigits.convert(wingDigits.bounds, to: wing).minX
+            - wingDot.convert(wingDot.bounds, to: wing).maxX
+        #expect(
+            abs(wingGap - PanelMetrics.drawnFinishDotGap) < 0.01,
+            "the wing draws its dot \(wingGap) pt off the digits"
+        )
+
+        // The row, at the width the panel gives its list.
+        let width = PanelMetrics.sessionViewportWidth(
+            panelWidth: store.currentPanelSize.width
+        )
+        let height = PanelMetrics.sessionRowHeight
+        let row = NSHostingView(
+            rootView: SessionRowContent(session: session, isHovered: false)
+                .environmentObject(store)
+                .background(Color.black)
+                .frame(width: width, height: height)
+        )
+        row.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        row.appearance = NSAppearance(named: .darkAqua)
+        row.layoutSubtreeIfNeeded()
+
+        let rowDigits = try #require(firstDescendant(ElapsedReadoutView.self, in: row))
+        let digitsBox = rowDigits.convert(rowDigits.bounds, to: row)
+
+        let rep = try #require(row.bitmapImageRepForCachingDisplay(in: row.bounds))
+        row.cacheDisplay(in: row.bounds, to: rep)
+        let across = CGFloat(rep.pixelsWide) / row.bounds.width
+        // The only ink in front of the digits is the dot: the row's own text
+        // is the leading column and stops a long way short of here.
+        var weight: CGFloat = 0
+        var moment: CGFloat = 0
+        var lit = 0
+        for column in 0..<rep.pixelsWide {
+            let x = (CGFloat(column) + 0.5) / across
+            guard x > digitsBox.minX - 24, x < digitsBox.minX else { continue }
+            var peak: CGFloat = 0
+            for pixel in 0..<rep.pixelsHigh {
+                peak = max(
+                    peak,
+                    rep.colorAt(x: column, y: pixel)?
+                        .usingColorSpace(.deviceRGB)?
+                        .brightnessComponent ?? 0
+                )
+            }
+            guard peak > 0.3 else { continue }
+            lit += 1
+            weight += peak
+            moment += peak * x
+        }
+        #expect(lit > 0, "the row drew no dot in front of its reading")
+        // Its centre, weighted, so a soft edge on one side cannot move it: a
+        // filled circle's column profile is symmetric about the middle of the
+        // 4 pt box the layout gave it.
+        let centre = moment / max(weight, 0.000_1)
+        let rowGap = digitsBox.minX - (centre + PanelMetrics.buriedFinishDotSize / 2)
+        #expect(
+            abs(rowGap - wingGap) < 0.75,
+            "the row stands its dot \(rowGap) pt off the digits and the bar \(wingGap)"
+        )
+    }
+
     /// **One product is drawn as one block, not as a list of its own**
     /// (2026-09-09).
     ///
@@ -736,4 +852,14 @@ struct OverlayGeometryTests {
             "the About panel's content runs into its bottom margin"
         )
     }
+}
+
+/// The first view of a kind in a hosted tree, wherever SwiftUI put it.
+@MainActor
+private func firstDescendant<V: NSView>(_ kind: V.Type, in view: NSView) -> V? {
+    if let found = view as? V { return found }
+    for child in view.subviews {
+        if let found = firstDescendant(kind, in: child) { return found }
+    }
+    return nil
 }

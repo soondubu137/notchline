@@ -559,7 +559,7 @@ private struct CompactLeadingGroup: View {
 /// saying how many were in flight, and that count is now the leading wing's
 /// second numeral — aggregate, untinted, and inside the room the mark already
 /// had (`compact-view-v2.md` §3).
-private struct CompactTrailingSlot: View {
+struct CompactTrailingSlot: View {
     @EnvironmentObject private var store: MonitorStore
 
     /// The box the panel edge opens, held rather than computed so the write
@@ -3795,13 +3795,14 @@ private struct SessionStatusControl: View {
             tint: tint,
             weight: weight
         )
-        HStack(spacing: PanelMetrics.buriedFinishDotSpacing) {
+        HStack(spacing: 0) {
             if stoppedAt != nil {
                 // **Still, where the notch's breathes.** A collapsed bar is
                 // glanced at and has one line to say everything on; an open
                 // panel is being read, and a dot pulsing once per row would be
                 // the list moving under somebody scanning it (`AGENTS.md` §7).
                 FinishedTurnDot(breathes: false)
+                    .padding(.trailing, dotGap)
             }
             if let fill = groundFill {
                 ReadingGround(fill: fill) { readout }
@@ -3809,6 +3810,27 @@ private struct SessionStatusControl: View {
                 readout
             }
         }
+    }
+
+    /// How far the dot stands off the digits, which is a **drawn** distance
+    /// and therefore not always the same laid-out one.
+    ///
+    /// The collapsed wing spends ``PanelMetrics/buriedFinishDotSpacing`` and
+    /// then puts its reading on a ``ReadingGround`` it keeps permanently, for
+    /// the width it bills — so the gap a person reads up there is that spacing
+    /// plus the ground's own padding. Most rows have no ground (see
+    /// ``groundFill``), and a bare reading that spent only the spacing would
+    /// put the same mark `4` nearer the same digits on the panel than on the
+    /// bar. So a row with no ground pays the padding here instead, and the
+    /// mark is the same mark at the same distance on both surfaces
+    /// (`compact-view-v2.md` §4.3).
+    ///
+    /// The row's digits do not move for it: the slot is trailing-anchored, so
+    /// what the extra `4` moves is the dot.
+    private var dotGap: CGFloat {
+        groundFill == nil
+            ? PanelMetrics.drawnFinishDotGap
+            : PanelMetrics.buriedFinishDotSpacing
     }
 
     /// The ground under the reading, or nil on the states that have none.

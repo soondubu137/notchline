@@ -1303,11 +1303,32 @@ enum PanelMetrics {
     /// cannot feel anything the trailing side does
     /// (`theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove`).
     ///
-    /// **The same two figures place a row's dot**, which is not a second
+    /// ~~**The same two figures place a row's dot**, which is not a second
     /// decision: a row's reading is the same `13` pt Light the wing's is, so
-    /// the mark in front of it is the same mark at the same distance.
+    /// the mark in front of it is the same mark at the same distance.~~
+    ///
+    /// **The same two figures, and a row has to spend a third to reach them**
+    /// (2026-09-09). This `8` is what the wing *lays out*; what it *draws* is
+    /// that `8` and then the ``readingGroundPadding`` of the `.clear`
+    /// ``ReadingGround`` its reading never leaves — so the mark stands `12`
+    /// off the first digit up there. A row whose reading has no ground to
+    /// carry that padding has to carry it itself, or the same mark stands `4`
+    /// nearer the same digits on the panel than on the bar. See
+    /// ``drawnFinishDotGap``: one decision, still, and the same distance on
+    /// both surfaces.
     static let buriedFinishDotSize: CGFloat = 4
     static let buriedFinishDotSpacing: CGFloat = 8
+    /// What a person sees between the dot and the first digit, as against the
+    /// ``buriedFinishDotSpacing`` the layout is billed for.
+    ///
+    /// The difference is the ground: every surface that gives its reading one
+    /// — including the collapsed wing, whose ground is `.clear` and kept for
+    /// the width it bills — stands the digits ``readingGroundPadding`` inside
+    /// it. This is that distance named, for the one surface that has to add it
+    /// by hand.
+    static var drawnFinishDotGap: CGFloat {
+        buriedFinishDotSpacing + readingGroundPadding
+    }
     /// What the dot costs a wing that is also drawing a reading.
     static var buriedFinishSlotWidth: CGFloat {
         buriedFinishDotSize + buriedFinishDotSpacing

@@ -14,6 +14,7 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 ### Fixed
 
 - **A read Codex thread leaves the notch again.** Codex Desktop `26.903.61454` moved its blue-dot set out of the renderer's atom map into a top-level `electron-thread-read-state-v1`, keyed by account identity above host, and deleted the key this app read. Every reading came back unreadable, and an unreadable reading may retire nothing — so a Completed Codex row stayed listed however thoroughly it had been read. Both shapes are read now. (`docs/adr/0002-use-desktop-unread-state-for-monitor-membership.md`.)
+- **The finished-turn dot stands off a row's digits as far as it does the bar's.** It is one mark drawn twice, and the row's sat `4` nearer its reading. The collapsed wing spends `8` and then the `4` of padding inside the `.clear` ground its reading never leaves; a row's reading has no ground on most states, so the `8` was the whole gap. A row without one pays that padding itself now, and its digits do not move for it. (`docs/compact-view-v2.md` §4.3.)
 
 ## 0.2.4 Alpha — 2026-09-09
 
