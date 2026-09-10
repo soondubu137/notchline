@@ -495,18 +495,19 @@ struct NotchlineTests {
 
         // **The list is grouped, so a row's place is decided by its block.**
         // Three Codex rows and one of Claude Code's is the leading heading,
-        // the cap, and the second heading -- the grouped viewport exactly --
-        // which is what puts both headings on the figure with three rows
-        // between them, and the fourth row under the rail rather than under
-        // the fold with nothing to say it is there.
+        // three rows, the second heading and its row -- `336`, past the
+        // grouped cap's *trail, four rows, trail* -- so the figure is drawn at
+        // the cap with both headings on it and the fourth row's top showing
+        // under the second, which is what says it is there.
         let blocks = hovered.sessionGroups
         #expect(blocks.map(\.agent) == [.codex, .claudeCode])
         #expect(blocks.map(\.sessions.count) == [3, 1])
         #expect(
-            hovered.sessionViewportHeight
+            hovered.sessionListContentHeight
                 == PanelMetrics.groupHeadingsHeight(count: 2)
-                    + PanelMetrics.sessionRowHeight * 3
+                    + PanelMetrics.sessionRowHeight * 4
         )
+        #expect(hovered.sessionViewportHeight == PanelMetrics.groupedSessionViewportCap)
         // The first block is stopped on the approval the whole drawing is of,
         // so its count is drawn lit -- the one thing a heading says beyond its
         // own name.
@@ -3106,18 +3107,24 @@ struct NotchlineTests {
         #expect(PanelMetrics.retiredRowHeight == 36)
         #expect(PanelMetrics.recentSeamHeight == 32)
         #expect(PanelMetrics.thinExpandedBodyHeight == 48)
-        #expect(PanelMetrics.sessionViewportCap == 216)
+        #expect(PanelMetrics.sessionViewportCap == 288)
+        #expect(PanelMetrics.groupedSessionViewportCap == 320)
         #expect(PanelMetrics.recentViewportCap == 180)
 
         // The live list: an empty list still draws its own apology, and
-        // three rows — the cap over `72` pt rows — is where the fold falls.
+        // four rows — the cap over `72` pt rows — is where the fold falls.
+        // **Four since the trails** (`expanded-panel-v2.md` §4.6): the
+        // grouped cap is a badge line, four rows and a badge line, and the
+        // flat list shows the same four so that the switch never changes how
+        // many rows are on screen.
         let liveCases: [(live: Int, content: CGFloat, viewport: CGFloat, what: String)] = [
             (0, 48, 48, "nothing live"),
             (1, 72, 72, "one live row"),
             (2, 144, 144, "two live rows"),
-            (3, 216, 216, "three live rows — the cap exactly"),
-            (4, 288, 216, "four live rows"),
-            (12, 864, 216, "twelve live rows"),
+            (3, 216, 216, "three live rows"),
+            (4, 288, 288, "four live rows — the cap exactly"),
+            (5, 360, 288, "five live rows"),
+            (12, 864, 288, "twelve live rows"),
         ]
         for row in liveCases {
             #expect(
@@ -4306,13 +4313,15 @@ struct NotchlineTests {
 
     /// A heading is chrome, and is never paid for out of rows.
     ///
-    /// The cap is three rows plus every heading drawn — the leading one short
-    /// (``PanelMetrics/leadingProductGroupHeaderHeight``) and the rest whole —
-    /// so a grouped list shows the three rows an ungrouped one shows and
-    /// scrolls in the same place. Holding the cap flat instead was the
-    /// alternative, and it is what this pins against: `16 + 72 + 32 + 72`
-    /// leaves two rows visible, which is a third of what the panel is for
-    /// spent on chrome.
+    /// ~~The cap is three rows plus every heading drawn.~~ **The cap is a badge
+    /// line, four rows and a badge line — `320` — at every product count**
+    /// (`expanded-panel-v2.md` §4.6): every heading is on screen at every
+    /// offset, on one of those two lines or in the flow, so the chrome is two
+    /// lines whatever the list holds, and the rows between them are four whole
+    /// rows whether the list is one block or two. What this pinned against is
+    /// unchanged in kind — a cap held flat while a bar per block came out of
+    /// the rows, `16 + 72 + 32 + 72` leaving two rows visible — and it now
+    /// pins the shape that replaced billing per block.
     ///
     /// **The apology is exempt**, because there is no block to head: with
     /// nothing live the list is `48` whatever is connected.
@@ -4326,31 +4335,33 @@ struct NotchlineTests {
                 preview: nil, status: .running, startedAt: nil
             )
         }
+        let lines = PanelMetrics.productTrailHeight * 2
 
-        // One product, which is one block: the three rows plus the short
-        // heading over them. **This used to be the ungrouped panel, three rows
-        // and nothing above them** — the arithmetic below is the same rule
-        // applied to a count of one rather than a second rule (2026-09-09).
+        // One product, which is one block, with more list than the cap: the
+        // short heading and five rows.
         store.applyForTesting(
             makeAgentSnapshot(
                 .codex, availability: .ready,
-                sessions: [session(.codex, "a"), session(.codex, "b"), session(.codex, "c")]
+                sessions: ["a", "b", "c", "d", "e"].map { session(.codex, $0) }
             )
         )
         let leading = PanelMetrics.groupHeadingsHeight(count: 1)
         #expect(leading == PanelMetrics.leadingProductGroupHeaderHeight)
         #expect(store.sessionGroupHeaderCount == 1)
-        #expect(store.sessionViewportHeight == PanelMetrics.sessionViewportCap + leading)
         #expect(
-            store.sessionListContentHeight == PanelMetrics.sessionRowHeight * 3 + leading
+            store.sessionListContentHeight == PanelMetrics.sessionRowHeight * 5 + leading
         )
+        #expect(store.sessionViewportHeight == PanelMetrics.groupedSessionViewportCap)
+        // Four whole rows between the two lines.
+        #expect(store.sessionViewportHeight - lines == PanelMetrics.sessionRowHeight * 4)
 
-        // Two, and the viewport grows by exactly the two headings -- so three
-        // rows are still drawn whole rather than two and a fraction.
+        // Two, and the viewport does not move: the second heading is not
+        // billed, it waits on the foot line, and the rows between the lines
+        // are still four whole ones rather than three and a fraction.
         store.applyForTesting(
             makeAgentSnapshot(
                 .claudeCode, availability: .ready,
-                sessions: [session(.claudeCode, "d"), session(.claudeCode, "e")]
+                sessions: [session(.claudeCode, "f"), session(.claudeCode, "g")]
             )
         )
         // The leading block's heading is the short one -- it stands in for
@@ -4361,15 +4372,22 @@ struct NotchlineTests {
                 + PanelMetrics.productGroupHeaderHeight
         )
         #expect(store.sessionGroupHeaderCount == 2)
-        #expect(store.sessionViewportHeight == PanelMetrics.sessionViewportCap + room)
+        #expect(store.sessionViewportHeight == PanelMetrics.groupedSessionViewportCap)
         #expect(
-            store.sessionViewportHeight - room >= PanelMetrics.sessionRowHeight * 3,
+            store.sessionViewportHeight - lines >= PanelMetrics.sessionRowHeight * 4,
             "a grouped list draws fewer rows than a flat one"
         )
         #expect(
             store.sessionListContentHeight
-                == PanelMetrics.sessionRowHeight * 5 + room
+                == PanelMetrics.sessionRowHeight * 7 + room
         )
+
+        // And the flat list -- the same rows, no lines at all -- shows the same
+        // four, so the switch never changes how many rows are on screen.
+        store.groupsSessionsByProduct = false
+        #expect(store.sessionViewportHeight == PanelMetrics.sessionViewportCap)
+        #expect(store.sessionViewportHeight == PanelMetrics.sessionRowHeight * 4)
+        store.groupsSessionsByProduct = true
 
         // Nothing live: no block, so no heading, and the apology stands at the
         // height it has always stood at.
@@ -10876,7 +10894,7 @@ struct NotchlineTests {
     }
 
     @Test @MainActor
-    func expandedMonitorHeightFitsUpToThreeVisibleSessions() {
+    func expandedMonitorHeightFitsUpToFourVisibleSessions() {
         let display = makeDisplay(
             id: "notched",
             ordinal: 1,
@@ -10886,7 +10904,7 @@ struct NotchlineTests {
         let store = MonitorStore(displays: [display])
         store.isExpanded = true
 
-        for sessionCount in 1 ... 4 {
+        for sessionCount in 1 ... 6 {
             let sessions = (0..<sessionCount).map { index in
                 MonitoredSession(
                     threadID: "thread-\(index)",
@@ -10907,22 +10925,28 @@ struct NotchlineTests {
                 )
             )
 
-            // **The `3` is written here rather than read from
-            // `PanelMetrics`**, and that is the point of the assertion: three
-            // live rows is no longer a constant the code owns but a
-            // consequence of a `240` viewport over `80` pt rows
-            // (`expanded-panel-v2.md` §2.1). A test that asked the metric for
-            // the number would agree with any answer it gave.
-            let visibleSessionCount = min(sessionCount, 3)
+            // **The `4` is written here rather than read from
+            // `PanelMetrics`**, and that is the point of the assertion: four
+            // live rows is not a constant the code owns but a consequence of
+            // the viewport's cap over `72` pt rows — three under the `216`
+            // cap, four since the trails made it a badge line, four rows and
+            // a badge line (`expanded-panel-v2.md` §4.6). A test that asked
+            // the metric for the number would agree with any answer it gave.
+            let visibleSessionCount = min(sessionCount, 4)
             // Plus the one block's heading, which every live list has carried
             // since 2026-09-09 — one product is the general list with one
             // block in it. `groupHeadingsHeight` is asked for the same reason
-            // the `3` above is written out: the count is the claim, and the
-            // shape of a heading is not what this test is about.
-            let expectedContentHeight = CGFloat(visibleSessionCount)
-                * PanelMetrics.sessionRowHeight
-                + PanelMetrics.groupHeadingsHeight(count: 1)
-                + store.expandedFooterHeight
+            // the `4` above is written out: the count is the claim, and the
+            // shape of a heading is not what this test is about. **Past four
+            // rows the list is at its cap**, which is that heading's line,
+            // the four rows, and the foot line the next block would wait on —
+            // so the fifth row shows its top under the fourth, and the panel
+            // stops growing.
+            let list = sessionCount <= 4
+                ? CGFloat(visibleSessionCount) * PanelMetrics.sessionRowHeight
+                    + PanelMetrics.groupHeadingsHeight(count: 1)
+                : PanelMetrics.groupedSessionViewportCap
+            let expectedContentHeight = list + store.expandedFooterHeight
             #expect(store.expandedContentHeight == expectedContentHeight)
             #expect(
                 store.currentPanelSize.height
@@ -28145,12 +28169,14 @@ for line in sys.stdin:
                 == PanelMetrics.sessionViewportCap
         )
         // Asking for more than the cap gets the cap, and the row is the viewport.
-        #expect(PanelMetrics.openRowHeight(bodyHeight: 10_000) == 216)
+        #expect(PanelMetrics.openRowHeight(bodyHeight: 10_000) == 288)
         // The fixed part is everything but the body: `8.5 + 16 + 2 + 17 + 2`
         // above and `10 + 28 + 8.5` below -- the two insets being the closed
         // row's own, so that opening a row does not move its head.
         #expect(PanelMetrics.openRowFixedHeight == 92)
-        #expect(PanelMetrics.requestBodyMaximumHeight == 124)
+        // `196` since the viewport became four rows; `124` at three, and
+        // `140` before a row's air came down.
+        #expect(PanelMetrics.requestBodyMaximumHeight == 196)
         // And a one-line question is the shortest row that can be opened.
         #expect(PanelMetrics.openRowHeight(bodyHeight: 17) == 109)
     }

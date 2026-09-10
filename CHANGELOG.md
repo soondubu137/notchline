@@ -6,7 +6,14 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ## Unreleased
 
+### Added
+
+- **Every product's heading stays on screen while the list scrolls.** The block you are in holds the line under the notch, the blocks you have passed stand beside its badge as dimmed names, and the blocks still to come wait on the viewport's last line as names alone — the same badge, with no count and no rule. A heading slides into its place beside the last one as it arrives and lifts straight off the foot as its rows come up, all of it driven by the offset so scrolling back plays it in reverse. Every badge on either line scrolls its block to the top when clicked, and a block holding a row that wants a person flips its badge bright instead of dimming. (`docs/expanded-panel-v2.md` §4.6.)
+- **`Group by product` is a switch.** Settings, the Display card. Off, the live list is one list in order of urgency with a badge on every row, under the panel's own top rule, as it was before grouping. The Recent queue is one list either way. Default on.
+
 ### Changed
+
+- **The live list shows four rows, not three.** The grouped viewport is a badge line, four rows and a badge line — `320` — at every product count, where it was three rows plus a whole bar per block; the flat list shows the same four at `288`, so the switch never changes how many rows are on screen. An approval's body, which is the viewport less the row's fixed parts, follows to `196`. (`docs/expanded-panel-v2.md` §4.6.)
 
 - **The Completed mark is the app's own logo.** The Terrace is drawn on this same 5×5 grid — a mass hanging from the top edge, columns `5 4 3 2 1` — so the crest frame is the mark itself, breathing once every `2.4 s` with its tall step held lit between crests. It replaces the bloom's cross. Fifteen lit cells against nine costs mean level, bought back in time at white. (`docs/figma-design.md` §4.1.)
 - **One connected product is drawn like two.** A single product had a panel of its own: a flat list, a badge on each row, no heading and the panel's own top rule, all of it rebuilt the moment a second connected. There is one form now: one block per product at every count, its heading naming every row under it, the queue and an open row keeping their own badge. The panel is `316` where it was `300`. (`docs/expanded-panel-v2.md` §4.3.)

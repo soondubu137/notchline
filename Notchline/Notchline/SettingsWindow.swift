@@ -176,6 +176,40 @@ struct AppSettingsView: View {
             SettingsSeparator()
 
             outlineRow
+
+            SettingsSeparator()
+
+            groupByProductRow
+        }
+    }
+
+    /// One block per product on the live list, or one list.
+    ///
+    /// Beside `Outline the panel` because it is the same kind of preference —
+    /// what the surface draws, decided by the person looking at it — and it
+    /// needs nothing of the display. On, each product's rows stand under a
+    /// heading that names them once, and every heading stays on screen
+    /// however far the list is scrolled (`expanded-panel-v2.md` §4.6). Off,
+    /// the rows keep one order across products and each names its product
+    /// with its own badge. Either way the Recent queue is one list, and
+    /// either way the viewport shows four rows.
+    private var groupByProductRow: some View {
+        SettingsRow(
+            title: "Group by product",
+            caption: "One block per product, each headed by its badge. "
+                + "Off, one list, with a badge on every row."
+        ) {
+            Toggle("Group by product", isOn: $store.groupsSessionsByProduct)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .help(
+                    "Stands each product's sessions under a heading that names "
+                        + "them once, and keeps every heading on screen while "
+                        + "the list scrolls — the block you are in at the top, "
+                        + "the ones you have passed beside it, the ones still "
+                        + "to come at the foot. Off, the list is one list in "
+                        + "order of urgency, and every row carries its own badge."
+                )
         }
     }
 

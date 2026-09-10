@@ -1633,3 +1633,168 @@ nonisolated struct ShareReading: Equatable, Sendable {
             : "\(figure) left"
     }
 }
+
+// MARK: - Where the headings stand
+
+/// Where every block heading of the grouped live list stands at one scroll
+/// offset — in the flow, docked on the top strip, or waiting on the foot line
+/// (`expanded-panel-v2.md` §4.6).
+///
+/// **A function of the offset and of nothing else.** There is no animation
+/// here and no state: scrolling back plays every motion in reverse because
+/// the same offset always gives the same drawing. The view asks this once per
+/// scroll change and draws what it is told; the tests ask it directly.
+///
+/// Three positions, and a heading is always in exactly one, or between two:
+///
+/// - **In the flow** — where the list's own geometry puts it: its slack, its
+///   chip, its count and its rule, scrolling with the rows.
+/// - **On the top strip** — the one `16` pt line under the band. The block
+///   you are in holds it with its chip at `0` and its rule under it, and the
+///   blocks you have passed stand beside that chip in register order, names
+///   only, at ``PanelMetrics/productTrailBadgeOpacity``. A heading *docks*
+///   over ``PanelMetrics/productTrailDockingDistance`` of travel: it slides
+///   right into its slot faster than it rises — `x` on a cubic ease-out, `y`
+///   following the flow — so it never crosses the badge already there, and
+///   the count and rule of the heading it replaces fade over the same travel.
+/// - **On the foot line** — the viewport's last `16`, where the blocks still
+///   to come wait as names alone, nearest first. The next block's badge is
+///   always first on that line, so its slot is the flow's own `x`: it *lifts*
+///   straight up at that `x` while its count and rule fade in, and the badges
+///   behind it slide left to close the gap on the same ease.
+///
+/// A list that fits its viewport pins nothing: every position here is then
+/// the flow position, and the drawing is the one the list has always made.
+struct ProductTrailLayout: Equatable, Sendable {
+    struct Heading: Equatable, Sendable {
+        let agent: AgentKind
+        /// The chip's top-left corner, in the viewport's coordinates.
+        let x: CGFloat
+        let y: CGFloat
+        /// How much of the count and the rule is drawn: `1` in the flow, `0`
+        /// on either trail, and between the two while docking or lifting.
+        let tail: CGFloat
+        /// How far onto a trail this heading is: `0` in the flow, `1` when it
+        /// is a name on the top strip or the foot line. What a badge dims by,
+        /// or — for a block that wants a person — flips by.
+        let trailed: CGFloat
+        /// Where this heading's chip stands in the list's own flow, which is
+        /// the offset a click on its badge scrolls to.
+        let flowChip: CGFloat
+
+        var isOnTrail: Bool { trailed >= 1 }
+    }
+
+    let headings: [Heading]
+    /// Whether the list is taller than its viewport at all. Nothing is pinned
+    /// otherwise, and the top strip's ground is not drawn.
+    let scrolls: Bool
+    /// Whether any block is waiting on the foot line — which is when the foot
+    /// draws its ground and the fade above it.
+    let drawsFootLine: Bool
+
+    var drawsTopStrip: Bool { scrolls }
+
+    /// The one easing on this surface: fast out of the slot, settling into it.
+    ///
+    /// A straight glide from under one badge to beside it crosses that badge
+    /// for the middle third of the travel; `x` on this curve is `87.5%` home at
+    /// half the travel, which clears a chip of any name before `y` has brought
+    /// the two within a chip's height of each other.
+    nonisolated static func ease(_ t: CGFloat) -> CGFloat {
+        1 - pow(1 - t, 3)
+    }
+
+    /// Lay the headings out for one offset.
+    ///
+    /// - Parameters:
+    ///   - groups: The blocks, in the order the list draws them.
+    ///   - badgeWidths: How wide each block's badge draws, one per group —
+    ///     ``PanelMetrics/productBadgeWidth(_:)``, measured off the name.
+    ///   - offset: The scroll view's content offset.
+    ///   - viewportHeight: What the list is drawn in.
+    ///   - contentHeight: What the list asks for.
+    nonisolated static func laidOut(
+        groups: [MonitorAggregation.SessionGroup],
+        badgeWidths: [CGFloat],
+        offset: CGFloat,
+        viewportHeight: CGFloat,
+        contentHeight: CGFloat
+    ) -> ProductTrailLayout {
+        let count = groups.count
+        guard count > 0, badgeWidths.count == count else {
+            return ProductTrailLayout(headings: [], scrolls: false, drawsFootLine: false)
+        }
+        let dock = PanelMetrics.productTrailDockingDistance
+        let line = PanelMetrics.productTrailHeight
+        let slack = PanelMetrics.productGroupHeaderSlack
+        let inset = PanelMetrics.sessionRowPadding
+        let gap = PanelMetrics.productBadgePadding
+        let footLine = viewportHeight - line
+        // A hair of tolerance: a list exactly as tall as its viewport does not
+        // scroll, and floating arithmetic should not be what decides that.
+        let scrolls = contentHeight > viewportHeight + 0.5
+        func clamp(_ value: CGFloat, _ low: CGFloat = 0, _ high: CGFloat = 1) -> CGFloat {
+            min(max(value, low), high)
+        }
+
+        // The flow: the first heading is its chip alone, every other one its
+        // slack and then its chip, and a block's rows follow its chip.
+        var flowChips: [CGFloat] = []
+        var y: CGFloat = 0
+        for (index, group) in groups.enumerated() {
+            if index > 0 { y += slack }
+            flowChips.append(y)
+            y += line
+            y += CGFloat(group.sessions.count) * PanelMetrics.sessionRowHeight
+        }
+        let chips = flowChips.map { $0 - offset }
+
+        // How far each heading has docked onto the top strip, and how far it
+        // sits on the foot line. The first heading is the top strip's from the
+        // start; the two can never both be under way for one heading, because
+        // the viewport is taller than twice the docking distance.
+        let docked: [CGFloat] = (0..<count).map { index in
+            index == 0 ? 1 : (scrolls ? clamp((dock - chips[index]) / dock) : 0)
+        }
+        let grounded: [CGFloat] = (0..<count).map { index in
+            index == 0 || !scrolls ? 0 : clamp((chips[index] - (footLine - dock)) / dock)
+        }
+
+        var topX = inset
+        var footX = inset
+        var anyOnFoot = false
+        let headings: [Heading] = (0..<count).map { index in
+            let next = index + 1 < count ? docked[index + 1] : 0
+            let onFoot = grounded[index]
+            var x = inset
+            var chipY = index == 0 ? 0 : clamp(chips[index], 0, footLine)
+            if docked[index] > 0 {
+                if index > 0 {
+                    x = inset + (topX - inset) * ease(docked[index])
+                } else {
+                    chipY = 0
+                }
+                if docked[index] >= 1 { topX += badgeWidths[index] + gap }
+            } else if onFoot > 0 {
+                x = footX
+                footX += (badgeWidths[index] + gap) * ease(onFoot)
+                anyOnFoot = true
+            }
+            return Heading(
+                agent: groups[index].agent,
+                x: x,
+                y: chipY,
+                tail: (1 - next) * (1 - onFoot),
+                trailed: max(next, onFoot),
+                flowChip: flowChips[index]
+            )
+        }
+
+        return ProductTrailLayout(
+            headings: headings,
+            scrolls: scrolls,
+            drawsFootLine: anyOnFoot
+        )
+    }
+}

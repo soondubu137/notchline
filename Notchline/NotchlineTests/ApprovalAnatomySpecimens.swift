@@ -30,8 +30,8 @@ enum ApprovalSpecimens {
             id: "anatomy-command",
             toolName: "Bash",
             form: .command("npm run build -- --profile"),
-            // Two fields, because a third takes the body past
-            // `requestBodyMaximumHeight`'s `140` and the row starts scrolling —
+            // Two fields, because a third took the body past
+            // `requestBodyMaximumHeight` (`140` then) and the row starts scrolling —
             // which is what the product should do and not what a picture of it
             // should show, with the last argument cut off mid-label.
             argumentFields: [

@@ -381,17 +381,64 @@ enum PanelMetrics {
     /// under a plain SwiftUI gradient. Written apart they would drift, and the
     /// two are three points from each other on the same panel.
     static let rowTrailingFadeWidth: CGFloat = 48
-    /// The tallest the *live* session viewport is ever drawn.
+    /// The tallest the *live* session viewport is ever drawn, ungrouped.
     ///
-    /// **A height rather than a row count.** `216` is what `sessionRowHeight ×
-    /// 3` already was; saying it in points is what lets an open row (taller
+    /// **A height rather than a row count.** `288` is what `sessionRowHeight ×
+    /// 4` already is; saying it in points is what lets an open row (taller
     /// than a closed one) still share the same viewport rather than needing a
     /// row count of its own.
+    ///
+    /// **Four rows, where it was three** (2026-09-09, with the trails). The
+    /// grouped list's cap is *a trail, four rows, a trail*
+    /// (``groupedSessionViewportCap``), and the flat list — the same rows
+    /// without the chrome — shows the same four, so turning `Group by
+    /// product` off never changes how many rows are on screen.
     ///
     /// **The live list and the Recent queue no longer share one viewport or
     /// one scroller.** Each folds on its own past its own cap — see
     /// ``recentViewportCap`` for the queue's.
-    static let sessionViewportCap: CGFloat = sessionRowHeight * 3
+    static let sessionViewportCap: CGFloat = sessionRowHeight * 4
+    /// One line of badges at an edge of the grouped viewport: the top strip
+    /// the active block's heading holds, and the foot line the pending
+    /// blocks' badges wait on (`expanded-panel-v2.md` §4.6).
+    ///
+    /// The badge's own height, because that is all the line is: the top strip
+    /// is the leading heading's `16` — its chip where the panel's hairline
+    /// stood, its rule under it — and the foot draws the chip alone, with no
+    /// count and no rule.
+    static var productTrailHeight: CGFloat { productBadgeHeight }
+    /// The tallest the grouped live viewport is ever drawn: **a trail, four
+    /// rows, a trail** — `16 + 288 + 16`.
+    ///
+    /// The chrome is one line at each edge whatever the list holds, so the cap
+    /// no longer grows by a heading per product: every heading is on screen at
+    /// every offset, in the flow, on the top strip or on the foot line, and
+    /// none of them is paid for out of rows.
+    static var groupedSessionViewportCap: CGFloat {
+        productTrailHeight * 2 + sessionViewportCap
+    }
+    /// The travel over which a heading docks onto the top strip or lifts off
+    /// the foot line: the bar's own height, so the whole of a heading's slack
+    /// is where its motion happens (`expanded-panel-v2.md` §4.6).
+    static var productTrailDockingDistance: CGFloat { productGroupHeaderHeight }
+    /// A badge on either trail stands at this weight — the panel's own value
+    /// for *not the subject*, which is what every closed row drops to while a
+    /// row is open. A block that wants a person keeps full weight and flips
+    /// its badge instead (``NotchPalette/brightGround``).
+    static let productTrailBadgeOpacity: Double = 0.45
+    /// The room a row's last line fades out over before the foot line, so a
+    /// row scrolling under it is faded rather than cut: the foot draws no rule
+    /// to cut it with.
+    static var productTrailFadeHeight: CGFloat { productBadgeHeight }
+    /// The face a product badge is set in — one declaration, so the width a
+    /// trail slot is laid out to (``productBadgeWidth(_:)``) is measured off
+    /// the face the badge is drawn in.
+    static let productBadgeFont = NSFont.systemFont(ofSize: 10, weight: .medium)
+    /// How wide a badge naming this product draws: its padding either side of
+    /// the rendered name, measured rather than tabulated (`colour-v2.md` §4).
+    static func productBadgeWidth(_ name: String) -> CGFloat {
+        productBadgePadding * 2 + textWidth(name, font: productBadgeFont)
+    }
     /// The bar a product's block on the live list is headed with.
     ///
     /// **``recentSeamHeight`` rather than a constant of its own, because it is
@@ -1663,28 +1710,37 @@ enum PanelMetrics {
     }
 
     /// That content, capped at what the live viewport draws: at least one
-    /// row's worth (the apology, with nothing live), normally at most three.
+    /// row's worth (the apology, with nothing live), normally at most four.
     /// A taller open question enlarges it enough to keep its footer visible.
     static func sessionViewportHeight(
         liveRowCount: Int,
         openRowHeight: CGFloat? = nil,
         groupHeaderCount: Int = 0
     ) -> CGFloat {
-        min(
-            sessionListContentHeight(
-                liveRowCount: liveRowCount,
-                openRowHeight: openRowHeight,
-                groupHeaderCount: groupHeaderCount
-            ),
-            // **A header is never paid for out of rows.** The cap is whatever
-            // it was — three closed rows, or one open question — plus the bars
-            // above them, so a grouped list shows the three rows an ungrouped
-            // one shows and scrolls at the same place. The alternative was
-            // holding the cap: `16 + 72 + 32 + 72` leaves two rows visible,
-            // and a third of what this panel is for spent on chrome.
-            max(sessionViewportCap, openRowHeight ?? 0)
-                + groupHeadingsHeight(count: max(groupHeaderCount, 0))
+        let content = sessionListContentHeight(
+            liveRowCount: liveRowCount,
+            openRowHeight: openRowHeight,
+            groupHeaderCount: groupHeaderCount
         )
+        let cap: CGFloat
+        if groupHeaderCount > 0 {
+            // **A heading is never paid for out of rows, and it is not paid
+            // for per product any more either.** Grouped, every heading is on
+            // screen at every offset — in the flow, on the top strip or on
+            // the foot line — and the chrome is one badge line at each edge
+            // whatever the list holds (`expanded-panel-v2.md` §4.6). So the
+            // cap is a trail, four rows and a trail; it used to be three rows
+            // plus a whole bar per block. An open row un-pins both trails,
+            // and the viewport grows to fit that row under its own heading
+            // rather than leaving a rail offering `16` of travel.
+            cap = max(
+                groupedSessionViewportCap,
+                (openRowHeight ?? 0) + leadingProductGroupHeaderHeight
+            )
+        } else {
+            cap = max(sessionViewportCap, openRowHeight ?? 0)
+        }
+        return min(content, cap)
     }
 
     /// What the Recent queue's own list asks for, before its viewport caps it.
@@ -1715,9 +1771,10 @@ enum PanelMetrics {
 
     // MARK: - The open row
 
-    /// An approval's or a plan's body: **what the three-row viewport has left
-    /// once the row's fixed parts have taken theirs**, which is `124` now and
-    /// was `140`.
+    /// An approval's or a plan's body: **what the four-row viewport has left
+    /// once the row's fixed parts have taken theirs**, which is `196` now, was
+    /// `124` while the viewport was three rows, and `140` before a row's air
+    /// came down.
     ///
     /// It has always been that subtraction rather than a chosen number —
     /// `answer-in-notch.md` §4.1 writes it as one — and it is what makes the
@@ -2303,6 +2360,23 @@ final class MonitorStore: ObservableObject {
             )
         }
     }
+    /// Whether the live list is one block per product, or one list.
+    ///
+    /// **On, the list is `expanded-panel-v2.md` §4**: a heading per product
+    /// that has a row, every heading on screen at every offset (§4.6), and no
+    /// chip on a closed row because the heading has said the name. **Off, it
+    /// is the list §4 replaced**: rows in one order across products, each
+    /// naming its product with its own chip, under the panel's own top rule.
+    /// The Recent queue is not grouped either way (§4.1), and an open row
+    /// keeps its chip either way. Defaults on.
+    @Published var groupsSessionsByProduct: Bool {
+        didSet {
+            preferences?.set(
+                groupsSessionsByProduct,
+                forKey: Self.groupsSessionsByProductDefaultsKey
+            )
+        }
+    }
     @Published private(set) var lastIntegrationMessage: String
     @Published private(set) var hasCompletedOnboarding: Bool
 
@@ -2311,6 +2385,7 @@ final class MonitorStore: ObservableObject {
     private static let hidesCompactWingsDefaultsKey = "hidesCompactWings"
     private static let drawsSurfaceOutlineDefaultsKey = "drawsSurfaceOutline"
     private static let namesWorkOnPillDefaultsKey = "namesWorkOnPill"
+    private static let groupsSessionsByProductDefaultsKey = "groupsSessionsByProduct"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
     private let services: [any AgentMonitoring]
@@ -2481,6 +2556,10 @@ final class MonitorStore: ObservableObject {
         // switch from one that has turned it off.
         self.namesWorkOnPill = preferences?.object(
             forKey: Self.namesWorkOnPillDefaultsKey
+        ) as? Bool ?? true
+        // Defaults on, for the same reason and by the same means.
+        self.groupsSessionsByProduct = preferences?.object(
+            forKey: Self.groupsSessionsByProductDefaultsKey
         ) as? Bool ?? true
         self.hasCompletedOnboarding = preferences?.bool(
             forKey: Self.onboardingDefaultsKey
@@ -3144,8 +3223,12 @@ final class MonitorStore: ObservableObject {
     /// ``MonitorAggregation/SessionGroup``. Below the seam the reading is an
     /// age and the ages are one descent; that column is the queue's whole
     /// value and a header would restart it at every block.
+    ///
+    /// **Empty while ``groupsSessionsByProduct`` is off**, which is the one
+    /// case the view draws the flat list: rows in ``MonitorAggregation/rowOrder``
+    /// across every product, each with its own chip.
     var sessionGroups: [MonitorAggregation.SessionGroup] {
-        MonitorAggregation.groups(of: sessions)
+        groupsSessionsByProduct ? MonitorAggregation.groups(of: sessions) : []
     }
 
     /// How many headers the live list draws, without building the blocks.
@@ -3155,7 +3238,7 @@ final class MonitorStore: ObservableObject {
     /// and asking how many survived. Zero with nothing live, which is what
     /// keeps a heading from ever standing over the apology.
     var sessionGroupHeaderCount: Int {
-        Set(sessions.map(\.agent)).count
+        groupsSessionsByProduct ? Set(sessions.map(\.agent)).count : 0
     }
 
     /// Whether the first thing under the band is a block's heading rather than

@@ -1042,16 +1042,40 @@ struct ActiveSessionList: View {
     /// there.
     private var isScrolling: Bool { contentHeight > viewportHeight }
 
+    /// Whether the two badge lines are drawn over the list.
+    ///
+    /// Grouped and closed: an open row un-pins everything (§4.3 rule 06), and
+    /// the flat list has no headings to pin.
+    private var showsTrails: Bool {
+        store.openRowID == nil && store.groupsSessionsByProduct && !store.sessions.isEmpty
+    }
+
+    /// Where every heading stands for the current offset — the one reading
+    /// the overlay draws from, taken from the same heights the panel was
+    /// sized by.
+    private var trailLayout: ProductTrailLayout {
+        let groups = store.sessionGroups
+        return ProductTrailLayout.laidOut(
+            groups: groups,
+            badgeWidths: groups.map { PanelMetrics.productBadgeWidth($0.agent.displayName) },
+            offset: scrollOffset,
+            viewportHeight: viewportHeight,
+            contentHeight: contentHeight
+        )
+    }
+
     var body: some View {
         ScrollViewReader { list in
             ScrollView(.vertical) {
-                // **Pinned, and that is what lets the row give up its badge.**
-                // A block's header names the product for every row under it,
-                // so a row scrolled away from its heading would otherwise be a
-                // row with no product on it at all. Pinned, the heading holds
-                // the top of the viewport until the next one pushes it out, and
-                // a row can be scrolled away from its name but never orphaned
-                // from it.
+                // **The headings are not in the flow; their room is.** Every
+                // heading is drawn by ``ProductTrails`` over the list, at a
+                // position that is a function of the offset — in the flow, on
+                // the top strip, or on the foot line — and the flow keeps a
+                // blank slot the height of each one so the rows stand exactly
+                // where a heading in the flow would have put them. That is
+                // what lets a row give up its badge: it is never orphaned
+                // from its name, because its name is on screen at every
+                // offset (`expanded-panel-v2.md` §4.6).
                 //
                 // **Except while a row is open, and that is not a taste.**
                 // Opening a row scrolls it to the top of the viewport, and a
@@ -1062,11 +1086,9 @@ struct ActiveSessionList: View {
                 // heading. Nothing is lost by letting it scroll: an open row
                 // is the subject and everything else is at `45%`, so the list
                 // is not being scanned, which is the one job pinning has. The
-                // open row keeps its own chip for the same reason (§head).
-                LazyVStack(
-                    spacing: 0,
-                    pinnedViews: store.openRowID == nil ? [.sectionHeaders] : []
-                ) {
+                // open row keeps its own chip for the same reason (§head), and
+                // the headings go back into the flow as the bars they are.
+                LazyVStack(spacing: 0) {
                     // The apology is one of the list's own lines, so it
                     // scrolls with what is under it rather than pinning a
                     // sentence over rows somebody is reading.
@@ -1074,28 +1096,16 @@ struct ActiveSessionList: View {
                         emptyListLabel
                     }
 
-                    // With one product there is nothing to tell apart, so the
-                    // list is the flat one it has always been -- not a single
-                    // section with its header suppressed, which would be the
-                    // same drawing reached through machinery that can go
-                    // wrong.
+                    // With `Group by product` off there is nothing to head:
+                    // the list is the flat one, rows in one order across
+                    // products, each naming its product with its own chip.
                     let groups = store.sessionGroups
                     if groups.isEmpty {
                         rows(store.sessions)
                     } else {
                         ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
-                            Section {
-                                rows(group.sessions)
-                            } header: {
-                                // The first block's heading is the one that
-                                // stands in for the panel's own top rule, so
-                                // it is drawn without the slack that separates
-                                // the others from the row above them.
-                                ProductGroupHeader(
-                                    group: group,
-                                    isLeading: index == 0
-                                )
-                            }
+                            headingSlot(for: group, isLeading: index == 0)
+                            rows(group.sessions)
                         }
                     }
                 }
@@ -1120,13 +1130,31 @@ struct ActiveSessionList: View {
                 guard let opened = store.openRowID else { return }
                 list.scrollTo(opened, anchor: .top)
             }
+            // The extra width above is `ScrollView`'s own, not the row
+            // block's — see ``legacyScrollerGutter``. It never belongs on
+            // screen, which is what pins the visible region back to the
+            // panel's own margin regardless of whether this pass actually
+            // needed the room.
+            .frame(width: viewportWidth, alignment: .leading)
+            .clipped()
+            .overlay(alignment: .topLeading) {
+                if showsTrails {
+                    ProductTrails(
+                        groups: store.sessionGroups,
+                        layout: trailLayout,
+                        width: viewportWidth,
+                        height: viewportHeight
+                    ) { agent in
+                        // A badge is a control: its block to the top. The
+                        // slot carries the block's identity, and its top is
+                        // where the chip stands docked, so `.top` is exact.
+                        withAnimation(PanelMotion.slot(isOpening: true)) {
+                            list.scrollTo(ProductHeadingSlotID(agent: agent), anchor: .top)
+                        }
+                    }
+                }
+            }
         }
-        // The extra width above is `ScrollView`'s own, not the row block's —
-        // see ``legacyScrollerGutter``. It never belongs on screen, which is
-        // what pins the visible region back to the panel's own margin
-        // regardless of whether this pass actually needed the room.
-        .frame(width: viewportWidth, alignment: .leading)
-        .clipped()
         // The rail stands in the lane the rows just gave up, and stops on the
         // panel's inset rather than in it — see ``PanelMetrics/scrollRailLane``.
         .frame(width: laneWidth, alignment: .leading)
@@ -1137,6 +1165,45 @@ struct ActiveSessionList: View {
                 offset: scrollOffset
             )
             .padding(.trailing, PanelMetrics.sessionRowPadding)
+        }
+    }
+
+    /// What the chip line of a heading's slot is scrolled to by.
+    ///
+    /// Its own type rather than the block's `AgentKind`, because that value
+    /// already identifies the whole `ForEach` item the slot is the first part
+    /// of, and a scroll target has to name the line and not the item.
+    private struct ProductHeadingSlotID: Hashable {
+        let agent: AgentKind
+    }
+
+    /// A heading's room in the flow, or the heading itself.
+    ///
+    /// Closed, the heading is drawn by the overlay and the flow keeps its
+    /// slot: the slack and then the chip's own line, the latter carrying the
+    /// block's identity so that a click on a trail badge can scroll the chip's
+    /// line to the top — which is exactly where a docked chip stands. Open,
+    /// the bar itself stands here, because the overlay is not drawn.
+    @ViewBuilder
+    private func headingSlot(
+        for group: MonitorAggregation.SessionGroup,
+        isLeading: Bool
+    ) -> some View {
+        if store.openRowID != nil {
+            ProductGroupHeader(group: group, isLeading: isLeading)
+        } else {
+            // **Two siblings of the lazy stack, not one stack of two, under an
+            // identity of their own.** The identity has to sit on the chip's
+            // own line and be nothing else's: wrapped in a `VStack`, or given
+            // the block's `id` — which is already the `ForEach` item's —
+            // `scrollTo(_:anchor: .top)` lands on the item's top, which is the
+            // slack's, and the chip arrives `16` short of docked.
+            if !isLeading {
+                Color.clear.frame(height: PanelMetrics.productGroupHeaderSlack)
+            }
+            Color.clear
+                .frame(height: PanelMetrics.productTrailHeight)
+                .id(ProductHeadingSlotID(agent: group.agent))
         }
     }
 
@@ -3509,16 +3576,16 @@ struct SessionRowContent: View {
                 VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
                     SessionRowCaption(
                         session: session,
-                        // **A closed live row never draws a chip**, because
-                        // the heading above it has always just said the name:
-                        // the list is one block per product at every count,
-                        // one product included. A boundary after a boundary is
-                        // a mark doing nothing (`panel-v2.md` §3.4), and a
-                        // chip repeating the heading on each line is the
-                        // separator that decision already deleted. ``OpenRow``
-                        // is the one row that keeps its own, and the reason is
-                        // written there.
-                        showsAttribution: false,
+                        // **A closed live row draws a chip only on the flat
+                        // list.** Grouped, the heading above it has already
+                        // said the name, and a boundary after a boundary is a
+                        // mark doing nothing (`panel-v2.md` §3.4) — a chip
+                        // repeating the heading on each line is the separator
+                        // that decision deleted. With `Group by product` off
+                        // there is no heading, and the row is the only thing
+                        // that can say whose it is. ``OpenRow`` keeps its own
+                        // either way, and the reason is written there.
+                        showsAttribution: !store.groupsSessionsByProduct,
                         isEmphasized: isEmphasized
                     )
 
@@ -3939,14 +4006,22 @@ private struct SessionRowCaption: View {
 /// `L 0.235` — what makes a `5 × 5` dark grid carry any hue at all — and at
 /// badge size that reads as near-black. The ground's job is to be a boundary
 /// and the text's is to be the colour.
+///
+/// **Inverted, it is the pair the other way round** — the lit ink for the
+/// ground and the unlit for the name, which is ``NotchPalette/brightGround``
+/// and ``NotchPalette/onBrightGround``: the pair this surface reserves for *a
+/// row wants a person* (`colour-v2.md` §4). A trail badge takes that form for
+/// a block holding such a row, instead of dimming (`expanded-panel-v2.md`
+/// §4.6).
 private struct ProductBadge: View {
     let name: String
+    var isInverted: Bool = false
 
     var body: some View {
         let ink = NotchPalette.themeInk
         Text(name)
-            .font(.system(size: 10, weight: .medium))
-            .foregroundStyle(ink.on)
+            .font(Font(PanelMetrics.productBadgeFont))
+            .foregroundStyle(isInverted ? ink.off : ink.on)
             .padding(.horizontal, PanelMetrics.productBadgePadding)
             .frame(height: PanelMetrics.productBadgeHeight)
             .background(
@@ -3954,9 +4029,175 @@ private struct ProductBadge: View {
                     cornerRadius: PanelMetrics.productBadgeRadius,
                     style: .continuous
                 )
-                .fill(ink.off)
+                .fill(isInverted ? ink.on : ink.off)
             )
             .fixedSize()
+    }
+}
+
+/// The two badge lines the grouped list keeps on screen, and every heading
+/// between them, drawn over the list at the positions ``ProductTrailLayout``
+/// gives for the current offset (`expanded-panel-v2.md` §4.6).
+///
+/// **The grounds are what make a trail a line rather than a chip over a row.**
+/// The top strip is `16` of black under the band, which the rows scroll under
+/// and the active heading's rule cuts them at. The foot has no rule — it is
+/// names alone — so the rows fade out over ``PanelMetrics/productTrailFadeHeight``
+/// before its `16` of black instead of being cut. Neither ground is drawn
+/// while there is nothing to pin: a list that fits its viewport draws exactly
+/// what it always drew.
+///
+/// The overlay hit-tests only where it draws: the grounds swallow a click on
+/// the strips, the badges take theirs, and everything else falls through to
+/// the rows beneath.
+private struct ProductTrails: View {
+    let groups: [MonitorAggregation.SessionGroup]
+    let layout: ProductTrailLayout
+    let width: CGFloat
+    let height: CGFloat
+    let select: (AgentKind) -> Void
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            if layout.drawsTopStrip {
+                Rectangle()
+                    .fill(Color.black)
+                    .frame(width: width, height: PanelMetrics.productTrailHeight)
+                    .accessibilityHidden(true)
+            }
+
+            if layout.drawsFootLine {
+                LinearGradient(
+                    colors: [Color.black.opacity(0), Color.black],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(width: width, height: PanelMetrics.productTrailFadeHeight)
+                .offset(y: height - PanelMetrics.productTrailHeight - PanelMetrics.productTrailFadeHeight)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+
+                Rectangle()
+                    .fill(Color.black)
+                    .frame(width: width, height: PanelMetrics.productTrailHeight)
+                    .offset(y: height - PanelMetrics.productTrailHeight)
+                    .accessibilityHidden(true)
+            }
+
+            ForEach(Array(zip(groups, layout.headings)), id: \.0.id) { group, heading in
+                TrailHeading(group: group, heading: heading, select: select)
+                    // As wide as what is left of the viewport past the chip,
+                    // so the rule ends on the content box's trailing edge
+                    // wherever the chip is standing.
+                    .frame(width: max(width - heading.x, 0), alignment: .leading)
+                    .offset(x: heading.x, y: heading.y)
+            }
+        }
+        .frame(width: width, height: height, alignment: .topLeading)
+    }
+}
+
+/// One heading as the overlay draws it: ``ProductGroupHeader``'s chip line —
+/// the badge, the seam's dot, the count and the rule on one `16` — with the
+/// badge a control and everything after it faded by how far onto a trail the
+/// heading is.
+private struct TrailHeading: View {
+    let group: MonitorAggregation.SessionGroup
+    let heading: ProductTrailLayout.Heading
+    let select: (AgentKind) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: PanelMetrics.productBadgeCountSpacing) {
+                TrailBadge(group: group, trailed: heading.trailed) {
+                    select(group.agent)
+                }
+
+                HStack(spacing: PanelMetrics.productBadgeCountSpacing) {
+                    Circle()
+                        .fill(NotchPalette.label)
+                        .frame(
+                            width: PanelMetrics.captionSeparatorDotSize,
+                            height: PanelMetrics.captionSeparatorDotSize
+                        )
+                        .accessibilityHidden(true)
+
+                    Text(verbatim: "\(group.sessions.count)")
+                        .font(Font(PanelMetrics.captionFont))
+                        .foregroundStyle(
+                            group.wantsAttention
+                                ? NotchPalette.reading
+                                : NotchPalette.label
+                        )
+                        .fixedSize()
+                        .accessibilityHidden(true)
+                }
+                .opacity(heading.tail)
+            }
+
+            Rectangle()
+                .fill(NotchPalette.hairline)
+                .frame(height: 1)
+                .opacity(heading.tail)
+        }
+        .padding(.trailing, PanelMetrics.sessionRowPadding)
+        .frame(height: PanelMetrics.productTrailHeight)
+    }
+}
+
+/// A block's badge as a control: click, and the list scrolls that block to
+/// the top.
+///
+/// **On a trail it dims, unless its block wants a person, in which case it
+/// flips** — the bright ground with the dark name, the pair the surface
+/// reserves for exactly that meaning — so the one signal §4.5 needs is never
+/// the thing that fades. Both follow the heading's own progress onto the
+/// trail, so a flip crossfades with the docking and unflips as the heading
+/// comes back into the flow, where its lit count says the same thing; the two
+/// channels never speak at once. Under the pointer a dimmed badge brightens,
+/// and the hand says it can be pressed; there is no ground and no chevron.
+private struct TrailBadge: View {
+    let group: MonitorAggregation.SessionGroup
+    let trailed: CGFloat
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    private var name: String { group.agent.displayName }
+
+    private var flip: Double {
+        group.wantsAttention ? Double(trailed) : 0
+    }
+
+    private var weight: Double {
+        if group.wantsAttention || isHovered { return 1 }
+        return 1 - Double(trailed) * (1 - PanelMetrics.productTrailBadgeOpacity)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                ProductBadge(name: name)
+                ProductBadge(name: name, isInverted: true)
+                    .opacity(flip)
+            }
+        }
+        .buttonStyle(.plain)
+        .opacity(weight)
+        .onHover { isHovered = $0 }
+        .overlay(PointingHandCursor())
+        .accessibilityLabel(spokenLabel)
+        .accessibilityHint("Scrolls the list to this product's sessions.")
+        .help("Scroll to \(name)")
+    }
+
+    /// Brightness cannot be heard, so the flip says what it means.
+    private var spokenLabel: String {
+        let count = group.sessions.count
+        let rows = "\(count) session\(count == 1 ? "" : "s")"
+        return group.wantsAttention
+            ? "\(name), \(rows), one waiting for you"
+            : "\(name), \(rows)"
     }
 }
 

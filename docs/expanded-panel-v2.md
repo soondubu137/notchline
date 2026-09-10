@@ -6,6 +6,7 @@
 | Version | 2.2 |
 | Date | 2026-09-04, amended 2026-09-05 |
 | Amended | **§2's queue is a five-hour window, not a five-row queue.** Membership is every row that left within the past five hours; five is now the number the viewport *draws* rather than the number the store *holds*. Touched: §2.2, §2.3, §2.4 (rules 01, 02, 05, 09 and a new 11), §2.5 (new), §2.6, §4, §5, §6, §7, §8.1, §8.5, §8.6, §9, §10. **No metric moves** — `32 + 5 × 40 = 232 ≤ 240 < 272` already said "five, then scroll", and it now says it about the fold instead of the store. One thing gets worse and is stated rather than finessed: the queue is now literally the "fixed time window" [`PRD.md`](PRD.md) §3 bans, and §8.1 rewrites that sentence instead of arguing with it. |
+| Amended | **Every heading is on screen, on one badge line at each edge, and grouping is a switch** (2026-09-09). §4.6 is the whole of it. The shipped pinning let a long first block push the later headings below the fold and the passed one off the top; now the block you are in holds the top strip, the blocks you have passed stand beside its chip as dimmed names, and the blocks still to come wait on the viewport's last line as names alone — every one of them a control that scrolls its block to the top, and a block holding a row that wants a person flipping its badge instead of dimming. **The cap changes with it**: a trail, four rows and a trail, `320`, where it was three rows plus a bar per block; the flat list shows the same four (`288`, from `216`), and an approval's body follows to `196`. `Group by product` in Settings turns §4 off entire — one list in one order, a chip on every row, the panel's own top rule back. Touched: §4.3 rules 06 and 07, §4.4, §4.5, §4.6 (new), §9. Built the same day. |
 | Amended | **The live list is grouped by product** (2026-09-08), and the queue is not. §4 is the whole of it: one block per product that has a row, headed by the bar §2.2 already defines, in the fixed product order, with the chip coming off the live row and staying on the retired one. Nothing in §2 moves — the seam, the window, the ages, the fold and the five rows are untouched — and nothing in §3 is touched either. Built the same day. |
 | Amended | **`No active sessions` is drawn whenever nothing is live, queue or no queue** (2026-09-05). §2 let the seam take the sentence's place, on the reading that a list continuing past its own end is a better answer than an apology. It is a better answer to a different question: what has left is not what is running, and the panel was left unable to say the one thing it exists to say for as long as anything sat under the rule. The apology becomes the empty list's own first line, above the seam and inside the same scroller. Touched: §2.4 rule 02, §2.6, §4, §9, §10. **No metric moves, and the floor comes back up** — `178` again rather than `162`, with a folded queue `32` above it; the fold with nothing live is four rows rather than five, because `48 + 32 + 4 × 40` is the `240` cap exactly. |
 | Amended | **A row's air comes down, and the first block's heading takes the panel's own top rule over** (2026-09-08). Two changes, both cosmetic, both in §2.1 and §4.2. A live row is `72` rather than `80` — `8.5` above its three lines and `8.5` below, where it was `12.5` — so a retired row is `36`, the live viewport's cap is `216` and the queue's is `180`; nothing about what either viewport *draws* moves, still three rows and five. And the first block's heading is drawn without its `16` of slack, `16` rather than `32`: its chip's top edge stands where the panel's own hairline was, its rule stands `8` under that, and the panel stops drawing that hairline while a heading is there to draw one. The panel is `300` at every connected form where it was `324`. Touched: §2.1, §2.3, §2.4 rules 02 and 04, §4.2, §4.3 (new rule 11), §4.4, §9. **One figure follows and is not a choice:** an approval's body is the viewport less the row's fixed parts (`answer-in-notch.md` §4.1), so it is `124` where it was `140` — held at `140` a maximal approval would stand `16` taller than the list it opens in. |
@@ -244,14 +245,21 @@ heading at every product count.
 | 03 | **Inside a block nothing changes.** `MonitorAggregation.rowOrder` as it stands ([`PRD.md`](PRD.md) §6.2). A status change re-sorts a row inside its own block and never across a heading, which is a shorter journey than the one it makes today | |
 | 04 | **A product with no rows draws no heading.** Nothing is drawn while it has nothing to say; the band already counts what is running. The cap falls by that heading's own height at the same moment the row that emptied the block left, so the two changes are one change | |
 | 05 | **The chip comes off the live row and stays in its spoken name.** A boundary after a boundary is a mark doing nothing ([`panel-v2.md`](panel-v2.md) §3.4). The caption line is `16` with a chip and without one, so nothing moves vertically — the Project simply starts on the row's own `12`. VoiceOver keeps the product for the reason §2.3 already gives about a retired row: a reader arriving row by row has no surface to compare against | |
-| 06 | **The heading pins**, and that is what makes rule 05 safe: a row can be scrolled away from its heading but never orphaned from its name. **Except while a row is open**, where opening scrolls the row to the top of the viewport and a pinned heading would sit over its caption line — whose trailing end is the chevron that closes it. An open row is the subject and everything else is at `45%`, so the list is not being scanned, which is pinning's only job. The open row keeps its own chip for the same reason, and because the product decides what its answer footer can do ([`answer-in-notch.md`](answer-in-notch.md) §14.2) | |
-| 07 | **A heading is chrome and is never paid for out of rows.** The cap is `216 + the headings drawn` — the first `16` and every one after it `32` — so a grouped list shows the three rows a flat one shows and scrolls in the same place. Holding the cap flat was the alternative and is declined: `16 + 72 + 32 + 72` leaves two rows visible, which is a third of what the panel is for spent on chrome | §4.4 |
+| 06 | **The heading pins** — ~~and holds the top until the next one pushes it out~~ **every heading stays on screen, on one badge line at each edge (§4.6, 2026-09-09)** — and that is what makes rule 05 safe: a row can be scrolled away from its heading but never orphaned from its name. **Except while a row is open**, where opening scrolls the row to the top of the viewport and a pinned heading would sit over its caption line — whose trailing end is the chevron that closes it. An open row is the subject and everything else is at `45%`, so the list is not being scanned, which is pinning's only job. The open row keeps its own chip for the same reason, and because the product decides what its answer footer can do ([`answer-in-notch.md`](answer-in-notch.md) §14.2) | |
+| 07 | **A heading is chrome and is never paid for out of rows.** ~~The cap is `216 + the headings drawn`~~ **The cap is a trail, four rows and a trail — `320` at every product count (§4.6, 2026-09-09)**; what follows is the earlier arithmetic. The cap was `216 + the headings drawn` — the first `16` and every one after it `32` — so a grouped list shows the three rows a flat one shows and scrolls in the same place. Holding the cap flat was the alternative and is declined: `16 + 72 + 32 + 72` leaves two rows visible, which is a third of what the panel is for spent on chrome | §4.4 |
 | 08 | **The count is lit while its block holds a row that wants a person** — `#C7C7CC` rather than `#7C7C80`, on derived status like the summary and the sort. Grouped, the most urgent row on the surface may be inside the second block and below the fold; this is the whole of what says so, in the channel [`panel-v2.md`](panel-v2.md) §1.1 reserves for exactly that meaning | §4.5 |
 | 09 | **The queue is not grouped**, keeps its chip and keeps its cap. §4.1 | |
 | 10 | **The band and both collapsed forms are untouched.** Nothing here is visible with the panel shut | |
 | 11 | **The first heading is drawn short, and the panel's own top rule is drawn on the negation of "a heading leads the list"** (2026-09-08). One question, asked once — `MonitorStore.listLeadsWithABlockHeading` — because the two halves have to agree: a short bar under a rule opens the panel on a chip `10` from the matrix with no line at all, and a whole bar with the rule kept is the pair of hairlines this rule exists to remove. Every heading after the first keeps its `32`, which is what a heading needs to stand clear of the row above it | §4.2 |
 
 ### 4.4 What it costs
+
+> **Superseded by §4.6 (2026-09-09).** The formula and the table below are what
+> the grouped list cost while every heading was a bar in the flow. It is now
+> `min(content, max(16 + 288 + 16, open row + 16))` — a trail, four rows and a
+> trail — at every product count, and the flat list is `min(content, max(288,
+> open row))`. Kept as the reasoning that led to §4.6's "a heading is never paid
+> for out of rows", which still holds.
 
 ```
 live viewport  =  min(content,  max(216, open row) + 16 + 32 × (headings − 1))
@@ -293,6 +301,89 @@ declined — ordering the blocks by their most urgent member (rule 02), and a
 "needs you" band above the blocks, which is two organising axes at once and
 makes a status change move a row across the whole list rather than inside its
 own block (§2.4 rule 04's *one local exchange, nothing travelling*).
+
+### 4.6 Every heading on screen
+
+> Decided and built 2026-09-09. The interactive prototype that settled the
+> motion is [Every heading on screen](https://claude.ai/code/artifact/504167a4-27d4-401b-ae9a-fad37a6a3692);
+> the board is `06 — Every heading on screen` in [Notchline — Grouping by
+> product](https://www.figma.com/design/OQIBStTDRK1APp18rSj0ET), which draws the
+> first cut (whole bars at the foot) and is deliberately one revision behind.
+
+**The problem rule 06 left.** A pinned heading holds the top until the next
+one pushes it out, and that is the whole of what the list said about the other
+blocks: with three products and a long first block, the second and third
+existed only for a reader who scrolled, and once the second held the top the
+first was gone. If a badge below the fold is not omitted, a badge above it
+should not be either.
+
+**One badge line at each edge, and every heading on one of them or in the
+flow.** Three positions, and a heading is always in exactly one, or between
+two:
+
+- **The top strip** is the active heading's own `16` — its chip where the
+  panel's hairline stood, its rule `8` under that, exactly the leading bar
+  §4.2 already draws. The blocks you have passed stand *beside* that chip on
+  the same line, in register order, as names alone at `45%` — the panel's own
+  weight for *not the subject* — with no count and no rule, because the count
+  and the rule say *this block starts here* and a passed block does not.
+  Reading left to right is the list read top to bottom. They do not stack
+  above the active heading: a stacked bar is a rule over nothing, and it grows
+  the chrome by `32` a product.
+- **The foot line** is the viewport's last `16`, where the blocks still to
+  come wait as names alone, nearest first — no count, no rule. The rows fade
+  out over `16` above it rather than being cut, since there is no rule to cut
+  them with. It is drawn only while something is pending; when nothing is,
+  the rows have that line back.
+- **In the flow** a heading is the bar §4.2 draws, scrolling with its rows.
+
+**The motion is a function of the offset and of nothing else.** An arriving
+heading *docks* over the bar's own `32`: it starts when its bar's top meets the
+rule above it and is home when its chip reaches the top, sliding right into
+its slot faster than it rises — `x` on a cubic ease-out, `y` following the
+flow — so it never crosses the badge already there, while the count and rule
+of the heading it replaces fade over the same travel. A pending badge *lifts*
+straight up: the next block is always first on the foot line, so its slot is
+the flow's own `12`, and over the `32` above the line its count and rule come
+in while the badges behind it slide left on the same ease. Scrolling back
+plays all of it in reverse, because there is no animation to reverse. The
+whole of it is `ProductTrailLayout`, a pure function the view draws from and
+the tests ask directly.
+
+**Every badge on a trail is a control.** A click scrolls its block to the top:
+a foot badge brings its block up, a passed badge takes you back, and the
+active chip does the same thing and goes nowhere. The pointer says so and a
+dimmed badge brightens under it; there is no ground and no chevron, which is
+what keeps the bar §4.2's bar. This withdraws §4.2's "no hover, no press" for
+the trails only, and for the reason it was declined: there is now somewhere to
+go.
+
+**A block that wants a person flips its badge.** On either trail, instead of
+dimming, its chip inverts to the bright ground with the dark name — the pair
+[`colour-v2.md`](colour-v2.md) §4 reserves for *a row wants a person*. The
+flip crossfades with the docking or lifting and unflips as the heading enters
+the flow, where its lit count (rule 08) says the same thing; the two channels
+never speak at once. This is what closes the gap §4.5 stated: the most urgent
+row may be in a block below the fold, and that block's name is on screen,
+flipped, at every offset.
+
+**What it costs, and what it gives back.** The chrome is one line at each edge
+whatever the list holds, so the cap stops growing by a bar per block: it is *a
+trail, four rows and a trail*, `16 + 288 + 16 = 320`, at every product count.
+Four rows rather than three is the owner's call, made with the trails: the
+flat list shows the same four (`288`), so the switch below never changes how
+many rows are on screen, and an approval's body follows the cap to `196`
+([`answer-in-notch.md`](answer-in-notch.md) §4.1's subtraction, unchanged).
+An open row un-pins both trails (rule 06, unchanged) and the viewport grows to
+fit that row under its own heading. A list that fits its viewport pins
+nothing and draws exactly what it always drew.
+
+**`Group by product` is a switch** — Settings, the Display card, beside
+`Outline the panel`, default on. Off, §4 is off entire: one list in
+`rowOrder` across products, every row carrying its own chip as it did before
+§4, the panel's own top rule back, the Recent queue exactly as it is either
+way. It is a standing answer rather than a display-dependent one, so it is
+never greyed.
 
 ## 3. Answering in the notch
 
