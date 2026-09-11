@@ -4,15 +4,21 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
-## Unreleased
+## 0.2.7 Alpha — 2026-09-11
+
+**The peek control arrives and retires like every other mark in the band, and a Claude Code session that has a name draws it.** Throwing `Privacy Mode` used to make the control blink, because the switch mounted and unmounted it; its box now stands in the band whether or not a peek is on offer, and only the three pills come and go. The title was in the transcript all along, behind an opening this reader's fixed window never reached.
 
 ### Changed
 
-- **The peek control draws itself on and off instead of blinking.** Turning `Privacy Mode` on and off used to insert and remove it at full ink. Its box now stands in the band's slack for as long as a peek could be offered, and the mode decides only what is drawn in it: the three pills grow out of their leading edge on the band's own fade, short to long, and retract the other way when the mode ends. (`docs/cover-the-words.md` §10.)
+- **The peek control draws itself on and off instead of blinking.** Throwing `Privacy Mode` used to mount and unmount it at full ink. Its box now stands in the band's slack for as long as a peek could be offered, and the mode decides only what is drawn in it: the three pills grow out of their leading edge on the band's own fade, short to long, and retract the other way when the mode ends. (`docs/cover-the-words.md` §10.)
 
 ### Fixed
 
-- **A Claude Code row no longer says `Untitled` for a session Claude Code has named.** The title is read from Claude Code's own transcript, and 64 KiB from the front of the file stopped reaching it: what stands in front of the name is the opening the product writes for itself, and that is sized by how many skills, plugins, agents and MCP servers the session started with — 87 KB on this machine. The opening is now read by records rather than by bytes.
+- **A Claude Code row no longer says `Untitled` for a session Claude Code has named.** The title lives in the product's own transcript, behind an opening it writes for itself — sized by how many skills, plugins, agents and MCP servers the session started with, 87 KB here — which a fixed 64 KiB from the front of the file stopped reaching. It is now read forward by records rather than by bytes. (`docs/non-public-codex-integration-features.md`.)
+
+### Known limitations
+
+Everything listed under `0.2.6` and earlier still stands, unchanged.
 
 ## 0.2.6 Alpha — 2026-09-11
 
