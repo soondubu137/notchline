@@ -4050,16 +4050,32 @@ private struct ProductBadge: View {
 /// gives for the current offset (`expanded-panel-v2.md` §4.6).
 ///
 /// **The grounds are what make a trail a line rather than a chip over a row.**
-/// The top strip is `16` of black under the band, which the rows scroll under
-/// and the active heading's rule cuts them at. The foot has no rule — it is
-/// names alone — so the rows fade out over ``PanelMetrics/productTrailFadeHeight``
-/// before its `16` of black instead of being cut. Neither ground is drawn
-/// while there is nothing to pin: a list that fits its viewport draws exactly
-/// what it always drew.
+/// Every heading carries its own `16` of black, so the line that names a block
+/// is opaque wherever it stands: the rows scroll under the top strip and the
+/// active heading's rule cuts them at it. The foot has no rule — it is names
+/// alone — so the rows fade out over ``PanelMetrics/productTrailFadeHeight``
+/// before its `16` of black instead of being cut.
+///
+/// **~~Neither ground is drawn while there is nothing to pin: a list that fits
+/// its viewport draws exactly what it always drew.~~ Superseded — a list that
+/// fits its viewport is not a list that cannot move under a heading.** The
+/// leading heading is drawn at the top of the viewport at every offset, and
+/// ``ProductTrailLayout`` is asked with the heights the *store* was sized to
+/// while the offset is the scroll view's own. The two disagree for as long as
+/// a panel resize is in flight — the scroller is still the old height around
+/// content that is already the new one, so it really does scroll — and a
+/// ground that was conditional on `scrolls` was absent exactly there: a row
+/// slid up through the chip, the count and the rule, which is how the fault
+/// was reported. The condition is gone rather than corrected, because a
+/// heading's line is chrome and chrome is opaque; on a list that is not moving
+/// it is black on black and draws what it always drew.
+///
+/// The grounds are laid down before any chip, so a heading arriving on the top
+/// strip never blacks out the badges already standing there.
 ///
 /// The overlay hit-tests only where it draws: the grounds swallow a click on
-/// the strips, the badges take theirs, and everything else falls through to
-/// the rows beneath.
+/// a heading's own line, the badges take theirs, and everything else falls
+/// through to the rows beneath.
 private struct ProductTrails: View {
     let groups: [MonitorAggregation.SessionGroup]
     let layout: ProductTrailLayout
@@ -4068,11 +4084,13 @@ private struct ProductTrails: View {
     let select: (AgentKind) -> Void
 
     var body: some View {
+        let headings = Array(zip(groups, layout.headings))
         ZStack(alignment: .topLeading) {
-            if layout.drawsTopStrip {
+            ForEach(headings, id: \.0.id) { _, heading in
                 Rectangle()
                     .fill(Color.black)
                     .frame(width: width, height: PanelMetrics.productTrailHeight)
+                    .offset(y: heading.y)
                     .accessibilityHidden(true)
             }
 
@@ -4094,7 +4112,7 @@ private struct ProductTrails: View {
                     .accessibilityHidden(true)
             }
 
-            ForEach(Array(zip(groups, layout.headings)), id: \.0.id) { group, heading in
+            ForEach(headings, id: \.0.id) { group, heading in
                 TrailHeading(group: group, heading: heading, select: select)
                     // As wide as what is left of the viewport past the chip,
                     // so the rule ends on the content box's trailing edge

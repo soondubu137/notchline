@@ -1686,14 +1686,18 @@ struct ProductTrailLayout: Equatable, Sendable {
     }
 
     let headings: [Heading]
-    /// Whether the list is taller than its viewport at all. Nothing is pinned
-    /// otherwise, and the top strip's ground is not drawn.
+    /// Whether the list is taller than its viewport at all. Nothing docks or
+    /// lifts otherwise: every heading past the leading one stands at its flow
+    /// position, and the leading chip stands where it always stands.
+    ///
+    /// **It no longer says whether the top strip's ground is drawn**, which it
+    /// did until 2026-09-10: a heading's `16` of black travels with the
+    /// heading and is drawn whatever the list is doing. The reasoning, and the
+    /// fault that produced it, are in `ProductTrails`.
     let scrolls: Bool
     /// Whether any block is waiting on the foot line — which is when the foot
     /// draws its ground and the fade above it.
     let drawsFootLine: Bool
-
-    var drawsTopStrip: Bool { scrolls }
 
     /// The one easing on this surface: fast out of the slot, settling into it.
     ///

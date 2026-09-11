@@ -4,6 +4,12 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## Unreleased
+
+### Fixed
+
+- **A row can no longer be read through the heading that names its block.** A heading's line drew its `16` of black only while the list was taller than its viewport — and a list that fits can still move under one: the leading chip is drawn at the top of the viewport at every offset, and a panel resize in flight leaves the scroller at its old height around content already at its new one. The ground travels with each heading now. (`docs/expanded-panel-v2.md` §4.6.)
+
 ## 0.2.5 Alpha — 2026-09-10
 
 **Every product's name is on screen at every scroll offset, and grouping is now something you can turn off.** The live list keeps one badge line above it and one below, so no block is ever out of sight and each badge scrolls to its own. Underneath, Codex Desktop's latest update moved the blue-dot record this app reads, which had left every thoroughly-read Codex row stuck on the notch.

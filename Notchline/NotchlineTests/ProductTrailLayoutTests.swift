@@ -112,7 +112,6 @@ struct ProductTrailLayoutTests {
         let rest = layout(blocks, offset: 0)
 
         #expect(rest.scrolls)
-        #expect(rest.drawsTopStrip)
         #expect(rest.drawsFootLine)
         #expect(rest.headings.count == 2)
 
@@ -159,7 +158,7 @@ struct ProductTrailLayoutTests {
         #expect(flowing.tail == 1)
         #expect(flowing.trailed == 0)
         #expect(!free.drawsFootLine, "nothing is pending, so no foot line")
-        #expect(free.drawsTopStrip)
+        #expect(free.scrolls)
     }
 
     /// **Docking is scroll-linked over the bar's own height**: the arriving chip
@@ -213,15 +212,19 @@ struct ProductTrailLayoutTests {
     }
 
     /// **A list that fits pins nothing.** Every position is the flow position
-    /// and neither ground is drawn: the drawing is the one the list always
+    /// and the foot line is not drawn: the drawing is the one the list always
     /// made.
+    ///
+    /// The top strip is no longer part of that claim. The leading chip stands
+    /// at the top of the viewport whether the list scrolls or not, so its `16`
+    /// of ground is drawn either way — on a list that is not moving, black on
+    /// black. See ``ProductTrails``.
     @Test
     func aListThatFitsIsDrawnInTheFlow() {
         let blocks = groups(first: 1, second: 1)
         let fits = layout(blocks, offset: 0)
 
         #expect(!fits.scrolls)
-        #expect(!fits.drawsTopStrip)
         #expect(!fits.drawsFootLine)
         #expect(fits.headings.map(\.y) == [0, secondChip(after: 1)])
         #expect(fits.headings.map(\.x) == [PanelMetrics.sessionRowPadding, PanelMetrics.sessionRowPadding])
@@ -339,5 +342,71 @@ struct ProductTrailLayoutTests {
             to: height - line - 1
         )
         #expect(fade < foot, "the fade above the foot line is brighter than the badge on it")
+    }
+
+    /// **A heading's line is opaque, and the fault was that it was not.** A
+    /// list that fits its viewport drew no ground under its chip, on the
+    /// reading that a list that cannot scroll cannot move under one. It can:
+    /// the leading chip is drawn at the top of the viewport at every offset,
+    /// and while a panel resize is in flight the scroller is still the old
+    /// height around content that is already the new one — so the rows really
+    /// do slide, and a row's caption and title were read through the chip, the
+    /// count and the rule (reported 2026-09-10, with a screenshot).
+    ///
+    /// Read off the bitmap over a white ground, because that is the whole
+    /// claim: anything the chrome fails to cover is what the list shows
+    /// through it. Sampled above the rule, where the heading draws nothing of
+    /// its own.
+    @Test @MainActor
+    func aHeadingsLineIsOpaqueOnAListThatFits() throws {
+        let store = MonitorStore(services: [], preferences: nil)
+        store.isExpanded = true
+        // The empty Codex snapshot is not decoration: a store with no service
+        // carries that product's two preview rows until it is told otherwise,
+        // and this list has to be one block.
+        store.applyForTesting(snapshot(.codex, []))
+        store.applyForTesting(
+            snapshot(.claudeCode, [session(.claudeCode, "k0"), session(.claudeCode, "k1")])
+        )
+        // The list this is about: two rows under one heading, in a viewport
+        // that is exactly what they ask for, so nothing is pinned and the
+        // rail has no lane.
+        #expect(store.sessionGroups.count == 1)
+        #expect(store.sessionViewportHeight == store.sessionListContentHeight)
+
+        let width = PanelMetrics.sessionViewportWidth(panelWidth: store.currentPanelSize.width)
+        let height = store.sessionViewportHeight
+        let host = NSHostingView(
+            rootView: ActiveSessionList()
+                .environmentObject(store)
+                .environment(\.overlayBodyWidth, store.currentPanelSize.width)
+                .frame(width: width, height: height)
+                .background(Color.white)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        host.appearance = NSAppearance(named: .darkAqua)
+        host.layoutSubtreeIfNeeded()
+
+        let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
+        host.cacheDisplay(in: host.bounds, to: rep)
+        let across = CGFloat(rep.pixelsWide) / host.bounds.width
+        let down = CGFloat(rep.pixelsHigh) / host.bounds.height
+
+        // Past the chip and the count, above the rule: the band of the
+        // heading's own line that the heading itself draws nothing in.
+        let badge = PanelMetrics.sessionRowPadding
+            + PanelMetrics.productBadgeWidth(AgentKind.claudeCode.displayName)
+        var brightest: CGFloat = 0
+        for x in stride(from: badge + 40, to: width - PanelMetrics.sessionRowPadding, by: 4) {
+            for y in stride(from: 2.0, to: PanelMetrics.productTrailHeight / 2 - 1, by: 1) {
+                guard
+                    let colour = rep
+                        .colorAt(x: Int(x * across), y: Int(y * down))?
+                        .usingColorSpace(.deviceRGB)
+                else { continue }
+                brightest = max(brightest, colour.brightnessComponent)
+            }
+        }
+        #expect(brightest < 0.2, "the heading's line let the ground through at \(brightest)")
     }
 }

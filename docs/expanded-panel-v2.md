@@ -392,8 +392,16 @@ flat list shows the same four (`288`), so the switch below never changes how
 many rows are on screen, and an approval's body follows the cap to `196`
 ([`answer-in-notch.md`](answer-in-notch.md) §4.1's subtraction, unchanged).
 An open row un-pins both trails (rule 06, unchanged) and the viewport grows to
-fit that row under its own heading. A list that fits its viewport pins
-nothing and draws exactly what it always drew.
+fit that row under its own heading. ~~A list that fits its viewport pins
+nothing and draws exactly what it always drew.~~ **A list that fits its
+viewport pins nothing — and its headings are opaque all the same**
+(2026-09-10). A list that fits is not a list that cannot move under a heading:
+the leading chip stands at the top of the viewport at every offset, and while a
+panel resize is in flight the scroll view is still the old height around
+content that is already the new one, so the rows slide under it. The `16` of
+black belongs to the heading rather than to the strip and travels with it; on a
+list that is not moving it is black on black, which is what *draws what it
+always drew* was reaching for.
 
 **`Group by product` is a switch** — Settings, the Display card, beside
 `Outline the panel`, default on. Off, §4 is off entire: one list in
