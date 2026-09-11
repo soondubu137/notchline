@@ -2239,6 +2239,13 @@ final class MonitorStore: ObservableObject {
             // drawn, with no background work having run while the panel was
             // shut.
             guard isExpanded != oldValue else { return }
+            // **A peek cannot outlive the panel it was lifting.** The control
+            // is held down, so the release is what normally ends it — and a
+            // release that lands after the panel has gone (the pointer left
+            // while the button was down, the menu bar was concealed, a
+            // navigation closed it) would otherwise leave the covers up for
+            // the next time it opens.
+            if !isExpanded { isPeeking = false }
             if isExpanded { refreshRecentDepartures(at: clock.now()) }
             updateRecentTicking()
         }
@@ -2359,6 +2366,8 @@ final class MonitorStore: ObservableObject {
         didSet {
             guard privacyMode != oldValue else { return }
             preferences?.set(privacyMode, forKey: Self.privacyModeDefaultsKey)
+            // Nothing is covered any more, so nothing is being held up.
+            if !privacyMode { isPeeking = false }
             // **The hover the tracking area will not repeat.** The gesture is
             // a press *on the component*, so the pointer is on it when the
             // mode goes off -- and `.onHover` is an `NSTrackingArea`, which
@@ -2374,6 +2383,20 @@ final class MonitorStore: ObservableObject {
             pointerEnteredPanel()
         }
     }
+    /// Whether the covers are lifted for as long as somebody is holding them
+    /// up (`cover-the-words.md` §7).
+    ///
+    /// **A momentary state, not a second mode**, which is the whole reason it
+    /// can exist at all: ``privacyMode`` is what somebody turns on before a
+    /// call and forgets, and a second switch that also hid the words would be
+    /// a second thing to forget. This one is true only while a control is held
+    /// down, and it is cleared by the panel closing (``isExpanded``) and by the
+    /// mode ending, so there is no way to leave it on.
+    ///
+    /// `@Published` because it is drawn: every covered run on the panel reads
+    /// it through ``coversWords(of:)``. That is two overlay renders per peek,
+    /// both of them things a person just did with the pointer.
+    @Published private(set) var isPeeking = false
     /// Where the pointer is, as the tracking area last reported it.
     ///
     /// **Not `@Published`.** Nothing is drawn from it — it exists so that a
@@ -2858,7 +2881,47 @@ final class MonitorStore: ObservableObject {
     /// covered panel nobody can answer a question in is a panel people would
     /// simply switch back off.
     func coversWords(of session: MonitoredSession) -> Bool {
-        privacyMode && openRowID != session.id
+        privacyMode && !isPeeking && openRowID != session.id
+    }
+
+    /// Whether the panel has anything for a peek to lift.
+    ///
+    /// What the control's presence answers to: a covered panel with no rows on
+    /// it is a band, a seam and a footer, none of which this covers, so a
+    /// control offering to uncover them would be offering nothing. The About
+    /// panel replaces the body outright and is not covered either.
+    var hasCoveredRows: Bool {
+        privacyMode
+            && isExpanded
+            && !isShowingAbout
+            && !(sessions.isEmpty && recentDepartures.isEmpty)
+    }
+
+    /// Lift the covers, and put them back.
+    ///
+    /// Separate calls rather than one toggle because the pointer drives them
+    /// from two different events — a press and a release — and a toggle would
+    /// turn a repeated press into a latch the moment one release went missing.
+    /// ``togglePeek()`` is the keyboard's, where there is no press to hold.
+    func beginPeek() {
+        guard privacyMode, isExpanded else { return }
+        isPeeking = true
+    }
+
+    func endPeek() {
+        isPeeking = false
+    }
+
+    /// What VoiceOver's activation does, where a press cannot be held.
+    ///
+    /// **The one latching path, and it is bounded by the panel.** A held
+    /// control has no keyboard equivalent, and "you may not read this list
+    /// without a mouse" is not an answer — so activation latches instead, and
+    /// the latch dies when the panel closes like any other peek. The label
+    /// says which way the next activation goes.
+    func togglePeek() {
+        guard privacyMode, isExpanded else { return }
+        isPeeking.toggle()
     }
 
     /// The gesture: a secondary press on the component that is not a row.

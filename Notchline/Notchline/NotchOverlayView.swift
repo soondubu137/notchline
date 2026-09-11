@@ -495,6 +495,20 @@ private struct OverlayHeader: View {
             // controls on the app rather than on the work, so they are one
             // group at the trailing edge, flush against each other
             // (``PanelMetrics/expandedTrailingSideWidth``).
+            // **The peek, and only where there is something to lift**
+            // (`cover-the-words.md` §7). It stands flush to the left of the
+            // pair and grows into the slack between them and the counts, so
+            // the two controls a user has already learnt the position of do
+            // not move -- which is also why it is not a third member of that
+            // group: ``PanelMetrics/expandedTrailingSideWidth`` is two boxes
+            // wide and feeds ``PanelMetrics/restingExpandedWidth``, so a third
+            // would move the panel's own edge. Drawn only with rows on the
+            // list, which is the one form narrow enough for that width to
+            // bind.
+            if store.hasCoveredRows {
+                PeekButton()
+            }
+
             if store.isExpanded {
                 AboutButton()
                 SettingsButton()
@@ -711,6 +725,73 @@ struct CompactTrailingSlot: View {
 /// the other end of the same band, drawn a second time. The catalogue
 /// therefore carries that template resampled to `13`, so both scales are drawn
 /// `1 : 1` rather than through a resample that softens a `0.84` pt gap.
+/// Hold to read your own list, and let go to put it back
+/// (`cover-the-words.md` §7).
+///
+/// **The reveal-password idiom, and it is chosen for what it cannot do.**
+/// `Privacy Mode` is a mode somebody turns on before a call and forgets; a
+/// second switch that also lifted the covers would be a second thing to
+/// forget, and the state it left behind would be indistinguishable from the
+/// mode being off. A control that is only true while it is held cannot be left
+/// on, and ``MonitorStore/isPeeking`` is cleared by the panel closing as well.
+///
+/// **A press, not a click.** `DragGesture(minimumDistance: 0)` is what reads
+/// the press and the release apart; a `Button` fires on the release and would
+/// give one frame of uncovered text at the moment the pointer let go, which is
+/// the opposite of what this control is for. It is not a `Button` for the
+/// accessibility tree either: a held press has no keyboard equivalent, so
+/// activation latches instead (``MonitorStore/togglePeek()``) and the label
+/// says which way the next one goes.
+///
+/// The glyph does not change under the press. This surface says a control is
+/// on by being brighter and taking no ground (``AboutButton``), and swapping
+/// `eye` for `eye.slash` mid-press would be a second thing moving under a
+/// finger that is already holding something down.
+private struct PeekButton: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    @State private var isHovered = false
+
+    private var size: CGFloat {
+        PanelMetrics.settingsButtonSize(compactHeight: store.compactHeight)
+    }
+
+    var body: some View {
+        Image(systemName: "eye")
+            .font(.system(
+                size: PanelMetrics.bandControlGlyphSize,
+                weight: .regular
+            ))
+            .foregroundStyle(
+                store.isPeeking ? Color.white : Color.white.opacity(0.55)
+            )
+            .frame(width: size, height: size)
+            .background(
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Color.white.opacity(isHovered ? 0.12 : 0))
+            )
+            .contentShape(Rectangle())
+            .onHover { isHovered = $0 }
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { _ in store.beginPeek() }
+                    .onEnded { _ in store.endPeek() }
+            )
+            .accessibilityElement()
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(
+                store.isPeeking
+                    ? "Cover the rows again"
+                    : "Uncover the rows while you read them"
+            )
+            .accessibilityAction { store.togglePeek() }
+            .help(
+                "Hold to read the covered rows, and let go to cover them "
+                    + "again. Privacy Mode stays on."
+            )
+    }
+}
+
 private struct AboutButton: View {
     @EnvironmentObject private var store: MonitorStore
 

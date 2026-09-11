@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Built** (2026-09-10), §13's minimum plus the Settings row and the accessibility pass, **with §6's two hover bugs fixed on 2026-09-11** (§11.2). What is not built is §7's peek for closed rows, and §12's five questions are still open. |
+| Status | **Built in full** — §13's minimum and the Settings row and the accessibility pass on 2026-09-10, §6's two hover bugs fixed and §7's peek built on 2026-09-11. §12's five questions are still open. |
 | Version | 1.1 |
 | Date | 2026-09-10 |
 | Amended | **The control is named `Privacy Mode`, and the pill is silenced rather than covered** (2026-09-10, by the board's owner, before any of it was built). Two decisions, and the second one costs something this document had been relying on. The name in Settings is `Privacy Mode`; *covering* stays the name of the mechanism, and §2 is unchanged and now matters more, not less. And the pill draws **nothing** where §4.1 had it draw a `48` pt bar — so **neither collapsed form can say the mode is on**, which §8 used to be able to claim of one of them. Touched: the header, §3, §4.1, §5, §8, §10, §11, §13. |
@@ -129,7 +129,15 @@ The principle, stated once and applied twice: **the cover silences what is drawn
 
 **Opening a row reveals that row.** Its Project, its title, its preview and its question body all draw normally for as long as it is open, and re-cover when it closes. A covered panel you cannot answer a question in is a panel people will simply switch back — and the click that opens a row is as deliberate as a gesture on this surface gets.
 
-**A peek for closed rows** is the optional half (§13). A press-and-hold target in the band uncovers everything while it is held, and re-covers on release — the reveal-password idiom, one target, no new state that can be left on.
+**A peek for closed rows** is the other half, and it is the reveal-password idiom: **one control in the band, held down, lifting every cover at once and putting them back on release.** The thing being read is the list, so it lifts the list rather than a row at a time.
+
+**It is chosen for what it cannot do.** `Privacy Mode` is a mode somebody turns on before a call and forgets; a second switch that also lifted the covers would be a second thing to forget, and the state it left behind would be indistinguishable from the mode being off. A control that is only true while it is held cannot be left on — and the peek ends three ways, not one: the release, the panel closing, and the mode ending. The second matters because a release can land after the panel has gone (the pointer left while the button was down, the menu bar was concealed, a navigation closed it), and the covers would otherwise be up the next time it opened.
+
+**Where it stands, and why not with the other two.** Flush to the left of the About mark and the gear, growing into the slack between them and the counts, so neither of the two controls a user has already learnt the position of moves. It is deliberately *not* a third member of that group: `PanelMetrics.expandedTrailingSideWidth` is two boxes wide and feeds `restingExpandedWidth`, so a third would move the panel's own edge — and `privacyMode` would then have to join `frameChangingPublishers`, a list nothing tests. Drawn only where there is something to lift (`hasCoveredRows`), which also keeps it off the one form narrow enough for that width to bind.
+
+**A press, not a click.** `DragGesture(minimumDistance: 0)` reads the press and the release apart; a `Button` fires on the release and would give one frame of uncovered text at the moment the pointer let go, which is the opposite of what the control is for. The glyph does not change under the press — this surface says a control is on by being brighter and taking no ground, and swapping `eye` for `eye.slash` mid-press is a second thing moving under a finger already holding something down.
+
+**The keyboard latches, and that is the one exception to "cannot be left on".** A held press has no keyboard equivalent, and *you may not read this list without a mouse* is not an answer — so VoiceOver's activation toggles instead, the label says which way the next one goes, and the latch dies with the panel like every other peek.
 
 **Not a modifier, and not hover.** `⌥`-hover is the obvious design and is unavailable: the overlay is non-activating and never key, so `flagsChanged` reaches nothing, and a global keyboard monitor needs the Accessibility permission [`tech-design.md`](tech-design.md) §1146 refuses to ask for. Polling `NSEvent.modifierFlags` on mouse-moved works and updates only when the pointer moves, which is a control that ignores you until you jiggle the mouse.
 
@@ -175,6 +183,7 @@ Four labels carry a title or a preview today — [`NotchOverlayView.swift`](../N
 | The pill (§4.1) | One clause in `MonitorStore.drawsCompactMiddle` |
 | Settings | `SettingsWindow.privacyModeRow`, second in `displayGroup` |
 | The labels (§9) | `SessionRow.accessibilityText` and `RetiredRow.accessibilityText` |
+| The peek (§7) | `PeekButton` in the band; `MonitorStore.isPeeking`, `beginPeek()`, `endPeek()`, `togglePeek()` and `hasCoveredRows`, with `isExpanded`'s and `privacyMode`'s `didSet` clearing it |
 
 ### 11.1 Three things the code settled that this document had not
 
@@ -206,15 +215,14 @@ All five stand. None was closed by the amendment, and question 03 is now sharper
 | 04 | Is a global shortcut worth it? | `RegisterEventHotKey` needs no permission, and a keyboard gesture is the only one that works *before* the pointer reaches the notch. It costs a shortcut recorder and a default that collides with nothing. Not proposed here; proposed if anybody asks twice. |
 | 05 | Should `Hide the wings` and this one row be aware of each other? | Both quieten the collapsed surface from opposite ends, and a person who wants one may want the other. |
 
-## 13. What shipped, and what did not
+## 13. What shipped
 
-**Built**, in one change:
+**All of it**, over two days:
 
 1. §3's rule and §4's bar over the panel's four runs, and §4.1's silence on the pill's one.
 2. §5's secondary click, on the band.
-3. §6's click-to-open while covered.
+3. §6's click-to-open while covered — and, after the bugs in §11.2, an entry that still cancels a pending collapse and a mode ending that re-offers the entry the tracking area will not repeat.
 4. §5's Settings row, and §9's two labels.
+5. §7's peek: one held control in the band, three ways out of it, and a latch for the keyboard.
 
-**Not built:** §7's press-and-hold peek for closed rows. Opening a row reveals it, which is the half of §7 that the answering path needed; reading a *closed* row's preview still means leaving the mode.
-
-**What to watch first, on a real pairing session:** whether people live behind the bars for an hour, or turn it off inside five minutes because they cannot read their own list. If it is the second, the peek is not optional and moves into the minimum. **And second:** whether a silent pill is mistaken for `Name the work` being off — §8 accepts that cost, and a real machine is where it either bites or does not.
+**What to watch first, on a real pairing session:** whether people live behind the bars for an hour, or turn it off inside five minutes. The peek is what that turned on before it was built, and it is the thing to ask about first now that it exists. **And second:** whether a silent pill is mistaken for `Name the work` being off — §8 accepts that cost, and a real machine is where it either bites or does not.

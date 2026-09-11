@@ -2035,6 +2035,144 @@ struct NotchlineTests {
         #expect(store.isExpanded)
     }
 
+    /// **Hold to read your own list, let go to put it back**
+    /// (`cover-the-words.md` §7).
+    ///
+    /// The peek is what makes the mode survivable for an hour of pairing: a
+    /// covered panel nobody can read their own list on is one people turn off
+    /// instead. It lifts every cover at once — live rows and retired ones —
+    /// rather than one row at a time, because the thing being read is the
+    /// list.
+    @Test @MainActor
+    func holdingThePeekLiftsEveryCoverAndLettingGoPutsThemBack() {
+        let flat = makeDisplay(id: "flat", ordinal: 1, menuBarHeight: 24, hasNotch: false)
+        let session = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "t-1",
+            turnID: "u-1",
+            projectName: "notchline",
+            title: "Cover the words",
+            preview: "Reading the bar",
+            status: .running,
+            startedAt: Date()
+        )
+        let store = MonitorStore(
+            displays: [flat],
+            services: [],
+            initialSnapshot: makeSessionSnapshot([session])
+        )
+        store.privacyMode = true
+        store.isExpanded = true
+        #expect(store.coversWords(of: session))
+        #expect(store.hasCoveredRows)
+
+        store.beginPeek()
+        #expect(store.isPeeking)
+        #expect(!store.coversWords(of: session))
+
+        store.endPeek()
+        #expect(!store.isPeeking)
+        #expect(store.coversWords(of: session))
+
+        // **The mode is untouched by it.** A peek is not a way out of the
+        // mode, and the switch in Settings still reads on.
+        #expect(store.privacyMode)
+    }
+
+    /// **A peek cannot be left on**, which is the whole reason it is allowed
+    /// to exist beside a mode somebody has already forgotten they turned on.
+    ///
+    /// Three ways out, and the release is only the first: the panel closing
+    /// ends it, because a release landing after the panel has gone would
+    /// otherwise leave the covers up for the next time it opens; and the mode
+    /// ending ends it, because there is then nothing being held up.
+    @Test @MainActor
+    func aPeekCannotBeLeftOn() {
+        let flat = makeDisplay(id: "flat", ordinal: 1, menuBarHeight: 24, hasNotch: false)
+        let store = MonitorStore(
+            displays: [flat],
+            services: [],
+            initialSnapshot: makeSessionSnapshot([])
+        )
+        store.privacyMode = true
+        store.isExpanded = true
+
+        store.beginPeek()
+        #expect(store.isPeeking)
+        store.collapse()
+        #expect(!store.isPeeking)
+
+        store.isExpanded = true
+        store.beginPeek()
+        #expect(store.isPeeking)
+        store.privacyMode = false
+        #expect(!store.isPeeking)
+
+        // And it cannot be started where there is nothing covered: neither
+        // with the mode off, nor on a panel that is shut.
+        store.beginPeek()
+        #expect(!store.isPeeking)
+        store.privacyMode = true
+        store.isExpanded = false
+        store.beginPeek()
+        #expect(!store.isPeeking)
+    }
+
+    /// **The control is drawn only where there is something to lift.**
+    ///
+    /// A covered panel with no rows is a band, a seam and a footer, none of
+    /// which this covers — and that is also the one form narrow enough for the
+    /// band's own width to bind, since `restingExpandedWidth` reserves exactly
+    /// two control boxes on the trailing side.
+    ///
+    /// The keyboard's latch answers to the same question, so VoiceOver cannot
+    /// reach a peek the pointer could not.
+    @Test @MainActor
+    func thePeekIsOfferedOnlyWhereThereIsSomethingToLift() {
+        let flat = makeDisplay(id: "flat", ordinal: 1, menuBarHeight: 24, hasNotch: false)
+        let session = MonitoredSession(
+            agent: .codex,
+            threadID: "t-1",
+            turnID: "u-1",
+            projectName: "acme-billing",
+            title: "Reconcile the ledger",
+            preview: nil,
+            status: .running,
+            startedAt: Date()
+        )
+        let empty = MonitorStore(
+            displays: [flat],
+            services: [],
+            initialSnapshot: makeSessionSnapshot([])
+        )
+        empty.privacyMode = true
+        empty.isExpanded = true
+        #expect(!empty.hasCoveredRows)
+
+        let listed = MonitorStore(
+            displays: [flat],
+            services: [],
+            initialSnapshot: makeSessionSnapshot([session])
+        )
+        listed.isExpanded = true
+        // Not while nothing is covered, and not while the About panel has
+        // replaced the body it would be lifting.
+        #expect(!listed.hasCoveredRows)
+        listed.privacyMode = true
+        #expect(listed.hasCoveredRows)
+        listed.toggleAbout()
+        #expect(!listed.hasCoveredRows)
+        listed.toggleAbout()
+        #expect(listed.hasCoveredRows)
+
+        // The keyboard's latch, which is the one path that does not hold a
+        // press -- and it is bounded by the panel like every other peek.
+        listed.togglePeek()
+        #expect(listed.isPeeking)
+        listed.togglePeek()
+        #expect(!listed.isPeeking)
+    }
+
     /// **A panel opened by a press survives the resize's own hover events.**
     ///
     /// Expanding writes a bigger window and SwiftUI rebuilds the tracking area
