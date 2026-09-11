@@ -2225,6 +2225,79 @@ struct NotchlineTests {
         #expect(!listed.isPeeking)
     }
 
+    /// **The room outlives the mode, and that is what lets the control
+    /// animate.**
+    ///
+    /// The peek's box is mounted for as long as a peek could be offered and
+    /// the mode decides only whether its three bars are drawn in it
+    /// (`PeekButton`), so throwing `Privacy Mode` is a drawing rather than an
+    /// insertion — which is the whole of why the bars can draw themselves on
+    /// and retract instead of blinking into existence at full ink.
+    ///
+    /// It costs nothing because the peek stands in slack the band already has.
+    /// Everything that answers *there is no room* still does:
+    /// ``MonitorStore/keepsPeekRoom`` follows ``MonitorStore/hasCoveredRows``
+    /// in every case but the mode itself, the resting pill included — that
+    /// form draws no body to uncover, and its width is composed to exactly the
+    /// two control boxes beside the peek.
+    @Test @MainActor
+    func theBandKeepsThePeeksRoomWhileTheModeIsOff() {
+        let clock = TestClock()
+        let store = MonitorStore(
+            services: [],
+            initialSnapshot: .connecting,
+            clock: clock
+        )
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, sessions: [recentTestRow(thread: "read-me")])
+        )
+        store.isExpanded = true
+
+        // The room, with nothing drawn in it.
+        #expect(store.keepsPeekRoom)
+        #expect(!store.hasCoveredRows)
+
+        store.privacyMode = true
+        #expect(store.keepsPeekRoom)
+        #expect(store.hasCoveredRows)
+
+        // And the room goes where the control went: the About panel has
+        // replaced the body, and a shut panel has no body at all.
+        store.toggleAbout()
+        #expect(!store.keepsPeekRoom)
+        store.toggleAbout()
+        #expect(store.keepsPeekRoom)
+
+        store.isExpanded = false
+        #expect(!store.keepsPeekRoom)
+        store.isExpanded = true
+        #expect(store.keepsPeekRoom)
+
+        // **The resting pill keeps no room either, and a departure does not
+        // buy it any.** The product closes, its row retires into the queue --
+        // so the list is not empty -- and the panel is a widened pill with no
+        // body under it. `restingExpandedWidth` is `cut-out + 2 × (clearance +
+        // mark + gear + padding)`, which leaves nothing for a third box to
+        // stand in without moving the pair.
+        //
+        // The row retires while the product is still open -- a product nobody
+        // can see is no witness to its own rows being over -- and the queue
+        // alone keeps the room, because a retired row is covered like any
+        // other.
+        store.applyForTesting(makeAgentSnapshot(.codex, sessions: []))
+        #expect(store.sessions.isEmpty)
+        #expect(!store.recentDepartures.isEmpty)
+        #expect(store.keepsPeekRoom)
+
+        store.applyForTesting(
+            makeAgentSnapshot(.codex, sessions: [], presence: .closed)
+        )
+        #expect(!store.recentDepartures.isEmpty)
+        #expect(store.expandsToPillOnly)
+        #expect(!store.keepsPeekRoom)
+        #expect(!store.hasCoveredRows)
+    }
+
     /// **A panel opened by a press survives the resize's own hover events.**
     ///
     /// Expanding writes a bigger window and SwiftUI rebuilds the tracking area

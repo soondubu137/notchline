@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Built in full** — §13's minimum and the Settings row and the accessibility pass on 2026-09-10, §6's two hover bugs fixed and §7's peek built on 2026-09-11, with §4.4's searchlight and §7's glyph the same day. §12's five questions are still open. |
+| Status | **Built in full** — §13's minimum and the Settings row and the accessibility pass on 2026-09-10, §6's two hover bugs fixed and §7's peek built on 2026-09-11, with §4.4's searchlight, §7's glyph and §10's draw-on the same day. §12's five questions are still open. |
 | Version | 1.1 |
 | Date | 2026-09-10 |
 | Amended | **The control is named `Privacy Mode`, and the pill is silenced rather than covered** (2026-09-10, by the board's owner, before any of it was built). Two decisions, and the second one costs something this document had been relying on. The name in Settings is `Privacy Mode`; *covering* stays the name of the mechanism, and §2 is unchanged and now matters more, not less. And the pill draws **nothing** where §4.1 had it draw a `48` pt bar — so **neither collapsed form can say the mode is on**, which §8 used to be able to claim of one of them. Touched: the header, §3, §4.1, §5, §8, §10, §11, §13. |
@@ -179,6 +179,12 @@ Four labels carry a title or a preview today — [`NotchOverlayView.swift`](../N
 
 **Entering and leaving the cover is a cross-fade in place**, on `PanelMotion`'s own curve, with no geometry change behind it. There is nothing to slide, because nothing moves.
 
+**The peek draws itself on, dealt out a bar at a time.** It was the one abruptness on this surface anybody noticed: every other mark in the band arrives on `PanelMotion.fade(isArriving:)`, and this control blinked into existence at full ink and blinked out again. The fix is the one `FoldSeamRule` already uses — **keep the room, animate the mark**. The box stands in the band for as long as a peek could be offered at all (`MonitorStore.keepsPeekRoom`), and the mode decides only what is drawn in it, so switching it is a drawing rather than an insertion. That room is free here and nowhere else: the peek grows into the slack between the counts and the trailing pair (§7), so an empty box in it moves nothing and costs no width.
+
+**The order is the covers.** The three pills grow out of their leading edge on the band's own fade, short then medium then long, `50 ms` apart — the row being covered, drawn at glyph size. Coming off they reverse on the shorter curve, `35 ms` apart, which puts the long bar — the run of preview text, the most of a row a stranger could read — out of the way first. The only thing this adds to the surface's vocabulary is that order; the curve and both durations are the ones every other mark in the band arrives on.
+
+**Nothing waits for it.** The covers on the rows go on and come off on the same frame the switch is thrown; this is a control arriving after the fact and retiring after the fact, and the press it offers is live from the first frame of the draw. An empty box takes no press, draws no hover fill, and is not in the accessibility tree. Measured 2026-09-11 on the Release panel, sampling the panel's own content view at 60 Hz: first bar lit at `96 ms`, all three at full ink and full length by `312 ms`, and the glyph clear `181 ms` after the mode ends.
+
 ## 11. Implementation mapping
 
 | This document | Where it landed |
@@ -197,6 +203,7 @@ Four labels carry a title or a preview today — [`NotchOverlayView.swift`](../N
 | The labels (§9) | `SessionRow.accessibilityText` and `RetiredRow.accessibilityText` |
 | The peek (§7) | `PeekButton` and `PeekGlyph` in the band; `MonitorStore.isPeeking`, `beginPeek()`, `endPeek()`, `togglePeek()` and `hasCoveredRows`, with `isExpanded`'s and `privacyMode`'s `didSet` clearing it |
 | The searchlight (§4.4) | `CoverBarView`, beside `SessionRowTextView`, sharing its sweep mask and period; `NotchPalette.coverBarDrawingColor` |
+| The peek's arrival (§10) | `MonitorStore.keepsPeekRoom` mounts the box and `hasCoveredRows` draws in it; `PeekGlyph.draw(isDrawn:index:)` staggers `PanelMotion.fade(isArriving:)` over the three bars |
 
 ### 11.1 Three things the code settled that this document had not
 
@@ -236,6 +243,6 @@ All five stand. None was closed by the amendment, and question 03 is now sharper
 2. §5's secondary click, on the band.
 3. §6's click-to-open while covered — and, after the bugs in §11.2, an entry that still cancels a pending collapse and a mode ending that re-offers the entry the tracking area will not repeat.
 4. §5's Settings row, and §9's two labels.
-5. §7's peek: one held control in the band, three ways out of it, and a latch for the keyboard.
+5. §7's peek: one held control in the band, three ways out of it, and a latch for the keyboard — and, since a control that blinks in and out is a control people look at, §10's draw-on.
 
 **What to watch first, on a real pairing session:** whether people live behind the bars for an hour, or turn it off inside five minutes. The peek is what that turned on before it was built, and it is the thing to ask about first now that it exists. **And second:** whether a silent pill is mistaken for `Name the work` being off — §8 accepts that cost, and a real machine is where it either bites or does not.

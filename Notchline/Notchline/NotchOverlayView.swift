@@ -505,7 +505,13 @@ private struct OverlayHeader: View {
             // would move the panel's own edge. Drawn only with rows on the
             // list, which is the one form narrow enough for that width to
             // bind.
-            if store.hasCoveredRows {
+            //
+            // **Mounted on the room rather than on the mode**
+            // (``MonitorStore/keepsPeekRoom``), so switching `Privacy Mode`
+            // changes what is drawn in a box that is already there and the
+            // bars can draw themselves on and retract. The slack it stands in
+            // is what makes that free: an empty box moves nothing.
+            if store.keepsPeekRoom {
                 PeekButton()
             }
 
@@ -708,23 +714,6 @@ struct CompactTrailingSlot: View {
     )
 }
 
-/// The mark, which puts the app itself on the panel in place of the work.
-///
-/// **It is the brand package's menu bar template, not a fresh drawing of the
-/// mark.** That file is the one the package draws for small sizes, and it is
-/// black at the level ramp's own alphas — so a template tint reproduces
-/// `1.00 / 0.80 / 0.60 / 0.40 / 0.20` in whatever ink the control is currently
-/// in. The app already carries the same five columns as a live status matrix;
-/// two drawings of one mark would be free to disagree, and one asset with one
-/// tint cannot.
-///
-/// It draws at ``PanelMetrics/bandControlGlyphSize``, which is the gear's own
-/// glyph size rather than the template's native `16`: this mark is a solid
-/// mass where `gearshape` is an outline, so matching the box would put a much
-/// heavier figure beside it — and at `16.6` it would be the status matrix on
-/// the other end of the same band, drawn a second time. The catalogue
-/// therefore carries that template resampled to `13`, so both scales are drawn
-/// `1 : 1` rather than through a resample that softens a `0.84` pt gap.
 /// Hold to read your own list, and let go to put it back
 /// (`cover-the-words.md` §7).
 ///
@@ -756,6 +745,14 @@ struct CompactTrailingSlot: View {
 /// being brighter and taking no ground (``AboutButton``), and a glyph that
 /// swapped for another mid-press would be a second thing moving under a finger
 /// already holding something down.
+///
+/// **It arrives as a drawing, not as a layout.** The box stands in the band for
+/// as long as a peek could be offered (``MonitorStore/keepsPeekRoom``) and the
+/// mode decides only whether the three bars are drawn in it, so turning
+/// `Privacy Mode` on and off animates a glyph rather than inserting and
+/// removing a control. Everything else about the box is switched off while it
+/// is empty: no press reaches the store, no hover fill is drawn, and
+/// accessibility does not see it.
 private struct PeekButton: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -765,23 +762,43 @@ private struct PeekButton: View {
         PanelMetrics.settingsButtonSize(compactHeight: store.compactHeight)
     }
 
+    /// Whether there is anything in the box — the covers being on.
+    private var isDrawn: Bool { store.hasCoveredRows }
+
     var body: some View {
         PeekGlyph(
-            ink: store.isPeeking ? Color.white : Color.white.opacity(0.55)
+            ink: store.isPeeking ? Color.white : Color.white.opacity(0.55),
+            isDrawn: isDrawn
         )
             .frame(width: size, height: size)
+            // The tile answers to the pointer **and** to whether the control is
+            // there: a fill under an empty box is a button nobody can see, and
+            // one that stayed lit while the bars retracted would outlive the
+            // control it belongs to. Both changes are animated, and the glyph's
+            // own stagger overrides this transaction for the bars.
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(Color.white.opacity(isHovered ? 0.12 : 0))
+                    .fill(Color.white.opacity(isHovered && isDrawn ? 0.12 : 0))
             )
+            .animation(.easeOut(duration: 0.12), value: isHovered)
+            .animation(PanelMotion.fade(isArriving: isDrawn), value: isDrawn)
             .contentShape(Rectangle())
+            // Tracked while the box is empty as well, so a mode switched on
+            // under a resting pointer finds the control already lit rather than
+            // waiting for the mouse to be jiggled.
             .onHover { isHovered = $0 }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { _ in store.beginPeek() }
-                    .onEnded { _ in store.endPeek() }
+                    .onEnded { _ in store.endPeek() },
+                // An empty box takes no press. The store guards
+                // ``MonitorStore/beginPeek()`` anyway, but a gesture claiming
+                // this square would still be swallowing presses meant for the
+                // band underneath it.
+                including: isDrawn ? .all : .none
             )
             .accessibilityElement()
+            .accessibilityHidden(!isDrawn)
             .accessibilityAddTraits(.isButton)
             .accessibilityLabel(
                 store.isPeeking
@@ -806,27 +823,84 @@ private struct PeekButton: View {
 /// signature.
 private struct PeekGlyph: View {
     let ink: Color
+    /// Whether the covers are on, which is the whole of this glyph's arrival:
+    /// `false` is an empty box rather than an absent one — see ``PeekButton``.
+    let isDrawn: Bool
 
     private static let widths: [CGFloat] = [0.46, 0.77, 1]
     private static let barHeight: CGFloat = 1.8
     private static let gap: CGFloat = 2.7
 
+    /// How far apart the three bars are dealt, going on and coming off.
+    ///
+    /// Small enough that what is read is one sweep down the glyph rather than
+    /// three separate events — the stagger is meant to be felt and not counted
+    /// — and shorter coming off, like every duration on this surface.
+    private static let stagger: TimeInterval = 0.05
+    private static let unstagger: TimeInterval = 0.035
+
     var body: some View {
         let span = PanelMetrics.bandControlGlyphSize
         VStack(alignment: .leading, spacing: Self.gap) {
-            ForEach(Self.widths, id: \.self) { fraction in
+            ForEach(Array(Self.widths.enumerated()), id: \.offset) { index, fraction in
                 RoundedRectangle(
                     cornerRadius: Self.barHeight / 2,
                     style: .continuous
                 )
                 .fill(ink)
                 .frame(width: span * fraction, height: Self.barHeight)
+                // **Each bar keeps its width and grows out of the leading
+                // edge** — ``FoldSeamRule``'s transform, for its reason: the
+                // frame is the layout and the scale is the drawing, so nothing
+                // beside the glyph is re-laid out on any frame of this.
+                .scaleEffect(x: isDrawn ? 1 : 0, anchor: .leading)
+                .opacity(isDrawn ? 1 : 0)
+                .animation(Self.draw(isDrawn: isDrawn, index: index), value: isDrawn)
             }
         }
         .frame(width: span, alignment: .leading)
     }
+
+    /// One bar going on or coming off: **the band's own fade, dealt out a bar
+    /// at a time.**
+    ///
+    /// The curve and both durations are ``PanelMotion/fade(isArriving:)`` — the
+    /// same arrival every other mark in this band makes, and the same rule that
+    /// leaving is quicker than arriving — so the only thing this control adds
+    /// to the surface's vocabulary is the order.
+    ///
+    /// **And the order is the covers.** The glyph is the row it lifts, so it
+    /// goes on the way the covers go on: short, medium, long, top to bottom.
+    /// Coming off it reverses, which is what puts the long bar — the run of
+    /// preview text, the most of a row a stranger could read — out of the way
+    /// first the instant the mode ends. Nothing waits for it: the covers on the
+    /// rows themselves are up on the same frame the switch is thrown, and this
+    /// is a control retiring after the fact rather than an animation the
+    /// uncovering is held behind.
+    private static func draw(isDrawn: Bool, index: Int) -> Animation {
+        let order = Double(isDrawn ? index : widths.count - 1 - index)
+        return PanelMotion.fade(isArriving: isDrawn)
+            .delay((isDrawn ? stagger : unstagger) * order)
+    }
 }
 
+/// The mark, which puts the app itself on the panel in place of the work.
+///
+/// **It is the brand package's menu bar template, not a fresh drawing of the
+/// mark.** That file is the one the package draws for small sizes, and it is
+/// black at the level ramp's own alphas — so a template tint reproduces
+/// `1.00 / 0.80 / 0.60 / 0.40 / 0.20` in whatever ink the control is currently
+/// in. The app already carries the same five columns as a live status matrix;
+/// two drawings of one mark would be free to disagree, and one asset with one
+/// tint cannot.
+///
+/// It draws at ``PanelMetrics/bandControlGlyphSize``, which is the gear's own
+/// glyph size rather than the template's native `16`: this mark is a solid
+/// mass where `gearshape` is an outline, so matching the box would put a much
+/// heavier figure beside it — and at `16.6` it would be the status matrix on
+/// the other end of the same band, drawn a second time. The catalogue
+/// therefore carries that template resampled to `13`, so both scales are drawn
+/// `1 : 1` rather than through a resample that softens a `0.84` pt gap.
 private struct AboutButton: View {
     @EnvironmentObject private var store: MonitorStore
 

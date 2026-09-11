@@ -6,6 +6,10 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ## Unreleased
 
+### Changed
+
+- **The peek control draws itself on and off instead of blinking.** Turning `Privacy Mode` on and off used to insert and remove it at full ink. Its box now stands in the band's slack for as long as a peek could be offered, and the mode decides only what is drawn in it: the three pills grow out of their leading edge on the band's own fade, short to long, and retract the other way when the mode ends. (`docs/cover-the-words.md` §10.)
+
 ### Fixed
 
 - **A Claude Code row no longer says `Untitled` for a session Claude Code has named.** The title is read from Claude Code's own transcript, and 64 KiB from the front of the file stopped reaching it: what stands in front of the name is the opening the product writes for itself, and that is sized by how many skills, plugins, agents and MCP servers the session started with — 87 KB on this machine. The opening is now read by records rather than by bytes.

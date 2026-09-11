@@ -2884,17 +2884,42 @@ final class MonitorStore: ObservableObject {
         privacyMode && !isPeeking && openRowID != session.id
     }
 
-    /// Whether the panel has anything for a peek to lift.
+    /// Whether the band keeps the peek's box, drawn or not.
     ///
-    /// What the control's presence answers to: a covered panel with no rows on
-    /// it is a band, a seam and a footer, none of which this covers, so a
-    /// control offering to uncover them would be offering nothing. The About
-    /// panel replaces the body outright and is not covered either.
-    var hasCoveredRows: Bool {
-        privacyMode
-            && isExpanded
+    /// **Everything ``hasCoveredRows`` asks except the mode itself**, and it
+    /// exists so the control can arrive and leave as a drawing rather than as a
+    /// layout. The box is mounted for as long as a peek could be offered at
+    /// all, and ``hasCoveredRows`` decides whether its three bars are drawn in
+    /// it — which is what lets them draw themselves on and retract when the
+    /// mode is switched, instead of a glyph blinking into existence at full
+    /// ink. It is the same trick ``FoldSeamRule`` uses for the rule it grows
+    /// out of the label's edge: keep the room, animate the mark.
+    ///
+    /// **The room is free here and nowhere else on this surface.** The peek
+    /// grows into the slack between the counts and the trailing pair
+    /// (`cover-the-words.md` §7), so an empty box in it moves nothing and costs
+    /// no width — which is exactly why this could not be done by reserving a
+    /// third box in ``PanelMetrics/expandedTrailingSideWidth``.
+    ///
+    /// What it answers to: a covered panel with no rows on it is a band, a seam
+    /// and a footer, none of which this covers, so a control offering to
+    /// uncover them would be offering nothing. The About panel replaces the
+    /// body outright and is not covered either. **Nor is the resting pill**,
+    /// which draws no body at all — it is also the one form whose width is
+    /// composed to exactly two control boxes
+    /// (``PanelMetrics/restingExpandedWidth``), so a third standing in it would
+    /// push the pair the panel was measured for.
+    var keepsPeekRoom: Bool {
+        isExpanded
             && !isShowingAbout
+            && !expandsToPillOnly
             && !(sessions.isEmpty && recentDepartures.isEmpty)
+    }
+
+    /// Whether the panel has anything for a peek to lift — the drawn state of
+    /// the control ``keepsPeekRoom`` keeps the room for.
+    var hasCoveredRows: Bool {
+        privacyMode && keepsPeekRoom
     }
 
     /// Lift the covers, and put them back.
