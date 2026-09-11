@@ -11176,7 +11176,8 @@ struct NotchlineTests {
             hookRegistrar: installer,
             projectMetadata: CodexDesktopProjectMetadataRepository(
                 stateFileURL: projectStateFile
-            )
+            ),
+            desktopProcessIdentifierProvider: { 4_242 }
         )
 
         let ready = await service.fetchSnapshot()
@@ -11187,6 +11188,15 @@ struct NotchlineTests {
         // It must now be ignored: only a post-launch Hook can create a session.
         #expect(ready.availability == .ready)
         #expect(ready.sessions.isEmpty)
+        // Presence is the other half of ``AgentSnapshot/isConnected``, so the
+        // fixture states it rather than leaving it to whether Codex Desktop
+        // happens to be open on the machine running the suite.
+        #expect(ready.presence == .open)
+        // One level up from `sessions.isEmpty`: with no rows to rank, the merge
+        // falls through to presence, and an open product we can reach reads as
+        // Connected. Had the listed active turn been reconstructed this would
+        // be Running instead — the regression the test exists to catch, stated
+        // where the surface actually reads it.
         #expect(AgentSnapshotMerge.merge([ready]).status == .connected)
         // Startup still proves the App Server answers a real read, which is what
         // separates Ready from Disconnected.
