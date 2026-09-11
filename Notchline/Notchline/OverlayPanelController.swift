@@ -135,6 +135,27 @@ final class OverlayPanelController {
             }
         }
 
+        // **The press that opens a covered panel** (`cover-the-words.md` §6).
+        //
+        // Here rather than on a catcher in the view tree, and the reason is
+        // the one ``OverlayPanel/sendEvent(_:)`` already gives for the focus
+        // rule: only the window sees every press. A hit-testing catcher cannot
+        // take this one — `acceptsFirstMouse` is consulted for a primary press
+        // and not for a secondary one, so AppKit hit-tests the view *before*
+        // the event is the app's current event, a catcher keyed on
+        // `NSApp.currentEvent` answers `nil`, and the press lands on whatever
+        // is underneath. Measured on the real panel, 2026-09-10: the secondary
+        // press reached its catcher every time and the primary press never did.
+        //
+        // The store decides whether anything happens
+        // (``MonitorStore/openFromCollapsed()`` is guarded on both sides), so
+        // this closure is unconditional and a press on an open panel or an
+        // uncovered one still means exactly what it meant before.
+        panel.handlePrimaryPress = { [weak self] in
+            guard let self else { return }
+            store.openFromCollapsed()
+        }
+
         // The keys that reach the window because nothing in it holds the caret
         // (`answer-in-notch.md` §9.2). Everything this closure does is decode an
         // `NSEvent`: what each key *means* is ``MonitorStore/takeKey(_:)``,
@@ -772,6 +793,15 @@ final class OverlayPanel: NSPanel {
     /// stops here either way — and which the store's own tests do.
     var handleKey: ((NSEvent) -> Bool)?
 
+    /// A primary press anywhere on this window (`cover-the-words.md` §6).
+    ///
+    /// Offered to the store before the event is dispatched, and the event is
+    /// passed on regardless: this is not a claim on the click, only a chance
+    /// to notice it. A covered panel is collapsed, so there is nothing under
+    /// the press for it to compete with — and when there is, the store's own
+    /// guard is what says so rather than a hit test that cannot see the state.
+    var handlePrimaryPress: (() -> Void)?
+
     override var canBecomeKey: Bool { latches }
     override var canBecomeMain: Bool { false }
 
@@ -823,6 +853,9 @@ final class OverlayPanel: NSPanel {
            firstResponder is AnswerFieldView,
            contentView?.hitTest(event.locationInWindow).map(Self.isAnswerField) != true {
             makeFirstResponder(nil)
+        }
+        if event.type == .leftMouseDown {
+            handlePrimaryPress?()
         }
         super.sendEvent(event)
     }

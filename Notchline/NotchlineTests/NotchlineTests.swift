@@ -1904,6 +1904,256 @@ struct NotchlineTests {
         #expect(store.givesUpCompactWings)
     }
 
+    /// **`Privacy Mode` covers every word, and silences the pill outright.**
+    ///
+    /// The two halves of `cover-the-words.md` that can be asked of the store:
+    /// what is covered, and what the pill does. The pill is the exception to
+    /// the covering rule and the reason is in ``MonitorStore/drawsCompactMiddle``
+    /// — a bar in the middle would be the state announcing itself on the one
+    /// collapsed form able to announce it, and the notched bar could never
+    /// match it. So the middle goes as quiet as `Name the work` off, without
+    /// writing that preference.
+    ///
+    /// **The width is pinned here on purpose.** Both of the pill's ends are
+    /// anchored and its middle is a subtraction, so a middle that answered to
+    /// this by shrinking would move the mark and the reading with it — the one
+    /// thing this form is arranged never to do.
+    @Test @MainActor
+    func privacyModeCoversEveryWordAndSilencesThePillOutright() {
+        let defaults = UserDefaults(suiteName: "privacy-\(UUID().uuidString)")!
+        let flat = makeDisplay(id: "flat", ordinal: 1, menuBarHeight: 24, hasNotch: false)
+        let session = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "t-1",
+            turnID: "u-1",
+            projectName: "notchline",
+            title: "Cover the words",
+            preview: "Reading the bar",
+            status: .approvalNeeded,
+            startedAt: Date(),
+            request: AgentRequest(id: "c-1", toolName: "Bash", form: .command("ls"))
+        )
+        let store = MonitorStore(
+            displays: [flat],
+            services: [],
+            initialSnapshot: makeSessionSnapshot([session]),
+            preferences: defaults
+        )
+
+        // Off on a fresh install: this is a mode somebody enters, not a
+        // standing answer about what the surface is for.
+        #expect(!store.privacyMode)
+        #expect(store.namesWorkOnPill)
+        #expect(store.drawsCompactMiddle)
+        #expect(!store.coversWords(of: session))
+        let named = store.currentPanelSize.width
+
+        store.togglePrivacyMode()
+        #expect(store.privacyMode)
+        #expect(store.coversWords(of: session))
+        // The pill draws nothing rather than a bar -- and `Name the work` is
+        // untouched, so turning the cover off gives the name straight back.
+        #expect(!store.drawsCompactMiddle)
+        #expect(store.namesWorkOnPill)
+        #expect(store.currentPanelSize.width == named)
+
+        // **A deliberate press reveals.** The cover silences what is drawn
+        // unasked; an open row is as deliberate as a gesture here gets, and a
+        // covered panel nobody can answer a question in is one people switch
+        // back off.
+        store.toggleOpenRow(session)
+        #expect(store.openRowID == session.id)
+        #expect(!store.coversWords(of: session))
+        store.closeOpenRow()
+        #expect(store.coversWords(of: session))
+
+        // Remembered across launches, like every other preference on this
+        // card: a cover that quietly lapses is the failure it exists to stop.
+        #expect(
+            MonitorStore(displays: [flat], services: [], preferences: defaults)
+                .privacyMode
+        )
+        store.togglePrivacyMode()
+        #expect(
+            !MonitorStore(displays: [flat], services: [], preferences: defaults)
+                .privacyMode
+        )
+    }
+
+    /// **Covered, the panel waits for a press** (`cover-the-words.md` §6).
+    ///
+    /// The half of this feature that answers the case it exists for. The
+    /// component stands over the cut-out and both shoulders, and the dwell is
+    /// `0.15` s — so a pointer on its way to a right-hand menu bar item opens
+    /// the panel several times an hour, onto somebody's prompts and the
+    /// model's live answers. Covered, that crossing does nothing.
+    ///
+    /// Only the *opening* is gated: a panel opened by a press still closes
+    /// when the pointer leaves.
+    @Test @MainActor
+    func aCoveredPanelWaitsForAPressInsteadOfOpeningOnHover() async {
+        let clock = TestClock()
+        let store = MonitorStore(
+            displays: [makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 38, hasNotch: true)],
+            clock: clock
+        )
+        store.privacyMode = true
+
+        // **The dwell is never started**, rather than started and ignored --
+        // so a pointer resting on the notch costs nothing and there is no
+        // pending wake-up to reason about. Measured against the store's own
+        // baseline, which is whatever its refresh loop is already parked on.
+        await clock.settle()
+        let parked = clock.sleeperCount
+        store.pointerEnteredPanel()
+        await clock.settle()
+        #expect(clock.sleeperCount == parked)
+        await clock.advance(by: MonitorTiming.standard.hoverExpandDelay * 4)
+        #expect(!store.isExpanded)
+
+        store.openFromCollapsed()
+        #expect(store.isExpanded)
+
+        // The exit rule is untouched, dwell and all. Advanced in two steps
+        // because a scheduled task registers its sleep after the call returns:
+        // one advance that outruns it would leave it parked for ever.
+        store.pointerExitedPanel()
+        await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay / 2)
+        #expect(store.isExpanded)
+        await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay)
+        #expect(!store.isExpanded)
+
+        // And with nothing covered the press is not the way in -- hover is,
+        // so "how does this panel open" has one answer per state.
+        store.privacyMode = false
+        store.openFromCollapsed()
+        #expect(!store.isExpanded)
+        store.pointerEnteredPanel()
+        await clock.advance(by: MonitorTiming.standard.hoverExpandDelay / 2)
+        #expect(!store.isExpanded)
+        await clock.advance(by: MonitorTiming.standard.hoverExpandDelay)
+        #expect(store.isExpanded)
+    }
+
+    /// **A panel opened by a press survives the resize's own hover events.**
+    ///
+    /// Expanding writes a bigger window and SwiftUI rebuilds the tracking area
+    /// around it. Measured on the real panel 2026-09-10: that delivers a
+    /// spurious `exit` about `105 ms` after the resize and the matching `enter`
+    /// about `112 ms` after that, with the pointer never moving. On the
+    /// ordinary hover path the entry cancels the exit's pending collapse for
+    /// free, because ``scheduleHoverAction(after:action:)`` begins by
+    /// cancelling — and a covered ``pointerEnteredPanel()`` that returned
+    /// early skipped it, so a panel opened by a press shut itself a quarter of
+    /// a second later with the pointer still on it.
+    @Test @MainActor
+    func aPanelOpenedByAPressSurvivesTheResizesOwnExitAndEntry() async {
+        let clock = TestClock()
+        let store = MonitorStore(
+            displays: [makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 38, hasNotch: true)],
+            clock: clock
+        )
+        store.privacyMode = true
+        store.pointerEnteredPanel()
+        store.openFromCollapsed()
+        #expect(store.isExpanded)
+
+        // The pair the resize delivers, in the order and well inside the
+        // window the real panel produced them in.
+        //
+        // **The exit's collapse has to be parked on the clock before the entry
+        // can take it back**, and asserting that is what makes this test able
+        // to fail. A scheduled task registers its sleep after the call
+        // returns, so an `advance` issued straight away outruns it, the
+        // collapse never fires, and the test passes whether or not the entry
+        // cancelled anything — which is exactly what it did on the first
+        // writing, with the fix removed.
+        await clock.settle()
+        let parked = clock.sleeperCount
+        store.pointerExitedPanel()
+        await clock.settle()
+        #expect(clock.sleeperCount == parked + 1)
+
+        store.pointerEnteredPanel()
+        await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay / 2)
+        await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay * 4)
+        #expect(store.isExpanded)
+
+        // And a real departure still closes it, dwell and all: what the entry
+        // takes back is one exit, not the rule.
+        store.pointerExitedPanel()
+        await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay / 2)
+        #expect(store.isExpanded)
+        await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay)
+        #expect(!store.isExpanded)
+    }
+
+    /// **Leaving the mode under a stationary pointer opens the panel.**
+    ///
+    /// The gesture is a press *on the component*, so the pointer is on it when
+    /// the mode goes off — and `.onHover` is an `NSTrackingArea`, which speaks
+    /// only when the pointer moves. The entry that would have opened this
+    /// panel was delivered while the mode was still on and declined; nothing
+    /// delivers another until the pointer leaves and comes back, so without
+    /// this the panel sat shut under a pointer resting on it.
+    ///
+    /// It goes through the ordinary dwell rather than opening flat: one path
+    /// opens this panel on hover, and this is that path being told the answer
+    /// has changed.
+    @Test @MainActor
+    func leavingTheModeUnderAStationaryPointerOpensThePanel() async {
+        let clock = TestClock()
+        let store = MonitorStore(
+            displays: [makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 38, hasNotch: true)],
+            clock: clock
+        )
+        store.privacyMode = true
+
+        store.pointerEnteredPanel()
+        await clock.advance(by: MonitorTiming.standard.hoverExpandDelay * 4)
+        #expect(!store.isExpanded)
+
+        store.privacyMode = false
+        await clock.advance(by: MonitorTiming.standard.hoverExpandDelay / 2)
+        #expect(!store.isExpanded)
+        await clock.advance(by: MonitorTiming.standard.hoverExpandDelay)
+        #expect(store.isExpanded)
+
+        // **And only under a pointer that is actually there.** Turning the
+        // switch off in Settings, with the pointer over that window, must not
+        // drop the panel open on the other side of the screen.
+        store.collapse()
+        store.privacyMode = true
+        store.pointerExitedPanel()
+        await clock.advance(by: MonitorTiming.standard.hoverCollapseDelay * 2)
+        store.privacyMode = false
+        await clock.advance(by: MonitorTiming.standard.hoverExpandDelay * 4)
+        #expect(!store.isExpanded)
+    }
+
+    /// **A hit-testing catcher cannot take the press that opens a covered
+    /// panel**, which is why the window does (`cover-the-words.md` §6).
+    ///
+    /// `acceptsFirstMouse` is consulted for a primary press and not for a
+    /// secondary one, so AppKit hit-tests the view *before* the event is the
+    /// app's current event: a catcher keyed on `NSApp.currentEvent` answers
+    /// `nil` and the press lands on whatever is underneath. Measured on the
+    /// real panel on 2026-09-10 — the secondary press reached its catcher
+    /// every time and the primary press never did.
+    ///
+    /// This pins the half that is assertable without an event loop: the band's
+    /// catcher takes a secondary press and nothing else, so anything that
+    /// moves the primary press back into it fails here first.
+    @Test @MainActor
+    func theBandsCatcherTakesASecondaryPressAndNothingElse() {
+        #expect(SecondaryClickView.claims(.rightMouseDown))
+        #expect(SecondaryClickView.claims(.rightMouseUp))
+        #expect(!SecondaryClickView.claims(.leftMouseDown))
+        #expect(!SecondaryClickView.claims(.leftMouseUp))
+        #expect(!SecondaryClickView.claims(.scrollWheel))
+        #expect(!SecondaryClickView.claims(nil))
+    }
+
     /// A notch this app cannot place is a notch it cannot shrink onto.
     ///
     /// Giving up the wings means putting the collapsed body exactly on the

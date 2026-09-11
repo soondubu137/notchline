@@ -231,6 +231,21 @@ enum NotchPalette {
         green: labelRGB.green,
         blue: labelRGB.blue
     )
+    /// The bar a covered run is drawn as (`cover-the-words.md` §4).
+    ///
+    /// **One ink and one alpha for every bar, and it is the panel's dim one.**
+    /// A row ranks its three lines by brightness — white at `98%` for the
+    /// title, ``label`` for the caption and the preview — and a bar in the
+    /// title's white would be the brightest object on a covered panel, which
+    /// hands this surface's attention channel to a mark that carries no
+    /// attention at all. At `45%` three bars read as *the absence of text*,
+    /// which is what they are.
+    ///
+    /// Derived from ``label`` rather than picked, for ``surfaceEdge``'s reason:
+    /// a covered run is the dimmest text on this surface turned down until it
+    /// stops being a word, and a literal here could drift into a hue.
+    static let coverBar = label.opacity(coverBarOpacity)
+    private static let coverBarOpacity: Double = 0.45
     /// The optional edge around the whole surface (`figma-design.md` §8.4).
     ///
     /// Three quarters of ``label`` in every channel — `#5D5D60` against the

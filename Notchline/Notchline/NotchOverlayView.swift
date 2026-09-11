@@ -76,6 +76,22 @@ struct NotchOverlayView: View {
                 VStack(spacing: 0) {
                     OverlayHeader()
                         .frame(height: store.compactHeight)
+                        // **`Privacy Mode`'s gesture** (`cover-the-words.md`
+                        // §5). The band is the one region every state draws,
+                        // and collapsed it is the whole surface -- so this is
+                        // "anywhere that is not a row", and it never stands
+                        // over a row's own secondary click.
+                        //
+                        // The *primary* press that opens a covered panel is
+                        // not here and cannot be: `acceptsFirstMouse` is
+                        // consulted for a primary press and not a secondary
+                        // one, so AppKit hit-tests before the event is the
+                        // app's current event and this catcher answers `nil`.
+                        // It is taken by the window, in
+                        // ``OverlayPanel/sendEvent(_:)``.
+                        .overlay {
+                            SecondaryClickCatcher { store.togglePrivacyMode() }
+                        }
 
                     if (store.isExpanded || bodyPresentation.isMounted),
                        !store.expandsToPillOnly {
@@ -1731,6 +1747,16 @@ private struct SessionRow: View {
         // block, has no surface to compare this line against, and the product
         // is the first thing that says where clicking would go -- which is the
         // argument ``RetiredRow`` already makes one rule down.
+        // **The tree describes the drawing** (`cover-the-words.md` §9). A
+        // covered run is spoken as covered rather than read out: the label is
+        // what this row *is*, and a reader told the title while a bar is
+        // drawn has been told something nobody on the screen can see. What is
+        // not covered is unchanged -- the product, the status, the elapsed and
+        // the subagent counts are none of them content.
+        guard !store.coversWords(of: session) else {
+            return "\(session.agent.displayName), covered, "
+                + "\(session.status.displayName)\(elapsed)\(took)\(subagents)\(blocked)"
+        }
         return "\(session.agent.displayName), \(session.projectName), \(session.title), "
             + "\(session.status.displayName)\(elapsed)\(took)\(subagents)\(blocked)\(preview)"
     }
@@ -1829,10 +1855,14 @@ struct OpenRow: View {
                 // state, where a list that fits draws the header directly
                 // above it; the alternative costs the answering row its
                 // attribution in every state that scrolls.
+                // **Never covered**, and that is the whole of
+                // `cover-the-words.md` §7: opening a row is a deliberate
+                // press, and the cover silences what is drawn unasked.
                 SessionRowCaption(
                     session: session,
                     showsAttribution: true,
-                    isEmphasized: true
+                    isEmphasized: true,
+                    isCovered: false
                 )
                 Spacer(minLength: 8)
                 // The header and the position in the set, on the caption line's
@@ -3449,8 +3479,13 @@ private struct RetiredRow: View {
     /// that says where clicking would go.
     private var accessibilityText: String {
         let session = departure.session
+        let age = departure.spokenAgeText(at: store.recentReadAt)
+        // See ``SessionRow/accessibilityText``: the tree describes the drawing.
+        guard !store.coversWords(of: session) else {
+            return "\(session.agent.displayName), covered, \(age)"
+        }
         return "\(session.agent.displayName), \(session.projectName), "
-            + "\(session.title), \(departure.spokenAgeText(at: store.recentReadAt))"
+            + "\(session.title), \(age)"
     }
 }
 
@@ -3520,15 +3555,26 @@ private struct RetiredRowContent: View {
         HStack(spacing: 6) {
             ProductBadge(name: departure.session.agent.displayName)
 
-            (
-                Text("\(departure.session.projectName) · ")
-                    .foregroundStyle(isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label)
-                    + Text(departure.session.title)
-                    .foregroundStyle(NotchPalette.reading)
-            )
-            .font(.system(size: 13))
-            .lineLimit(1)
-            .fixedSize(horizontal: true, vertical: false)
+            if store.coversWords(of: departure.session) {
+                // One line covered by one bar, at the title's length -- a
+                // retired row is `Project · title` set as a single run, so a
+                // fourth figure of its own would be a number saying nothing
+                // the row's own halves do not (`cover-the-words.md` §4.1).
+                CoverBar(
+                    length: PanelMetrics.coverBarBreadcrumbLength,
+                    lineHeight: PanelMetrics.sessionRowCaptionHeight
+                )
+            } else {
+                (
+                    Text("\(departure.session.projectName) · ")
+                        .foregroundStyle(isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label)
+                        + Text(departure.session.title)
+                        .foregroundStyle(NotchPalette.reading)
+                )
+                .font(.system(size: 13))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .clipped()
@@ -3596,28 +3642,52 @@ struct SessionRowContent: View {
                         // that can say whose it is. ``OpenRow`` keeps its own
                         // either way, and the reason is written there.
                         showsAttribution: !store.groupsSessionsByProduct,
-                        isEmphasized: isEmphasized
+                        isEmphasized: isEmphasized,
+                        isCovered: isCovered
                     )
 
-                    SessionRowText(
-                        text: session.title,
-                        font: .systemFont(ofSize: 13, weight: .medium),
-                        color: NotchPalette.sessionTitleDrawingColor,
-                        lineHeight: PanelMetrics.sessionRowTitleHeight
-                    )
+                    if isCovered {
+                        CoverBar(
+                            length: PanelMetrics.coverBarTitleLength,
+                            lineHeight: PanelMetrics.sessionRowTitleHeight
+                        )
+                    } else {
+                        SessionRowText(
+                            text: session.title,
+                            font: .systemFont(ofSize: 13, weight: .medium),
+                            color: NotchPalette.sessionTitleDrawingColor,
+                            lineHeight: PanelMetrics.sessionRowTitleHeight
+                        )
+                    }
 
                     // **The last thing said about this row**, which is the
                     // product's own preview until an answer leaves from here
                     // and this app has something newer to say (§8 states 02
                     // and 03). One line, in one ink, either way.
-                    if let preview = store.previewLine(for: session) {
-                        SessionRowText(
-                            text: preview,
-                            font: .systemFont(ofSize: 13, weight: .light),
-                            color: NotchPalette.labelDrawingColor,
-                            lineHeight: PanelMetrics.sessionRowPreviewHeight,
-                            sweeps: sweepsBody
-                        )
+                    //
+                    // **Covered, the line is asked for anyway and thrown
+                    // away.** A cover that also dropped the row's third line
+                    // would take `20` points out of a `72` pt row, and the
+                    // panel would change height at the moment somebody
+                    // reached for the gesture -- with an audience watching,
+                    // which is the one thing `cover-the-words.md` §4.2
+                    // arranges never to happen. A row that has no preview
+                    // draws no bar, exactly as it draws no line.
+                    if store.previewLine(for: session) != nil {
+                        if isCovered {
+                            CoverBar(
+                                length: PanelMetrics.coverBarPreviewLength,
+                                lineHeight: PanelMetrics.sessionRowPreviewHeight
+                            )
+                        } else if let preview = store.previewLine(for: session) {
+                            SessionRowText(
+                                text: preview,
+                                font: .systemFont(ofSize: 13, weight: .light),
+                                color: NotchPalette.labelDrawingColor,
+                                lineHeight: PanelMetrics.sessionRowPreviewHeight,
+                                sweeps: sweepsBody
+                            )
+                        }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -3648,6 +3718,10 @@ struct SessionRowContent: View {
     }
 
     private var sweepsBody: Bool { store.sweepsBody(for: session) }
+
+    /// Whether this row's three runs are drawn as bars
+    /// (`cover-the-words.md` §3).
+    private var isCovered: Bool { store.coversWords(of: session) }
 
     private var isEmphasized: Bool { isHovered || isPressed }
 
@@ -3979,12 +4053,54 @@ private struct SessionStatusControl: View {
 /// Project text. That is accepted rather than overlooked: the caption is the
 /// least important line in the row and it ends in a fade rather than an
 /// ellipsis, so losing its tail is the cheapest thing on this surface to lose.
+/// The mark a covered run leaves behind (`cover-the-words.md` §4).
+///
+/// **It covers; it does not delete.** The run's line keeps its height, so a
+/// row is `72` covered and `72` uncovered, the panel's height does not change
+/// and the pill keeps its width. That is not a nicety: this gesture is taken
+/// with an audience watching, and a component that resizes at that moment is
+/// the one thing on the screen everybody's eye goes to.
+///
+/// **And it is cheaper than what it replaces.** A bar is a rectangle: no text
+/// layout, no measurement, and while it is drawn the preview line stops being
+/// a continuously changing run, so `MessageDisplay` deltas no longer reach
+/// anything that measures. Against `AGENTS.md` §7 this addition is on the
+/// right side of the ledger, which is unusual for an addition. Two
+/// alternatives are declined for the same reason: a blur is the one effect
+/// this overlay has measured and taken back out, and a run of bullets or
+/// dashes is text, needs the face loaded and measured, and puts the cost
+/// straight back.
+///
+/// Leading-aligned in whatever it is given, because the run it stands for was.
+private struct CoverBar: View {
+    let length: CGFloat
+    let lineHeight: CGFloat
+
+    var body: some View {
+        RoundedRectangle(
+            cornerRadius: PanelMetrics.coverBarHeight / 2,
+            style: .continuous
+        )
+        .fill(NotchPalette.coverBar)
+        .frame(width: length, height: PanelMetrics.coverBarHeight)
+        .frame(height: lineHeight)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 private struct SessionRowCaption: View {
     let session: MonitoredSession
     let showsAttribution: Bool
     /// Whether the row this caption sits in is under the pointer or held
     /// down, so its own text can lift a shade the way the row's border does.
     var isEmphasized: Bool = false
+    /// Whether the Project is covered (`cover-the-words.md` §3).
+    ///
+    /// **The badge is not.** `Codex` and `Claude Code` name the tool and not
+    /// the work, and they are what keeps a covered row legible as a row
+    /// rather than as a stack of bars. It is the one exclusion the document
+    /// leaves open (§12 question 01).
+    var isCovered: Bool = false
 
     var body: some View {
         HStack(spacing: 6) {
@@ -3992,13 +4108,20 @@ private struct SessionRowCaption: View {
                 ProductBadge(name: session.agent.displayName)
             }
 
-            Text(session.projectName)
-                .foregroundStyle(
-                    isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label
+            if isCovered {
+                CoverBar(
+                    length: PanelMetrics.coverBarProjectLength,
+                    lineHeight: PanelMetrics.sessionRowCaptionHeight
                 )
-                .font(.system(size: 11, weight: .light))
-                .lineLimit(1)
-                .truncationMode(.tail)
+            } else {
+                Text(session.projectName)
+                    .foregroundStyle(
+                        isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label
+                    )
+                    .font(.system(size: 11, weight: .light))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
         }
         // The line is the badge's own height whether or not a badge is in it,
         // so nothing on a row moves at the moment a second product connects.

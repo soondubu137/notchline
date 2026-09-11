@@ -584,6 +584,28 @@ enum PanelMetrics {
     static let sessionRowPreviewHeight: CGFloat = 18
     static let sessionRowLineSpacing: CGFloat = 2
 
+    /// The bar a covered run leaves behind (`cover-the-words.md` §4).
+    ///
+    /// **Fully rounded, and one height for every line it stands in.** The
+    /// three runs it replaces are set at three sizes; ranking their covers
+    /// would be ranking things nobody can read.
+    static let coverBarHeight: CGFloat = 6
+    /// **The lengths are fixed, and they are not the text's.**
+    ///
+    /// `0.13`, `0.32` and `0.45` of the row's `496` pt content box, rounded to
+    /// whole points. A bar sized to the run it covers leaks the shape of the
+    /// work — how long a Project's name is, whether a prompt was one clause or
+    /// four — and it would twitch line by line as a preview streams, which is
+    /// the one continuously changing run on this surface. The three descend
+    /// because the three lines descend: that is layout, and layout is not a
+    /// channel anybody reads meaning off.
+    static let coverBarProjectLength: CGFloat = 64
+    static let coverBarTitleLength: CGFloat = 160
+    static let coverBarPreviewLength: CGFloat = 224
+    /// A retired row is one line carrying `Project · title`, so it is covered
+    /// at the title's length rather than at a fourth figure of its own.
+    static var coverBarBreadcrumbLength: CGFloat { coverBarTitleLength }
+
     /// The chip that names a product on a session row's caption line and on a
     /// retired row's breadcrumb (`colour-v2.md` §4).
     ///
@@ -2307,6 +2329,58 @@ final class MonitorStore: ObservableObject {
     /// ``isQuotaExpanded``, which is a standing preference about a surface
     /// somebody watches.
     @Published private(set) var isShowingAbout = false
+    /// Whether the surface is covering every word it draws
+    /// (`cover-the-words.md`).
+    ///
+    /// **`Privacy Mode` in Settings, covering everywhere else.** The name in
+    /// the window is the one the user asked for; what the surface does is
+    /// cover, and the two words are kept apart on purpose so a comment about
+    /// drawing never has to be read as a claim about data.
+    ///
+    /// **It is not a privacy promise, and it does not reinstate the one
+    /// [`PRD.md`](doc:) §7 deleted.** That contract was about where message
+    /// text lives — process memory, disk, which socket it arrived on — and it
+    /// is void on its own terms. This is about what is *drawn on a screen
+    /// somebody else is looking at*. Nothing here constrains where text goes,
+    /// and no clause here may be cited to veto an engineering decision about
+    /// storage or transport.
+    ///
+    /// On, every name, title and line is drawn as a bar and the pill's middle
+    /// draws nothing at all; the mark, the counts, the clock, the badges and
+    /// the footer are untouched. It also stops the panel expanding on hover
+    /// (``pointerEnteredPanel()``), which is the half of it that answers the
+    /// case it exists for: the leak is a `0.15` s dwell nobody intended.
+    ///
+    /// **Remembered across launches**, and off on a fresh install. A cover
+    /// that quietly lapses is a leak; a cover somebody forgot is an annoyance,
+    /// and the first pointer pass over a covered notch does nothing, which is
+    /// noticed in seconds.
+    @Published var privacyMode: Bool {
+        didSet {
+            guard privacyMode != oldValue else { return }
+            preferences?.set(privacyMode, forKey: Self.privacyModeDefaultsKey)
+            // **The hover the tracking area will not repeat.** The gesture is
+            // a press *on the component*, so the pointer is on it when the
+            // mode goes off -- and `.onHover` is an `NSTrackingArea`, which
+            // speaks only when the pointer moves. The entry that would have
+            // opened this panel was delivered while the mode was still on and
+            // declined by ``pointerEnteredPanel()``; nothing will deliver
+            // another until the pointer leaves and comes back. So the entry is
+            // offered again here, on the store's own knowledge of where the
+            // pointer is, and it goes through the ordinary dwell rather than
+            // opening flat -- one path opens this panel on hover, and this is
+            // that path being told the answer has changed.
+            guard !privacyMode, isPointerOnPanel, !isExpanded else { return }
+            pointerEnteredPanel()
+        }
+    }
+    /// Where the pointer is, as the tracking area last reported it.
+    ///
+    /// **Not `@Published`.** Nothing is drawn from it — it exists so that a
+    /// preference changing under a stationary pointer can ask a question the
+    /// tracking area cannot be asked (`AGENTS.md` §7: the overlay re-renders on
+    /// layout, and a pointer crossing the notch is not a layout change).
+    private(set) var isPointerOnPanel = false
     /// Whether the collapsed surface gives up its wings and leaves the cut-out
     /// to speak for itself.
     ///
@@ -2422,6 +2496,7 @@ final class MonitorStore: ObservableObject {
 
     private static let quotaExpandedDefaultsKey = "quotaExpanded"
     private static let recentExpandedDefaultsKey = "recentExpanded"
+    private static let privacyModeDefaultsKey = "privacyMode"
     private static let hidesCompactWingsDefaultsKey = "hidesCompactWings"
     private static let drawsSurfaceOutlineDefaultsKey = "drawsSurfaceOutline"
     private static let namesWorkOnPillDefaultsKey = "namesWorkOnPill"
@@ -2585,6 +2660,9 @@ final class MonitorStore: ObservableObject {
         self.isRecentExpanded = preferences?.object(
             forKey: Self.recentExpandedDefaultsKey
         ) as? Bool ?? false
+        self.privacyMode = preferences?.bool(
+            forKey: Self.privacyModeDefaultsKey
+        ) ?? false
         self.hidesCompactWings = preferences?.bool(
             forKey: Self.hidesCompactWingsDefaultsKey
         ) ?? false
@@ -2749,11 +2827,48 @@ final class MonitorStore: ObservableObject {
     /// **The notch-less pill, collapsed, with something to name.** The notched
     /// bar has no middle — the cut-out is where one would stand — and the
     /// expanded panel names every Project in the rows below.
+    ///
+    /// **``privacyMode`` silences it outright rather than covering it**, and
+    /// that is the one place the cover does not draw a bar. A bar in the
+    /// middle would be the state announcing itself on the one collapsed form
+    /// able to announce it — and the notched bar, which draws no words, could
+    /// not match it however much it wanted to. One rule for both forms is
+    /// worth more than an indicator on one of them: the pill goes as quiet as
+    /// `Name the work` off, which is a drawing this surface already has.
+    /// ``privacyMode`` does not write that preference and turning it off
+    /// uncovers nothing else.
+    ///
+    /// The width does not move either way — the middle is a subtraction and
+    /// both ends are anchored — so this changes what is in the pill and never
+    /// how big it is.
     var drawsCompactMiddle: Bool {
         namesWorkOnPill
+            && !privacyMode
             && !isExpanded
             && geometry == .noNotch
             && !compactProjectNames.isEmpty
+    }
+
+    /// Whether this row's words are covered right now.
+    ///
+    /// **The cover silences what is drawn unasked; it does not silence what
+    /// you ask for.** Opening a row is as deliberate as a gesture on this
+    /// surface gets, so an open row draws its Project, its title, its preview
+    /// and its question body normally, and re-covers the moment it closes. A
+    /// covered panel nobody can answer a question in is a panel people would
+    /// simply switch back off.
+    func coversWords(of session: MonitoredSession) -> Bool {
+        privacyMode && openRowID != session.id
+    }
+
+    /// The gesture: a secondary press on the component that is not a row.
+    ///
+    /// Rows keep the secondary click they already have — `dismiss` on a live
+    /// one, `removeFromRecent` on a retired one — so this is claimed on the
+    /// band, which is the one region every state draws and the whole of the
+    /// collapsed surface.
+    func togglePrivacyMode() {
+        privacyMode.toggle()
     }
 
     /// Whether ``namesWorkOnPill`` is something the selected display could
@@ -4312,13 +4427,56 @@ final class MonitorStore: ObservableObject {
         selectedDisplayID = nextSelection
     }
 
+    /// **Covered, the panel waits for a click** (`cover-the-words.md` §6).
+    ///
+    /// This is the half of ``privacyMode`` that answers the case it exists
+    /// for, and it costs no pixels. The component stands over the cut-out and
+    /// both shoulders, so a pointer on its way to a right-hand menu bar item
+    /// rests there several times an hour — and ``MonitorTiming/hoverExpandDelay``
+    /// is `0.15` s. What unfurls is the prompt somebody typed and the model's
+    /// live answer to it. Covered, that crossing does nothing at all, and
+    /// ``openFromCollapsed()`` is the only way in.
+    ///
+    /// **Only the opening is gated.** ``pointerExitedPanel()`` is untouched:
+    /// a panel opened by a press still closes when the pointer leaves, and
+    /// still refuses to close over a row somebody is reading.
     func pointerEnteredPanel() {
+        isPointerOnPanel = true
+        guard !privacyMode else {
+            // **An entry still answers a pending exit**, and skipping this is
+            // a bug rather than a saving. Expanding writes a bigger window,
+            // and SwiftUI rebuilds the tracking area around it: measured on
+            // the real panel, that delivers a spurious `exit` about `105 ms`
+            // after the resize and the matching `enter` about `112 ms` after
+            // that. On the ordinary path the entry cancels the exit's pending
+            // collapse for free, because ``scheduleHoverAction(after:action:)``
+            // begins by cancelling. Returning early here left the collapse
+            // standing, so a panel opened by a press shut itself a quarter of
+            // a second later — with the pointer still on it, and nothing to
+            // deliver another entry.
+            cancelPendingHoverAction()
+            return
+        }
         scheduleHoverAction(after: timing.hoverExpandDelay) { store in
             store.isExpanded = true
         }
     }
 
+    /// The press that opens a covered panel, and nothing else.
+    ///
+    /// Guarded on both sides rather than left to the caller: it is a no-op
+    /// while the panel is already open, so a press landing on the band of an
+    /// expanded panel cannot re-assert a state it is already in, and a no-op
+    /// while nothing is covered, so the hover path stays the only way in
+    /// there. That keeps "how does this panel open" answerable in one place.
+    func openFromCollapsed() {
+        guard privacyMode, !isExpanded else { return }
+        cancelPendingHoverAction()
+        isExpanded = true
+    }
+
     func pointerExitedPanel() {
+        isPointerOnPanel = false
         // **A row somebody is reading does not close because their pointer
         // drifted** (`answer-in-notch.md` §10). A body of `140` points is read
         // rather than glanced at, and moving to the keyboard is not a pointer

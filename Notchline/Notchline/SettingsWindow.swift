@@ -167,6 +167,10 @@ struct AppSettingsView: View {
 
             SettingsSeparator()
 
+            privacyModeRow
+
+            SettingsSeparator()
+
             hideWingsRow
 
             SettingsSeparator()
@@ -209,6 +213,45 @@ struct AppSettingsView: View {
                         + "the ones you have passed beside it, the ones still "
                         + "to come at the foot. Off, the list is one list in "
                         + "order of urgency, and every row carries its own badge."
+                )
+        }
+    }
+
+    /// Cover every word the component draws (`cover-the-words.md`).
+    ///
+    /// **Second in the group, straight after the display picker.** It is the
+    /// only row here somebody opens this window in a hurry to find —
+    /// everything under it is taste, answered once and left — and the picker
+    /// stays first because it is the group's subject.
+    ///
+    /// **Never greyed, and it needs nothing of the display.** Unlike its two
+    /// neighbours there is no display that cannot honour it: the panel is
+    /// covered on any screen, notched or not. What differs by display is only
+    /// how much of it is visible, and that is not a reason to gate a switch.
+    ///
+    /// **The caption names the gesture**, which is how macOS teaches one. A
+    /// secondary press on the component does this without the window, which is
+    /// the form that matters — opening Settings mid-call is itself a thing on
+    /// the shared screen.
+    private var privacyModeRow: some View {
+        SettingsRow(
+            title: "Privacy Mode",
+            caption: "Every name, title and line is drawn as a bar, and the "
+                + "pill stops naming the work. The mark, the counts and the "
+                + "clock stay, and the panel waits for a click instead of "
+                + "opening on hover. Secondary-click the component to turn it "
+                + "on and off."
+        ) {
+            Toggle("Privacy Mode", isOn: $store.privacyMode)
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .help(
+                    "Covers every word Notchline draws while somebody else is "
+                        + "looking at the screen: each row's project, title "
+                        + "and latest line becomes a bar, and the collapsed "
+                        + "pill stops naming the work. Opening a row uncovers "
+                        + "that row. The panel stops expanding when the "
+                        + "pointer merely crosses it."
                 )
         }
     }

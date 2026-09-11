@@ -747,11 +747,22 @@ The board has this group and the implementation does not. `Show current content 
 
 ### 8.4 Display
 
-Not on the board, present in the implementation, between `Products` and `Session list`. The card now holds **six** rows: `Show Notchline on`, `Theme colour`, `Hide the wings`, `Name the work`, `Outline the panel` and `Group by product` (2026-09-09, [`expanded-panel-v2.md`](expanded-panel-v2.md) §4.6 — one block per product on the live list or one list, default on). *(`Mark colour` until [`colour-v2.md`](colour-v2.md) §6 — the same control, renamed because the pair it picks now tints every product badge as well as the mark.)*
+Not on the board, present in the implementation, between `Products` and `Session list`. The card now holds **seven** rows: `Show Notchline on`, `Privacy Mode`, `Theme colour`, `Hide the wings`, `Name the work`, `Outline the panel` and `Group by product` (2026-09-09, [`expanded-panel-v2.md`](expanded-panel-v2.md) §4.6 — one block per product on the live list or one list, default on). *(`Mark colour` until [`colour-v2.md`](colour-v2.md) §6 — the same control, renamed because the pair it picks now tints every product badge as well as the mark.)*
 
 > **Two of them are [`compact-view-v2.md`](compact-view-v2.md) §12's**, and one of the three below is rewritten by it. `Mark colour` hands the aggregate mark's hue to the user, which is only possible because the palette is the greyscale rotated — every entry shares one lit and one unlit lightness, so a choice cannot change brightness, and brightness is what says a turn wants a person ([`aggregate-ink-palette.md`](aggregate-ink-palette.md)). `Name the work` turns the pill's rotating Project name on and off, default on, and does nothing on a notched display for the reason `Hide the wings` does nothing on a flat one: the two are mirrors, one wanting a cut-out and the other wanting the absence of one. **Neither switch is greyed for it** — see §8.4.1. Both are recorded here rather than on the board, which has neither.
 
 `Show Notchline on` is an existing control: the component appears on one display, chosen by the user, with the caption reporting that display's form and real menu-bar height (`Notch display · 39 pt menu bar`). Deleting it would take away a real feature, so it keeps the same shape — a small heading and one card. **No footnote**: ~~the footnote used to say the component occupies the selected display's menu bar and takes its geometry from it, a cut-out to work around or a pill where there is none.~~ Both rows' captions already report the conclusion for the currently selected display — its form, its menu-bar height, and why the wings cannot be hidden on this screen — and the footnote only restated the same thing abstractly.
+
+#### `Privacy Mode`
+
+| Label | `Privacy Mode` |
+| --- | --- |
+| Control | Native macOS switch, default off, remembered across launches (`privacyMode`) |
+| Caption | `Every name, title and line is drawn as a bar, and the pill stops naming the work. The mark, the counts and the clock stay, and the panel waits for a click instead of opening on hover. Secondary-click the component to turn it on and off.` |
+
+**Second in the card, straight after the display picker** — the only row here somebody opens the window in a hurry to find; everything under it is taste, answered once and left. Never greyed, and it asks nothing of the display: the panel is covered on any screen, and §8.4.1's rule would forbid greying it in any case.
+
+The whole of it is [`cover-the-words.md`](cover-the-words.md), which is authoritative; two clauses belong here because they are about this row. **The caption names the gesture**, which is how macOS teaches one — a secondary press on the component does this without the window, and opening Settings mid-call is itself a thing on the shared screen. **And the name is not the mechanism**: the control is `Privacy Mode`, the drawing is a cover, and §2 of that document is why the two words are kept apart — nothing here is a promise about where message text lives, and [`PRD.md`](PRD.md) §7 stays void.
 
 #### `Hide the wings`
 

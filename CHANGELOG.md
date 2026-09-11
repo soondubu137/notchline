@@ -6,6 +6,12 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ## Unreleased
 
+### Added
+
+- **`Privacy Mode` covers every word Notchline draws.** Settings, the Display card, second row. On, each row's project, title and latest line becomes a fixed-length bar and the collapsed pill stops naming the work; the mark, the counts, the clock, the product badges and the quota footer are untouched. Opening a row uncovers that row. Off by default. (`docs/cover-the-words.md`.)
+- **A covered panel waits for a click, and a secondary press is the gesture.** The component stands over the cut-out and both shoulders, and `0.15 s` of dwell opens it — so a pointer crossing it on the way to a menu bar item puts a prompt and a model's live answer on a shared screen. Covered, that crossing does nothing and a press on the band opens the panel instead. The same band takes a secondary press to turn the mode on and off without opening Settings; rows keep the secondary press they already had.
+- **A panel opened by that press stays open, and leaving the mode under the pointer opens it.** Both follow from the same rule: declining to expand on hover is not declining to hear the pointer. An entry still takes back a pending collapse whichever mode the surface is in, and the mode ending with the pointer on the component is offered the hover the tracking area cannot repeat. (`docs/cover-the-words.md` §6, §11.2.)
+
 ### Fixed
 
 - **A row can no longer be read through the heading that names its block.** A heading's line drew its `16` of black only while the list was taller than its viewport — and a list that fits can still move under one: the leading chip is drawn at the top of the viewport at every offset, and a panel resize in flight leaves the scroller at its old height around content already at its new one. The ground travels with each heading now. (`docs/expanded-panel-v2.md` §4.6.)
