@@ -4,6 +4,12 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## Unreleased
+
+### Fixed
+
+- **A Claude Code row no longer says `Untitled` for a session Claude Code has named.** The title is read from Claude Code's own transcript, and 64 KiB from the front of the file stopped reaching it: what stands in front of the name is the opening the product writes for itself, and that is sized by how many skills, plugins, agents and MCP servers the session started with — 87 KB on this machine. The opening is now read by records rather than by bytes.
+
 ## 0.2.6 Alpha — 2026-09-11
 
 **Notchline can cover every word it draws, for the times somebody else is looking at your screen.** One switch turns each row's project, title and latest line into a bar and stops the collapsed pill naming the work, while the marks, counts and clocks that say something is running carry on — the searchlight included, which crosses the cover as it crossed the line. A covered panel no longer opens under a pointer merely crossing it, and one held control lifts every cover for as long as it is held.

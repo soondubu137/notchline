@@ -20,18 +20,67 @@ import Foundation
 ///
 /// Registered in `docs/non-public-codex-integration-features.md`.
 actor ClaudeCodeTranscriptReader {
-    /// How much of either end of a transcript is examined.
+    /// How much of a transcript's tail is examined, and the size of one read.
     ///
     /// Transcripts reach tens of megabytes; one on this machine is 16 MB. The
-    /// most recent title is the right one, so the tail is read first. A session
-    /// that was titled once early and never again is why the head is read as
-    /// well, and why neither read is allowed to become "read the whole file".
+    /// most recent title is the right one, so the tail is read first, and a
+    /// session renamed while it runs is answered by that read alone.
     static let scannedBytes = 64 * 1024
+
+    /// How many records from the start of a transcript are examined.
+    ///
+    /// A session titled when it opened and never again is why the head is read
+    /// as well -- and **the budget is records because that is the part of an
+    /// opening that holds still.** Measured across the 480 titled transcripts
+    /// on this machine on 2026-09-11: the first title record is record 33 at
+    /// the latest (99th percentile 31), while the *byte* offset it sits at runs
+    /// from 0 to 371 KB. What stands in front of it is the opening Claude Code
+    /// writes before the conversation starts, and what makes that big is the
+    /// machine rather than the session -- the listings of skills, plugins,
+    /// agents and MCP servers the session was started with. Here that opening
+    /// reached 87 KB with one `skill_listing` record of 48 KB in it, which is
+    /// how the 64 KiB window this read used to share with the tail stopped
+    /// reaching the title: a live session drew `Untitled` while its own
+    /// transcript held the name in record 12, and 129 of those 480 transcripts
+    /// are past that window.
+    static let scannedHeadRecords = 128
+
+    /// The ceiling on the head read, whatever the record budget says.
+    ///
+    /// One record can be enormous, so a budget counted only in records is not a
+    /// bound at all. This is what keeps "read the head" from ever becoming
+    /// "read the whole file", and 1 MiB clears the widest opening seen here
+    /// about three times over.
+    static let scannedHeadBytes = 1024 * 1024
 
     private struct CacheEntry {
         let size: Int
         let modifiedAt: Date
         let title: String?
+    }
+
+    /// What one scan of a transcript's opening found, and how far it got.
+    ///
+    /// Kept apart from ``CacheEntry`` because it turns on a different fact. A
+    /// transcript is appended to, so the bytes this scan read are the same
+    /// bytes at every later refresh and its answer outlives the `(size,
+    /// mtime)` changes that retire the entry above -- which is what stops a
+    /// live session whose title is only in its opening from paying for that
+    /// opening once a second. Measured under `-O` against the transcripts here
+    /// on 2026-09-11: such a row costs 296 us and 64 KB a refresh with this,
+    /// and 893 us and 192 KB without -- against the 708 us and 128 KB the two
+    /// fixed windows cost while returning no title at all. Only a *shorter*
+    /// file can mean those bytes are gone, and that is a transcript replaced
+    /// rather than appended to.
+    private struct HeadEntry {
+        let title: String?
+        /// How far into the file the scan read.
+        let scannedThrough: Int
+        /// Whether the scan stopped because the file ended rather than because
+        /// a budget did. An answer that ran out of file can be changed by the
+        /// next record appended -- a session is untitled for the moment before
+        /// it is named -- so only the other kind is final.
+        let ranOutOfFile: Bool
     }
 
     /// The last interruption in one transcript's tail, and the state the file
@@ -60,6 +109,7 @@ actor ClaudeCodeTranscriptReader {
     private let fileManager: FileManager
     private var resolvedPaths: [String: URL] = [:]
     private var cache: [String: CacheEntry] = [:]
+    private var heads: [String: HeadEntry] = [:]
     private var interruptions: [String: InterruptionEntry] = [:]
 
     init(
@@ -89,7 +139,7 @@ actor ClaudeCodeTranscriptReader {
             return cached.title
         }
 
-        let title = readTitle(at: url, size: size)
+        let title = readTitle(forSession: sessionID, at: url, size: size)
         cache[sessionID] = CacheEntry(size: size, modifiedAt: modifiedAt, title: title)
         return title
     }
@@ -176,6 +226,7 @@ actor ClaudeCodeTranscriptReader {
     /// Drops what is remembered about sessions that no longer exist.
     func retain(sessionIDs: Set<String>) {
         cache = cache.filter { sessionIDs.contains($0.key) }
+        heads = heads.filter { sessionIDs.contains($0.key) }
         interruptions = interruptions.filter { sessionIDs.contains($0.key) }
         resolvedPaths = resolvedPaths.filter { sessionIDs.contains($0.key) }
     }
@@ -257,7 +308,11 @@ actor ClaudeCodeTranscriptReader {
         )
     }
 
-    private func readTitle(at url: URL, size: Int) -> String? {
+    private func readTitle(
+        forSession sessionID: String,
+        at url: URL,
+        size: Int
+    ) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
 
@@ -266,7 +321,30 @@ actor ClaudeCodeTranscriptReader {
         }
         // Only worth a second look when the file is bigger than one read.
         guard size > Self.scannedBytes else { return nil }
-        return title(in: head(of: handle))
+        return headTitle(forSession: sessionID, in: handle, size: size)
+    }
+
+    /// The title in this transcript's opening, scanned at most once a session.
+    ///
+    /// See ``HeadEntry`` for why an answer survives the file changing. A scan
+    /// that ran out of file is the one answer that is not final, and it is
+    /// redone rather than resumed: it can only happen to a transcript below the
+    /// ceiling with no title anywhere in it -- 3 of the 427 over 64 KiB here --
+    /// and resuming would buy an offset and a record count of state for those
+    /// three.
+    private func headTitle(
+        forSession sessionID: String,
+        in handle: FileHandle,
+        size: Int
+    ) -> String? {
+        if let known = heads[sessionID],
+           size >= known.scannedThrough,
+           known.title != nil || !known.ranOutOfFile {
+            return known.title
+        }
+        let scanned = head(of: handle)
+        heads[sessionID] = scanned
+        return scanned.title
     }
 
     /// - Note: Pooled, like every `FileHandle` read in this app. The `Data` it
@@ -286,18 +364,59 @@ actor ClaudeCodeTranscriptReader {
         return lines
     }
 
+    /// Reads forward from the start until a title turns up or a budget runs
+    /// out.
+    ///
+    /// Records, not bytes -- see ``scannedHeadRecords``. The file is still
+    /// taken in ``scannedBytes`` chunks, and each chunk is cut at its last
+    /// complete record: a transcript is being appended to, so its final line is
+    /// usually a fragment, and a fragment here would also be the start of the
+    /// next chunk. The record budget is therefore spent a chunk at a time --
+    /// one read always happens, which is exactly the window this used to be,
+    /// and the scan ends with the chunk that exhausts the count. Only the lines
+    /// that could name a title are kept, which is what makes holding a whole
+    /// scan's worth of them cost nothing: an opening's bulk is a handful of
+    /// enormous listing records and not one of them is retained.
+    ///
     /// - Note: Pooled, for the reason given on ``tail(of:size:)``.
-    private func head(of handle: FileHandle) -> [Data] {
+    private func head(of handle: FileHandle) -> HeadEntry {
         try? handle.seek(toOffset: 0)
-        var lines = autoreleasepool { () -> [Data] in
-            guard let data = try? handle.read(upToCount: Self.scannedBytes) else {
-                return []
+        var pending = Data()
+        var candidates: [Data] = []
+        var read = 0
+        var records = 0
+
+        while records < Self.scannedHeadRecords, read < Self.scannedHeadBytes {
+            let chunk = autoreleasepool { () -> Data in
+                (try? handle.read(upToCount: Self.scannedBytes)) ?? Data()
             }
-            return Self.jsonLines(in: data)
+            guard !chunk.isEmpty else {
+                return HeadEntry(
+                    title: title(in: candidates),
+                    scannedThrough: read,
+                    ranOutOfFile: true
+                )
+            }
+            read += chunk.count
+            pending.append(chunk)
+            // A chunk that carries no record boundary at all is a record longer
+            // than one read; it is the byte ceiling that ends those, not this.
+            guard let newline = pending.lastIndex(of: UInt8(ascii: "\n")) else { continue }
+            let complete = Data(pending[..<newline])
+            pending = Data(pending[pending.index(after: newline)...])
+            for line in Self.jsonLines(in: complete) {
+                records += 1
+                if Self.mayName(aTitle: line) { candidates.append(line) }
+            }
+            if let title = title(in: candidates) {
+                return HeadEntry(title: title, scannedThrough: read, ranOutOfFile: false)
+            }
         }
-        // The last line of a truncated read is a fragment.
-        if !lines.isEmpty { lines.removeLast() }
-        return lines
+        return HeadEntry(
+            title: title(in: candidates),
+            scannedThrough: read,
+            ranOutOfFile: false
+        )
     }
 
     nonisolated private static func jsonLines(in data: Data) -> [Data] {
@@ -312,11 +431,28 @@ actor ClaudeCodeTranscriptReader {
         let aiTitle: String?
     }
 
+    nonisolated private static let titleMarker = Data(#"-title""#.utf8)
+
+    /// Whether a record could be one of the two this reader decodes.
+    ///
+    /// Both spell their type with `-title"`, and the writer is `JSON.stringify`
+    /// -- which escapes neither a hyphen nor a letter -- so a record without
+    /// those bytes cannot be a title however it is laid out. Asked before
+    /// decoding for the reason the token counter asks for `"usage"` first: a
+    /// transcript's opening carries single records of tens of kilobytes (48 KB
+    /// of `skill_listing` on this machine), and the tail is decoded once a
+    /// second per listed row.
+    nonisolated private static func mayName(aTitle line: Data) -> Bool {
+        line.range(of: titleMarker) != nil
+    }
+
     /// The last title in these records, preferring one the user set.
     private func title(in lines: [Data]) -> String? {
+        let decoder = JSONDecoder()
         var aiTitle: String?
         for line in lines.reversed() {
-            guard let record = try? JSONDecoder().decode(TitleRecord.self, from: line) else {
+            guard Self.mayName(aTitle: line),
+                  let record = try? decoder.decode(TitleRecord.self, from: line) else {
                 continue
             }
             // A title the user typed outranks one the product generated,

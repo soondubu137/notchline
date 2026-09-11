@@ -13878,7 +13878,7 @@ struct NotchlineTests {
         let grew = try writeRollout([padding])
         #expect(await read(grew) == nil)
         let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: grew))
-        try handle.seekToEnd()
+        _ = try handle.seekToEnd()
         try handle.write(
             contentsOf: Data(
                 (try abort(turn: "turn-1", offsetFromLastEvent: 4) + "\n").utf8
@@ -25535,6 +25535,135 @@ for line in sys.stdin:
         #expect(await reader.title(forSession: "s-3", workingDirectory: cwd) == nil)
         // A session with no transcript at all.
         #expect(await reader.title(forSession: "missing", workingDirectory: cwd) == nil)
+    }
+
+    /// A title standing behind an opening bigger than one read is still found
+    /// (measured 2026-09-11).
+    ///
+    /// Both ends of the file used to share one 64 KiB window, and the head half
+    /// stopped reaching the title. What stands in front of it is the opening
+    /// Claude Code writes for its own use — listings of skills, plugins, agents
+    /// and MCP servers — and that is sized by the machine rather than by the
+    /// session: on this one it reached 87 KB with a single `skill_listing`
+    /// record of 48 KB in it, and a live session drew `Untitled` while its own
+    /// transcript held the name in record 12. So the head budget counts
+    /// records, which is the part of an opening that holds still — the first
+    /// title record is record 33 at the latest across the 480 titled
+    /// transcripts here, while its byte offset runs from 0 to 371 KB.
+    ///
+    /// It is still a budget, and a file that spends it fails closed rather than
+    /// reading on: the second session below carries a title, in a place this
+    /// read is not allowed to go looking.
+    @Test @MainActor
+    func aTitleBehindAnOpeningBiggerThanOneReadIsStillRead() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tx-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cwd = URL(fileURLWithPath: "/Users/someone/Projects/thing")
+        let project = root.appendingPathComponent(
+            cwd.path.replacingOccurrences(of: "/", with: "-"),
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+
+        func write(_ session: String, _ records: [[String: Any]]) throws -> Int {
+            let lines = try records.map {
+                String(decoding: try JSONSerialization.data(withJSONObject: $0), as: UTF8.self)
+            }
+            let text = lines.joined(separator: "\n") + "\n"
+            try Data(text.utf8).write(to: project.appendingPathComponent("\(session).jsonl"))
+            return text.utf8.count
+        }
+
+        // One record the size of a real `skill_listing`, and enough afterwards
+        // that the tail cannot see the title either.
+        let opening: [String: Any] = [
+            "type": "attachment",
+            "attachment": [
+                "type": "skill_listing",
+                "content": String(repeating: "s", count: 120 * 1024)
+            ]
+        ]
+        let conversation = Array(repeating: [
+            "type": "assistant",
+            "message": ["role": "assistant", "content": String(repeating: "w", count: 2048)]
+        ] as [String: Any], count: 64)
+        let title: [String: Any] = ["type": "custom-title", "customTitle": "What I called it"]
+
+        let size = try write("s-1", [opening] + [title] + conversation)
+        // The premise of the test, pinned rather than assumed: the title sits
+        // past one read from the front, and past one from the back.
+        #expect(size > 2 * ClaudeCodeTranscriptReader.scannedBytes)
+
+        let reader = ClaudeCodeTranscriptReader(projectsDirectory: root)
+        #expect(await reader.title(forSession: "s-1", workingDirectory: cwd)
+            == "What I called it")
+
+        // Past the record budget, which is a limit and not an oversight: the
+        // scan stops with the chunk that spends it and reports no title, the
+        // same answer as an unreadable file.
+        let manyRecords = Array(repeating: [
+            "type": "user",
+            "message": ["role": "user", "content": String(repeating: "u", count: 300)]
+        ] as [String: Any], count: 4 * ClaudeCodeTranscriptReader.scannedHeadRecords)
+        _ = try write("s-2", manyRecords + [title] + conversation)
+        #expect(await reader.title(forSession: "s-2", workingDirectory: cwd) == nil)
+    }
+
+    /// A session named after its opening was already read is not held at
+    /// `Untitled`.
+    ///
+    /// The head of an append-only file does not change, which is what lets one
+    /// scan of it answer every later refresh — but a scan that ran out of file
+    /// read an opening that was not finished yet. Every session is untitled for
+    /// the moment before it is named, and a transcript over one read by then
+    /// has nowhere else to say so.
+    @Test @MainActor
+    func aSessionNamedAfterItsOpeningWasReadIsNotHeldAtUntitled() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-tx-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let cwd = URL(fileURLWithPath: "/Users/someone/Projects/thing")
+        let project = root.appendingPathComponent(
+            cwd.path.replacingOccurrences(of: "/", with: "-"),
+            isDirectory: true
+        )
+        try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
+        let transcript = project.appendingPathComponent("s-1.jsonl")
+
+        func line(_ record: [String: Any]) throws -> String {
+            String(decoding: try JSONSerialization.data(withJSONObject: record), as: UTF8.self)
+                + "\n"
+        }
+
+        let opening = try line([
+            "type": "attachment",
+            "attachment": [
+                "type": "skill_listing",
+                "content": String(repeating: "s", count: 120 * 1024)
+            ]
+        ])
+        try Data(opening.utf8).write(to: transcript)
+
+        let reader = ClaudeCodeTranscriptReader(projectsDirectory: root)
+        #expect(await reader.title(forSession: "s-1", workingDirectory: cwd) == nil)
+
+        // The name arrives, and the conversation buries it before the next
+        // refresh.
+        var rest = try line(["type": "custom-title", "customTitle": "What I called it"])
+        for _ in 0 ..< 64 {
+            rest += try line([
+                "type": "assistant",
+                "message": ["role": "assistant", "content": String(repeating: "w", count: 2048)]
+            ])
+        }
+        let handle = try FileHandle(forWritingTo: transcript)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data(rest.utf8))
+        try handle.close()
+
+        #expect(await reader.title(forSession: "s-1", workingDirectory: cwd)
+            == "What I called it")
     }
 
     /// The transcript is found even if the directory naming rule changes.
