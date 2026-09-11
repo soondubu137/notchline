@@ -245,6 +245,10 @@ enum NotchPalette {
     /// a covered run is the dimmest text on this surface turned down until it
     /// stops being a word, and a literal here could drift into a hue.
     static let coverBar = label.opacity(coverBarOpacity)
+    /// ``coverBar`` where the bar is drawn through AppKit, which it is
+    /// wherever a searchlight has to cross it (``CoverBarView``).
+    static let coverBarDrawingColor = labelDrawingColor
+        .withAlphaComponent(coverBarOpacity)
     private static let coverBarOpacity: Double = 0.45
     /// The optional edge around the whole surface (`figma-design.md` §8.4).
     ///
@@ -2733,6 +2737,142 @@ private struct SessionRowTextRepresentable: NSViewRepresentable {
             width: proposal.width ?? nsView.intrinsicContentSize.width,
             height: lineHeight
         )
+    }
+}
+
+/// The bar a covered run is drawn as (`cover-the-words.md` §4), with the
+/// searchlight the run it replaced was carrying.
+///
+/// **Layer-backed for ``SessionRowText``'s reason, and it is the same reason
+/// twice.** The sweep is a continuously running animation, and none of those
+/// is allowed to be a SwiftUI one in this overlay (`AGENTS.md` §7); and a bar
+/// that sweeps has to keep phase with every other row's, which the shared
+/// ``NotchTextRaster/installSweep(on:across:height:period:)`` does by
+/// anchoring to the clock rather than to the moment of installation.
+///
+/// It is layer-backed even where it does not sweep, again like
+/// ``SessionRowText``: one implementation, and no texture work at the moment a
+/// turn changes state.
+struct CoverBar: View {
+    let length: CGFloat
+    let lineHeight: CGFloat
+    /// Whether the searchlight crosses this bar.
+    ///
+    /// **The body line only, which is exactly where it crossed the words.**
+    /// The sweep is the channel that answers *live or finished* — the one
+    /// thing on this panel that can be read without looking straight at it —
+    /// and covering the words is not supposed to take a reading away, only the
+    /// content. A row's Project and title never carried it, so their covers do
+    /// not either.
+    var sweeps = false
+
+    var body: some View {
+        CoverBarRepresentable(length: length, sweeps: sweeps)
+            .frame(width: length, height: PanelMetrics.coverBarHeight)
+            .frame(height: lineHeight)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct CoverBarRepresentable: NSViewRepresentable {
+    let length: CGFloat
+    let sweeps: Bool
+
+    func makeNSView(context: Context) -> CoverBarView { CoverBarView() }
+
+    func updateNSView(_ nsView: CoverBarView, context: Context) {
+        nsView.apply(length: length, sweeps: sweeps)
+    }
+}
+
+final class CoverBarView: NSView {
+    private let baseLayer = CALayer()
+    private let highlightLayer = CALayer()
+    private let sweepMask = NotchTextRaster.makeSweepMask()
+    private var appliedLength: CGFloat = 0
+    private var appliedSweeps = false
+    private var installedSweepWidth: CGFloat?
+
+    override var isFlipped: Bool { true }
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+
+        let radius = PanelMetrics.coverBarHeight / 2
+        for bar in [baseLayer, highlightLayer] {
+            bar.cornerRadius = radius
+            bar.cornerCurve = .continuous
+        }
+        baseLayer.backgroundColor = NotchPalette.coverBarDrawingColor.cgColor
+        // **The crest is the ink the bar is made of, at full strength.** The
+        // same ceiling the collapsed bar's breathing dot takes
+        // (`compact-view-v2.md` §4.3): the movement is tuned against a screen
+        // and the crest is chosen against a value, so a covered run can be
+        // seen to be live without the brightest object on a covered panel
+        // being a mark that carries no attention at all (§4).
+        highlightLayer.backgroundColor = NotchPalette.label.opacity(1).cgColor
+        highlightLayer.mask = sweepMask
+        layer?.addSublayer(baseLayer)
+        layer?.addSublayer(highlightLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { nil }
+
+    /// Whether the searchlight is installed and running.
+    ///
+    /// Split out for ``SecondaryClickView/claims(_:)``'s reason: it is the one
+    /// thing here assertable without a running overlay, and the one thing that
+    /// must not drift. A cover that stopped sweeping would take away the
+    /// channel that answers *live or finished* and look exactly like a bar.
+    var isSweeping: Bool {
+        sweepMask.animation(forKey: NotchTextRaster.sweepAnimationKey) != nil
+    }
+
+    func apply(length: CGFloat, sweeps: Bool) {
+        guard length != appliedLength || sweeps != appliedSweeps else { return }
+        appliedLength = length
+        appliedSweeps = sweeps
+        highlightLayer.isHidden = !sweeps
+        needsLayout = true
+        layout()
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+
+        let frame = CGRect(
+            x: 0,
+            y: 0,
+            width: appliedLength,
+            height: PanelMetrics.coverBarHeight
+        )
+        baseLayer.frame = frame
+        highlightLayer.frame = frame
+
+        if appliedSweeps {
+            // Bounded to the bar, which is the whole of what is drawn — so
+            // unlike a body line's, this sweep's geometry is the bar's own and
+            // the reinstall below fires only when the length changes, which is
+            // never while a row is on the list.
+            if appliedLength != installedSweepWidth {
+                installedSweepWidth = appliedLength
+                NotchTextRaster.installSweep(
+                    on: sweepMask,
+                    across: appliedLength,
+                    height: PanelMetrics.coverBarHeight,
+                    period: SessionRowTextView.sweepPeriod
+                )
+            }
+        } else {
+            installedSweepWidth = nil
+            sweepMask.removeAnimation(forKey: NotchTextRaster.sweepAnimationKey)
+        }
+
+        CATransaction.commit()
     }
 }
 

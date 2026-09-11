@@ -743,10 +743,19 @@ struct CompactTrailingSlot: View {
 /// activation latches instead (``MonitorStore/togglePeek()``) and the label
 /// says which way the next one goes.
 ///
-/// The glyph does not change under the press. This surface says a control is
-/// on by being brighter and taking no ground (``AboutButton``), and swapping
-/// `eye` for `eye.slash` mid-press would be a second thing moving under a
-/// finger that is already holding something down.
+/// **The glyph is the covers, not a picture of looking.** An eye stood here
+/// first and is the wrong register for this surface: everything else the band
+/// draws is a geometric mark in the app's own vocabulary — a `5 × 5` matrix, a
+/// brand mark, a gear — and a pictograph among them reads as borrowed. Three
+/// stacked pills, short then medium then long, are the row this control lifts,
+/// drawn at glyph size in the bar's own corner: the button *is* what it acts
+/// on. Unequal widths and fully rounded ends are also what keep it from
+/// reading as a hamburger, which is three equal bars with square ends.
+///
+/// It does not change under the press. This surface says a control is on by
+/// being brighter and taking no ground (``AboutButton``), and a glyph that
+/// swapped for another mid-press would be a second thing moving under a finger
+/// already holding something down.
 private struct PeekButton: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -757,14 +766,9 @@ private struct PeekButton: View {
     }
 
     var body: some View {
-        Image(systemName: "eye")
-            .font(.system(
-                size: PanelMetrics.bandControlGlyphSize,
-                weight: .regular
-            ))
-            .foregroundStyle(
-                store.isPeeking ? Color.white : Color.white.opacity(0.55)
-            )
+        PeekGlyph(
+            ink: store.isPeeking ? Color.white : Color.white.opacity(0.55)
+        )
             .frame(width: size, height: size)
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
@@ -789,6 +793,37 @@ private struct PeekButton: View {
                 "Hold to read the covered rows, and let go to cover them "
                     + "again. Privacy Mode stays on."
             )
+    }
+}
+
+/// Three pills in the covers' own proportions, at glyph size.
+///
+/// The lengths are ``PanelMetrics/coverBarProjectLength`` and its two
+/// neighbours, held apart enough to be read at `13` pt rather than scaled
+/// literally: `64 : 160 : 224` puts the first at a fifth of the third, which
+/// at this size is a dot beside a line. What survives the rounding is the
+/// order and the character — short, medium, long — which is the row's own
+/// signature.
+private struct PeekGlyph: View {
+    let ink: Color
+
+    private static let widths: [CGFloat] = [0.46, 0.77, 1]
+    private static let barHeight: CGFloat = 1.8
+    private static let gap: CGFloat = 2.7
+
+    var body: some View {
+        let span = PanelMetrics.bandControlGlyphSize
+        VStack(alignment: .leading, spacing: Self.gap) {
+            ForEach(Self.widths, id: \.self) { fraction in
+                RoundedRectangle(
+                    cornerRadius: Self.barHeight / 2,
+                    style: .continuous
+                )
+                .fill(ink)
+                .frame(width: span * fraction, height: Self.barHeight)
+            }
+        }
+        .frame(width: span, alignment: .leading)
     }
 }
 
@@ -3756,9 +3791,15 @@ struct SessionRowContent: View {
                     // draws no bar, exactly as it draws no line.
                     if store.previewLine(for: session) != nil {
                         if isCovered {
+                            // **The searchlight crosses the cover too.** It is
+                            // the channel that answers *live or finished* --
+                            // the one thing on this panel readable without
+                            // looking straight at it -- and covering takes the
+                            // content away, not the reading.
                             CoverBar(
                                 length: PanelMetrics.coverBarPreviewLength,
-                                lineHeight: PanelMetrics.sessionRowPreviewHeight
+                                lineHeight: PanelMetrics.sessionRowPreviewHeight,
+                                sweeps: sweepsBody
                             )
                         } else if let preview = store.previewLine(for: session) {
                             SessionRowText(
@@ -4134,41 +4175,6 @@ private struct SessionStatusControl: View {
 /// Project text. That is accepted rather than overlooked: the caption is the
 /// least important line in the row and it ends in a fade rather than an
 /// ellipsis, so losing its tail is the cheapest thing on this surface to lose.
-/// The mark a covered run leaves behind (`cover-the-words.md` §4).
-///
-/// **It covers; it does not delete.** The run's line keeps its height, so a
-/// row is `72` covered and `72` uncovered, the panel's height does not change
-/// and the pill keeps its width. That is not a nicety: this gesture is taken
-/// with an audience watching, and a component that resizes at that moment is
-/// the one thing on the screen everybody's eye goes to.
-///
-/// **And it is cheaper than what it replaces.** A bar is a rectangle: no text
-/// layout, no measurement, and while it is drawn the preview line stops being
-/// a continuously changing run, so `MessageDisplay` deltas no longer reach
-/// anything that measures. Against `AGENTS.md` §7 this addition is on the
-/// right side of the ledger, which is unusual for an addition. Two
-/// alternatives are declined for the same reason: a blur is the one effect
-/// this overlay has measured and taken back out, and a run of bullets or
-/// dashes is text, needs the face loaded and measured, and puts the cost
-/// straight back.
-///
-/// Leading-aligned in whatever it is given, because the run it stands for was.
-private struct CoverBar: View {
-    let length: CGFloat
-    let lineHeight: CGFloat
-
-    var body: some View {
-        RoundedRectangle(
-            cornerRadius: PanelMetrics.coverBarHeight / 2,
-            style: .continuous
-        )
-        .fill(NotchPalette.coverBar)
-        .frame(width: length, height: PanelMetrics.coverBarHeight)
-        .frame(height: lineHeight)
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
-
 private struct SessionRowCaption: View {
     let session: MonitoredSession
     let showsAttribution: Bool

@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Built in full** — §13's minimum and the Settings row and the accessibility pass on 2026-09-10, §6's two hover bugs fixed and §7's peek built on 2026-09-11. §12's five questions are still open. |
+| Status | **Built in full** — §13's minimum and the Settings row and the accessibility pass on 2026-09-10, §6's two hover bugs fixed and §7's peek built on 2026-09-11, with §4.4's searchlight and §7's glyph the same day. §12's five questions are still open. |
 | Version | 1.1 |
 | Date | 2026-09-10 |
 | Amended | **The control is named `Privacy Mode`, and the pill is silenced rather than covered** (2026-09-10, by the board's owner, before any of it was built). Two decisions, and the second one costs something this document had been relying on. The name in Settings is `Privacy Mode`; *covering* stays the name of the mechanism, and §2 is unchanged and now matters more, not less. And the pill draws **nothing** where §4.1 had it draw a `48` pt bar — so **neither collapsed form can say the mode is on**, which §8 used to be able to claim of one of them. Touched: the header, §3, §4.1, §5, §8, §10, §11, §13. |
@@ -89,6 +89,16 @@ A cover bar is a rectangle. It costs no text layout, and while it is drawn **the
 
 Two alternatives are declined outright. **A blur** is the one effect this overlay has measured and taken back out. **A run of bullets or dashes** is text, needs the face loaded and measured, and puts the cost straight back.
 
+### 4.4 The searchlight crosses the cover
+
+**A covered body line keeps the sweep the words were carrying.** It is the channel that answers *live or finished* — the one thing on this panel that can be read without looking straight at it, which is how a menu-bar surface is actually watched — and covering is supposed to take the content away, not a reading. A covered running row that stopped sweeping would look exactly like a covered finished one, and the panel would have lost the reading it exists for at the moment somebody most needs it to be cheap.
+
+**The body line only, which is exactly where it crossed the words.** A row's Project and its title never carried it, so their covers do not either. The rule is unchanged: `sweepsBody(for:)` is `status.keepsTiming`.
+
+**It is the text's own sweep, at the text's own period**, installed through the same `NotchTextRaster.installSweep(on:across:height:period:)` — so a bar and the line it replaced cannot drift out of phase with each other or with any other row. That also decides the implementation: the bar is layer-backed like `SessionRowText`, because no continuously running animation in this overlay may be a SwiftUI one (`AGENTS.md` §7). §4.3's saving stands — a bar still costs no text layout, and this is the same single `CABasicAnimation` the line already had.
+
+**The crest is the ink the bar is made of, at full strength**: `#7C7C80` at `45%` at rest, `100%` at the peak. Measured on the panel, `0.224` to `0.498` in brightness. It is the ceiling `compact-view-v2.md` §4.3 chose for the breathing dot, and for the same reason — the movement is tuned against a screen and the crest is chosen against a value, so a covered run can be seen to be live without the brightest object on a covered panel being a mark that carries no attention at all.
+
 ## 5. The gesture: a secondary click on the component
 
 **A secondary press anywhere on the component that is not a row toggles the cover** — the collapsed bar, the band, the footer, the empty list.
@@ -135,7 +145,9 @@ The principle, stated once and applied twice: **the cover silences what is drawn
 
 **Where it stands, and why not with the other two.** Flush to the left of the About mark and the gear, growing into the slack between them and the counts, so neither of the two controls a user has already learnt the position of moves. It is deliberately *not* a third member of that group: `PanelMetrics.expandedTrailingSideWidth` is two boxes wide and feeds `restingExpandedWidth`, so a third would move the panel's own edge — and `privacyMode` would then have to join `frameChangingPublishers`, a list nothing tests. Drawn only where there is something to lift (`hasCoveredRows`), which also keeps it off the one form narrow enough for that width to bind.
 
-**A press, not a click.** `DragGesture(minimumDistance: 0)` reads the press and the release apart; a `Button` fires on the release and would give one frame of uncovered text at the moment the pointer let go, which is the opposite of what the control is for. The glyph does not change under the press — this surface says a control is on by being brighter and taking no ground, and swapping `eye` for `eye.slash` mid-press is a second thing moving under a finger already holding something down.
+**A press, not a click.** `DragGesture(minimumDistance: 0)` reads the press and the release apart; a `Button` fires on the release and would give one frame of uncovered text at the moment the pointer let go, which is the opposite of what the control is for. The glyph does not change under the press — this surface says a control is on by being brighter and taking no ground, and a glyph that swapped for another mid-press is a second thing moving under a finger already holding something down.
+
+**The glyph is the covers, not a picture of looking.** An eye stood here first and is the wrong register: everything else the band draws is a geometric mark in the app's own vocabulary — a `5 × 5` matrix, a brand mark, a gear — and a pictograph among them reads as borrowed. It is three stacked pills, short then medium then long, in the bar's own corner radius: the row this control lifts, drawn at glyph size, so the button *is* what it acts on. Unequal widths and fully rounded ends are also what keep it from reading as a hamburger, which is three equal bars with square ends. The literal `64 : 160 : 224` is not used — it puts the first at a fifth of the third, which at `13` pt is a dot beside a line — so what survives the rounding is the order and the character.
 
 **The keyboard latches, and that is the one exception to "cannot be left on".** A held press has no keyboard equivalent, and *you may not read this list without a mouse* is not an answer — so VoiceOver's activation toggles instead, the label says which way the next one goes, and the latch dies with the panel like every other peek.
 
@@ -183,7 +195,8 @@ Four labels carry a title or a preview today — [`NotchOverlayView.swift`](../N
 | The pill (§4.1) | One clause in `MonitorStore.drawsCompactMiddle` |
 | Settings | `SettingsWindow.privacyModeRow`, second in `displayGroup` |
 | The labels (§9) | `SessionRow.accessibilityText` and `RetiredRow.accessibilityText` |
-| The peek (§7) | `PeekButton` in the band; `MonitorStore.isPeeking`, `beginPeek()`, `endPeek()`, `togglePeek()` and `hasCoveredRows`, with `isExpanded`'s and `privacyMode`'s `didSet` clearing it |
+| The peek (§7) | `PeekButton` and `PeekGlyph` in the band; `MonitorStore.isPeeking`, `beginPeek()`, `endPeek()`, `togglePeek()` and `hasCoveredRows`, with `isExpanded`'s and `privacyMode`'s `didSet` clearing it |
+| The searchlight (§4.4) | `CoverBarView`, beside `SessionRowTextView`, sharing its sweep mask and period; `NotchPalette.coverBarDrawingColor` |
 
 ### 11.1 Three things the code settled that this document had not
 

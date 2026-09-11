@@ -2035,6 +2035,58 @@ struct NotchlineTests {
         #expect(store.isExpanded)
     }
 
+    /// **The searchlight crosses the cover too** (`cover-the-words.md` §4.4).
+    ///
+    /// The sweep is the channel that answers *live or finished* — the one
+    /// thing on this panel that can be read without looking straight at it —
+    /// and covering the words is meant to take the content away, not a
+    /// reading. A covered running row that stopped sweeping would look exactly
+    /// like a covered finished one.
+    ///
+    /// **And it is the text's own sweep, at the text's own period**, so a bar
+    /// and the line it replaced cannot drift out of phase with each other or
+    /// with every other row on the list.
+    @Test @MainActor
+    func theSearchlightCrossesACoveredBodyLineAsItCrossedTheWords() {
+        let bar = CoverBarView(frame: .zero)
+
+        bar.apply(length: PanelMetrics.coverBarPreviewLength, sweeps: true)
+        #expect(bar.isSweeping)
+
+        bar.apply(length: PanelMetrics.coverBarPreviewLength, sweeps: false)
+        #expect(!bar.isSweeping)
+
+        // A finished row draws the same bar and does not sweep, which is the
+        // rule the words already followed: `sweepsBody` is `keepsTiming`.
+        let running = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "t-1",
+            turnID: "u-1",
+            projectName: "notchline",
+            title: "Cover the words",
+            preview: "Reading the bar",
+            status: .running,
+            startedAt: Date()
+        )
+        let finished = MonitoredSession(
+            agent: .claudeCode,
+            threadID: "t-2",
+            turnID: "u-2",
+            projectName: "notchline",
+            title: "Cover the words",
+            preview: "Read the bar",
+            status: .completed,
+            startedAt: Date()
+        )
+        let store = MonitorStore(
+            displays: [makeDisplay(id: "flat", ordinal: 1, menuBarHeight: 24, hasNotch: false)],
+            services: [],
+            initialSnapshot: makeSessionSnapshot([running, finished])
+        )
+        #expect(store.sweepsBody(for: running))
+        #expect(!store.sweepsBody(for: finished))
+    }
+
     /// **Hold to read your own list, let go to put it back**
     /// (`cover-the-words.md` §7).
     ///
