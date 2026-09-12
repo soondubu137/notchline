@@ -10,11 +10,13 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ### Added
 
-- **Antigravity CLI, listed only.** A row per conversation shows Running from a turn's first model call to its end and Completed after, named by the workspace folder, and clears when the `agy` process exits. Approvals and questions are not detected, which the Settings row says under its switch. (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`.)
+- **Antigravity CLI, listed only.** A row per conversation shows Running from a turn's first model call to its end and Completed after, named by the workspace folder, and clears when it has been read or when the `agy` process exits. Approvals and questions are not detected, which the Settings row says under its switch. (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`.)
 - **An Antigravity row is titled with what was asked.** No hook payload carries the prompt, so rows said `Untitled`. The transcript the payload already names carries it, and carries it before the first model call, so the title is there while the turn still runs — read from the tail of that file, once per turn, and again at the turn's end only if the first read was too early.
+- **An Antigravity row leaves once you have read it.** A finished row used to stand on the notch until the conversation's next turn — in an open TUI session, for as long as you left it there. It now retires the way a Claude Code terminal row does: the terminal that conversation runs in has been typed at since the turn ended, with that terminal in front of you. A conversation under `tmux`, `ssh` or a pipe keeps the old lifecycle.
 
 ### Changed
 
+- **Antigravity presence and admission are read with a fraction of the syscalls.** The kernel reading behind "is it open", "which conversations exist" and "which process runs this one" built a `URL` per process on the machine, and each of those stats the path. It now filters on the name the kernel already keeps and compares paths as strings, which matters because a row waiting to be read takes that reading once a second.
 - **A row's caption in Settings can state what the product will never say.** A failure the product reported still takes the line; otherwise a product listed at a lower tier shows its declared boundary there, so the absence of an approval on its rows is announced once rather than discovered.
 
 ### Fixed

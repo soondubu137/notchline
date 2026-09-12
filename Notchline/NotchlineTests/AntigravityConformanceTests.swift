@@ -48,6 +48,66 @@ struct AntigravityConformanceTests {
         }
     }
 
+    /// What the terminal a conversation's process is attached to says, as the
+    /// test says it — and how many times it was asked, because a list with no
+    /// finished row in it must not pay for a reading at all.
+    ///
+    /// A pid it has never heard of answers `nil`, which is a conversation with
+    /// no controlling terminal: the reading that keeps a row listed.
+    final class GestureStub: ControllingTerminalGestureReporting, @unchecked Sendable {
+        private let lock = NSLock()
+        private var readings: [Int32: ControllingTerminalReading] = [:]
+        private var asks = 0
+
+        nonisolated func set(_ pid: Int32, _ reading: ControllingTerminalReading?) {
+            lock.lock()
+            readings[pid] = reading
+            lock.unlock()
+        }
+
+        /// The user was at that terminal at `at`, with its application in
+        /// front of them.
+        nonisolated func wasAtTheTerminal(of pid: Int32, at date: Date) {
+            set(pid, ControllingTerminalReading(
+                lastGesture: date,
+                hostIsInFrontOfTheUser: true,
+                hostCanEverBeInFrontOfTheUser: true
+            ))
+        }
+
+        nonisolated var timesAsked: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return asks
+        }
+
+        nonisolated func reading(
+            forProcessIdentifier pid: Int32
+        ) async -> ControllingTerminalReading? {
+            lock.lock()
+            asks += 1
+            let answer = readings[pid]
+            lock.unlock()
+            return answer
+        }
+    }
+
+    /// Stands in for the machine's display and lock state.
+    final class ScreenStub: ScreenAvailabilityReporting, @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored = true
+
+        var available: Bool {
+            get { lock.lock(); defer { lock.unlock() }; return stored }
+            set { lock.lock(); stored = newValue; lock.unlock() }
+        }
+
+        nonisolated func isAvailable() -> Bool { available }
+        nonisolated func changeEvents() -> AsyncStream<Void> {
+            AsyncStream { $0.finish() }
+        }
+    }
+
     /// A process table the test writes.
     private final class TableStub: ProcessTableReading, @unchecked Sendable {
         private let lock = NSLock()
@@ -61,10 +121,16 @@ struct AntigravityConformanceTests {
             lock.unlock()
         }
 
-        nonisolated func processes() -> [ProcessEntry] {
+        /// The kernel's own shape: a machine with no processes on it at all is
+        /// the kernel declining to answer, never an empty machine — this app is
+        /// itself one of the processes it would have listed.
+        nonisolated func processes(named name: String) -> [ProcessEntry]? {
             lock.lock()
             defer { lock.unlock() }
-            return entries
+            guard !entries.isEmpty else { return nil }
+            return entries.filter {
+                ($0.executablePath as NSString?)?.lastPathComponent == name
+            }
         }
 
         nonisolated func openFilePaths(ofProcess processIdentifier: Int32) -> [String] {
@@ -87,6 +153,12 @@ struct AntigravityConformanceTests {
         let scanner: AntigravityConversationScanner
         let provider: HookProductProvider
         let presenceDirectory: URL
+        /// What the conversation's terminal says about the user being at it,
+        /// and whether there is a screen to read it on. Nothing is set by
+        /// default, which is a conversation with no controlling terminal — the
+        /// reading that keeps every finished row listed.
+        let gestures = GestureStub()
+        let screen = ScreenStub()
         /// What the transcript the payload names is holding, as the test says
         /// it is. The file itself is read by ``AntigravityTranscriptFile``,
         /// which has a suite of its own below.
@@ -114,7 +186,12 @@ struct AntigravityConformanceTests {
                 paths: paths,
                 vocabulary: AntigravityHookVocabulary(transcripts: transcripts),
                 presence: scanner,
-                admission: scanner
+                admission: scanner,
+                readEvidence: TerminalReadEvidence(
+                    sessions: scanner,
+                    gestures: gestures,
+                    screen: screen
+                )
             )
         }
 
@@ -527,6 +604,191 @@ struct AntigravityConformanceTests {
         await product.clock.advance(by: 1)
         #expect(await product.scanner.presence() == .unknown)
         #expect(await product.scanner.admission() == .unknown)
+    }
+
+    // MARK: - Read state
+
+    /// **A finished row is retired once the user has been at its terminal**,
+    /// and not before.
+    ///
+    /// The lifecycle in `tiered-support.md` §2 — a Tier 0 row leaves on the
+    /// next submission, when the Thread goes away, or on a right-click — is
+    /// what a product with no read evidence gets, and it left a `Completed`
+    /// row standing on the notch for as long as the TUI session it belonged to
+    /// stayed open, however thoroughly its answer had been read. Antigravity
+    /// supplies the evidence by naming the process its conversation runs in,
+    /// which it already does for presence, admission and the click.
+    ///
+    /// Three instants, in order: the reading is not taken at all while the row
+    /// is running; a gesture from *before* the Turn ended is not evidence it
+    /// was read; one after it is, and the row goes.
+    @Test
+    func aFinishedRowIsRetiredOnceTheUserHasBeenAtItsTerminal() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation, pid: 4242)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        let running = await product.provider.fetchSnapshot()
+        #expect(running.sessions.count == 1)
+        #expect(
+            product.gestures.timesAsked == 0,
+            "a list with no finished row in it pays for no reading"
+        )
+        #expect(
+            await product.provider.nextRefreshDeadline() == nil,
+            "and books no re-check"
+        )
+
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(5))
+        product.gestures.wasAtTheTerminal(of: 4242, at: t0.addingTimeInterval(1))
+        let unread = await product.provider.fetchSnapshot()
+        #expect(unread.sessions.count == 1)
+        #expect(unread.sessions.first?.status == .completed)
+        #expect(product.gestures.timesAsked == 1, "one reading per finished row per refresh")
+        let deadline = try #require(await product.provider.nextRefreshDeadline())
+        // An access time moves in the kernel with nothing to watch it, so a row
+        // waiting on one is looked at again a second later.
+        #expect(deadline <= Date().addingTimeInterval(1.5))
+
+        product.gestures.wasAtTheTerminal(of: 4242, at: t0.addingTimeInterval(6))
+        #expect(await product.provider.fetchSnapshot().sessions.isEmpty)
+        #expect(
+            await product.provider.nextRefreshDeadline() == nil,
+            "a row that has left is waiting for nothing"
+        )
+
+        // Retiring the row is not retiring the conversation: the next turn
+        // draws its own, and a stale gesture cannot retire that one.
+        try product.deliver(
+            "PreInvocation",
+            invocation(0, of: conversation),
+            at: t0.addingTimeInterval(30)
+        )
+        let next = await product.provider.fetchSnapshot()
+        #expect(next.sessions.count == 1)
+        #expect(next.sessions.first?.status == .running)
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(40))
+        #expect(await product.provider.fetchSnapshot().sessions.count == 1)
+    }
+
+    /// A gesture at a terminal nobody was in front of is not a reading.
+    ///
+    /// The pairing ``ControllingTerminalGestureReporting`` documents, kept here
+    /// rather than assumed: the access time is one scalar, and this product
+    /// asks its terminal for neither focus reports nor mouse reports (measured
+    /// 2026-09-12: the TUI writes `?1049h`, `?25l` and `?2004h` and nothing
+    /// else), so the bytes behind a gesture are a keystroke or a paste. That
+    /// makes the front narrower than it is for Claude Code and no less
+    /// required — a row is retired on somebody being *there*.
+    @Test
+    func aGestureAtATerminalNobodyWasInFrontOfIsNotAReading() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation, pid: 4242)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(5))
+        product.gestures.set(4242, ControllingTerminalReading(
+            lastGesture: t0.addingTimeInterval(9),
+            hostIsInFrontOfTheUser: false,
+            hostCanEverBeInFrontOfTheUser: true
+        ))
+        #expect(await product.provider.fetchSnapshot().sessions.count == 1)
+        #expect(
+            await product.provider.nextRefreshDeadline() != nil,
+            "a terminal nobody is in front of is a question worth asking again"
+        )
+    }
+
+    /// A conversation nothing can ever speak for keeps its row and books
+    /// nothing.
+    ///
+    /// Two shapes of it, and the distinction is the one CR-Fable-036 was:
+    /// `nil` is a conversation with no controlling terminal at all — a `-p` run
+    /// with its output piped — and a reading whose host can never hold the
+    /// front is one under `tmux`, `screen` or `ssh`, whose ancestry reaches
+    /// `launchd` without passing an application. Both are questions with no
+    /// possible answer, so neither may be re-asked once a second for the life
+    /// of the session.
+    @Test
+    func aConversationNothingCanSpeakForKeepsItsRowAndBooksNothing() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation, pid: 4242)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(5))
+        #expect(await product.provider.fetchSnapshot().sessions.count == 1)
+        #expect(await product.provider.nextRefreshDeadline() == nil)
+
+        product.gestures.set(4242, ControllingTerminalReading(
+            lastGesture: t0.addingTimeInterval(9),
+            hostIsInFrontOfTheUser: false,
+            hostCanEverBeInFrontOfTheUser: false
+        ))
+        #expect(await product.provider.fetchSnapshot().sessions.count == 1)
+        #expect(await product.provider.nextRefreshDeadline() == nil)
+    }
+
+    /// A row the user has waved away is judged by nobody, and still reported.
+    ///
+    /// Both halves matter. The reading is not taken, because a row that has
+    /// already left the list at the user's asking cannot be improved on by one
+    /// and an entry in the gate books a re-check a second either way
+    /// (CR-Fable-003). And the row is still listed, because what this product
+    /// reports is what it knows about: a Provider that stopped listing the Turn
+    /// would be telling the store the Turn had ended, which is the one thing
+    /// that makes it forget the removal (CR-Fable-004).
+    @Test
+    func aRowTheUserHasWavedAwayIsJudgedByNobody() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation, pid: 4242)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(5))
+        product.gestures.wasAtTheTerminal(of: 4242, at: t0.addingTimeInterval(1))
+        let row = try #require(await product.provider.fetchSnapshot().sessions.first)
+        let asked = product.gestures.timesAsked
+
+        let dismissed = await product.provider.fetchSnapshot(dismissedRowIDs: [row.id])
+        #expect(dismissed.sessions.count == 1)
+        #expect(dismissed.sessions.first?.id == row.id)
+        #expect(product.gestures.timesAsked == asked)
+        #expect(await product.provider.nextRefreshDeadline() == nil)
+    }
+
+    /// A row waiting to be read waits on the screen coming back, not on a
+    /// re-check nobody could act on.
+    ///
+    /// Every route that could retire this row needs a screen somebody can see,
+    /// so through a sleeping display or a locked screen the answer is knowably
+    /// "no" before the work is done and the sample is not a sample of anything
+    /// (CR-Fable-018). The row is not abandoned: the same evidence carries the
+    /// edge for the screen coming back, and it is merged into this Provider's
+    /// change events.
+    @Test
+    func anUnreadRowWaitsOnTheScreenComingBackRatherThanOnAReCheck() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation, pid: 4242)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(5))
+        product.gestures.wasAtTheTerminal(of: 4242, at: t0.addingTimeInterval(1))
+        #expect(await product.provider.fetchSnapshot().sessions.count == 1)
+        #expect(await product.provider.nextRefreshDeadline() != nil)
+
+        product.screen.available = false
+        #expect(await product.provider.nextRefreshDeadline() == nil)
+        product.screen.available = true
+        #expect(await product.provider.nextRefreshDeadline() != nil)
     }
 
     /// The scanner answers from one reading for the two questions the refresh

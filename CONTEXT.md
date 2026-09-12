@@ -46,7 +46,7 @@ Words are settled here. Any naming disagreement in code, docs or commit messages
 **Historical lifecycle event** — A one-off record of a lifecycle change from before this run. The record proves only that a hook configuration once executed; it cannot prove any Thread exists now or is in any state.
 *Avoid:* state awaiting recovery, launch snapshot, historical Stop state.
 
-**Unread terminal state** — The Turn has reached a terminal state but its Thread has not been looked at. **Evidence is sourced per product.** Codex uses Desktop's unread set (the blue dot). Claude Code uses any one of five paths, which are one sentence in five shapes — *while the answer was in front of the user, the user did something only a person does*:
+**Unread terminal state** — The Turn has reached a terminal state but its Thread has not been looked at. **Evidence is sourced per product**, and a product that supplies none keeps a finished row until its Thread's next submission, the Thread going away, or a right-click. Codex uses Desktop's unread set (the blue dot). Claude Code uses any one of five paths, which are one sentence in five shapes — *while the answer was in front of the user, the user did something only a person does*:
 
 1. Claude Desktop's record of when it last put that Thread on screen is later than the Turn's end (archiving included);
 2. after the Turn ended, Claude Desktop returned to the foreground and that Thread was the last one it displayed;
@@ -57,6 +57,8 @@ Words are settled here. Any naming disagreement in code, docs or commit messages
 Path 3 **asks nothing of the user**, which makes it the only path that can retire a row nobody read: at the moment a Turn ends, the person watching and the person who submitted and walked away are identical on every signal, so the product stops telling them apart and asks instead whether the answer is sitting on a screen someone may be looking at — accepting that whoever walked away loses the notification. Path 5 holds per Thread rather than per app, so that half needs no equivalent of path 3 and has none.
 
 **The five are peers; any one of them means read.** A Thread with remote control on sits in front of both a terminal and Claude Desktop, read by a different gesture on each side, so demoting path 5 to a fallback behind the others would leave a row read in the terminal on the notch forever. **Only a Thread with neither a desktop record nor a controlling terminal** (`-p` with output piped away) is unanswerable: its terminal state is neither read nor unread, and such a row never leaves on read ([ADR 0012](docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)).
+**Antigravity CLI uses path 5 and nothing else**, since it has no desktop application to keep a record: the conversation's process is the one holding its presence lock, and its controlling terminal answers for it. The gesture is narrower than Claude Code's because the product asks its terminal for less — measured 2026-09-12, its TUI enables neither focus reporting nor mouse reporting, so a keystroke or a paste is the whole of what stamps the access time, a returning glance stamps nothing, and the pointer cannot stamp it at all.
+
 *Avoid:* recently completed, brief terminal state, notch unread.
 
 ## Status

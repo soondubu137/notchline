@@ -232,8 +232,14 @@ struct HookProductConformanceTests {
         let done = try #require(finished.sessions.first)
         #expect(done.status == .completed)
         #expect(done.finishedAt == t0.addingTimeInterval(9))
-        // No read state at this tier: the row stays until its own exits apply.
+        // This product supplies no read evidence, so the row stays until its
+        // own exits apply -- and books nothing while it stands, because there
+        // is no reading a re-check could take (`tiered-support.md` §2, the
+        // Tier 0 lifecycle). A product that hands in
+        // ``TerminalReadEvidence`` gets the other behaviour and pays for it;
+        // see `AntigravityConformanceTests`.
         #expect(await product.provider.fetchSnapshot().sessions.count == 1)
+        #expect(await product.provider.nextRefreshDeadline() == nil)
 
         try await product.provider.removeIntegration()
         #expect(await product.provider.setupStatus() == .notInstalled)

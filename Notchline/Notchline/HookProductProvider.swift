@@ -68,13 +68,17 @@ struct AdmitsEveryObservedThread: ThreadAdmitting {
 /// carrying the answering argument gives Tier 2 — nothing here changes between
 /// them.
 ///
-/// **What this deliberately does not do.** No read state: a `Completed` row
-/// stays until the Thread's next submission, its disappearance from the
-/// admission list, or a right-click, which is the lifecycle `CONTEXT.md`
-/// defines for a Turn whose read state cannot be asked about. No quota, no
-/// interruption evidence beyond what the hooks say, no title beyond the
-/// prompt. Each of those is a capability a product adds beside this, not a
-/// flag on it.
+/// **What this deliberately does not do.** No quota, no interruption evidence
+/// beyond what the hooks say, no title beyond the prompt. Each of those is a
+/// capability a product adds beside this, not a flag on it.
+///
+/// **Read state is the one of those capabilities this now composes**, because
+/// for a terminal product it costs the product nothing: hand in
+/// ``TerminalReadEvidence`` and a `Completed` row is retired once the user has
+/// been at the terminal its Thread is running in. A product that hands in none
+/// keeps the lifecycle `CONTEXT.md` defines for a Turn whose read state cannot
+/// be asked about — the row stays until the Thread's next submission, its
+/// disappearance from the admission list, or a right-click.
 actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelivering {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents: AsyncStream<Void>
@@ -82,6 +86,17 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     private let hooks: HookLifecycleSource
     private let presence: any ProductPresenceReporting
     private let admission: any ThreadAdmitting
+    /// What the terminal a Thread runs in says about the user having read its
+    /// finished answer, or nil for a product that supplies no such evidence.
+    private let readEvidence: TerminalReadEvidence?
+    /// Keeps a finished row listed until it has been read, and retires it the
+    /// moment it has been.
+    ///
+    /// The same gate both shipping products use, given the same shape of
+    /// answer: the verdicts are computed per refresh from readings taken in
+    /// that refresh, so the unread set handed over is always current.
+    private var readGate: TerminalUnreadMembershipGate
+    private let clock: any MonitorClock
 
     init(
         agent: AgentKind,
@@ -89,6 +104,12 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         vocabulary: any AgentHookVocabulary,
         presence: any ProductPresenceReporting,
         admission: any ThreadAdmitting = AdmitsEveryObservedThread(),
+        /// What retires a finished row once it has been read. A terminal
+        /// product supplies it by naming the process each Thread runs in; a
+        /// product that supplies none keeps a finished row until the Thread's
+        /// next submission, its departure from the admission list or a
+        /// right-click.
+        readEvidence: TerminalReadEvidence? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard,
         fileManager: FileManager = .default,
@@ -107,8 +128,19 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         self.hooks = hooks
         self.presence = presence
         self.admission = admission
+        self.readEvidence = readEvidence
+        self.readGate = TerminalUnreadMembershipGate(
+            settlingInterval: timing.terminalReadSettlingInterval,
+            unreadRecheckInterval: timing.terminalUnreadRecheckInterval
+        )
+        self.clock = clock
         self.stateChangeEvents = DirectoryChangeWatcher.merged(
             [hooks.changeEvents()] + changeEvents
+                // The display waking or the screen unlocking. A row waiting to
+                // be read books no re-check while neither is true, because the
+                // only route that could retire it needs a screen somebody can
+                // see; this is the edge that starts the re-checks again.
+                + (readEvidence.map { [$0.screen.changeEvents()] } ?? [])
         )
     }
 
@@ -126,6 +158,10 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         let status = await hooks.setupStatus()
         guard status == .active else {
+            // Nothing is listed, so nothing is waiting to be read. Left
+            // standing, the gate's entries would go on booking a re-check a
+            // second for rows nobody can see.
+            readGate.reset()
             return snapshot(
                 availability: .setupRequired,
                 sessions: [],
@@ -138,6 +174,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
             )
         }
         guard await hooks.prepareTransport() else {
+            readGate.reset()
             return snapshot(
                 availability: .disconnected,
                 sessions: [],
@@ -165,22 +202,143 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         let unwatchable: String? = presence == .unknown
             ? "\(agent.displayName) is registered, but this app cannot tell whether it is open."
             : nil
-        let rows = state.turns
-            .map(row(for:))
-            .sorted(by: MonitorAggregation.rowOrder)
+        var rows: [MonitoredSession] = []
+        if presence.isOpen {
+            rows = await rowsStillWorthShowing(
+                state.turns,
+                dismissedRowIDs: dismissedRowIDs
+            )
+        } else {
+            readGate.reset()
+        }
         return snapshot(
             availability: unwatchable == nil ? .ready : .disconnected,
-            sessions: presence.isOpen ? rows : [],
+            sessions: rows,
             setupStatus: status,
             diagnostic: MonitorDiagnostics.combined(unwatchable, state.diagnostic),
             presence: presence
         )
     }
 
-    /// Nothing timed: the reducer's edges and the store's heartbeat are the
-    /// only reasons to ask again. A product with a timed source of its own
-    /// composes it beside this Provider.
-    func nextRefreshDeadline() async -> Date? { nil }
+    /// The rows to list, with a finished one the user has already read taken
+    /// off.
+    ///
+    /// **A row is withheld only on evidence that somebody read it**, and only a
+    /// product that supplied ``TerminalReadEvidence`` has any: with none, every
+    /// row the reducer holds is listed and the gate is never consulted.
+    ///
+    /// The shape is the Claude Code service's, minus the four routes that go
+    /// through Claude Desktop, and the departures from it are the two costs
+    /// that service pays for and this one must not pay twice:
+    ///
+    /// - **No reading at all happens unless a finished row is listed.** Every
+    ///   row in a list of running rows would be shown outright and drop its
+    ///   gate entry, so the whole pass collapses to emptying the gate
+    ///   (CR-Fable-041).
+    /// - **A row the user has waved away is judged by nobody.** It has already
+    ///   left the list at their asking, so no reading can add anything to it —
+    ///   and an entry in the gate books a re-check a second whether or not the
+    ///   row is on the notch (CR-Fable-003). It is still *reported*: what this
+    ///   product lists is what it knows about, and a Provider that stopped
+    ///   listing the Turn would be telling the store the Turn had ended.
+    private func rowsStillWorthShowing(
+        _ turns: [HookTurnState],
+        dismissedRowIDs: Set<String>
+    ) async -> [MonitoredSession] {
+        let built = turns.map { (row: row(for: $0), turn: $0) }
+        func listed() -> [MonitoredSession] {
+            built.map(\.row).sorted(by: MonitorAggregation.rowOrder)
+        }
+        guard let readEvidence else { return listed() }
+        guard built.contains(where: {
+            TerminalUnreadMembershipGate
+                .isTerminal(MonitorAggregation.effectiveStatus(of: $0.row))
+                && !dismissedRowIDs.contains($0.row.id)
+        }) else {
+            readGate.reset()
+            return listed()
+        }
+
+        let now = clock.now()
+        var shown: [MonitoredSession] = []
+        var judged: [(row: MonitoredSession, turn: HookTurnState)] = []
+        var unreadThreadIDs: Set<String> = []
+        for (row, turn) in built {
+            guard !dismissedRowIDs.contains(row.id) else {
+                shown.append(row)
+                continue
+            }
+            // The gate is asked whether this *thread* is still working rather
+            // than what the row says, so a finished Turn with a subagent still
+            // in flight takes the running path — shown outright, entry
+            // dropped — and the one row carrying the evidence that anything is
+            // still running cannot be erased a settling interval after an end
+            // the user has already read.
+            let status = MonitorAggregation.effectiveStatus(of: row)
+            guard TerminalUnreadMembershipGate.isTerminal(status) else {
+                judged.append((row, turn))
+                continue
+            }
+            switch await readEvidence.verdict(
+                forThreadID: row.threadID,
+                turnEndedAt: turn.turnEndedAt
+            ) {
+            case .cannotBeAsked:
+                // No terminal, or one whose host can never hold the front.
+                // Kept out of the gate rather than reported unread, so it books
+                // no re-check for a question with no possible answer: such a
+                // row leaves the way a Tier 0 row always did, on the next
+                // submission, when the Thread goes away, or when the user
+                // removes it.
+                shown.append(row)
+            case .read:
+                judged.append((row, turn))
+            case .unread:
+                unreadThreadIDs.insert(row.threadID)
+                judged.append((row, turn))
+            }
+        }
+        // Authoritative and current by construction: every verdict above was
+        // computed in this call, from a kernel reading that cannot be a
+        // generation behind. A reading that failed answered `cannotBeAsked` and
+        // took its row out of the gate rather than into it with a stale
+        // verdict.
+        let unreadState = DesktopUnreadStateSnapshot(
+            unreadThreadIDs: unreadThreadIDs,
+            source: .current,
+            currentAsOf: now
+        )
+        for (row, turn) in judged where readGate.shouldDisplay(
+            sessionID: row.id,
+            threadID: row.threadID,
+            status: MonitorAggregation.effectiveStatus(of: row),
+            turnEndedAt: turn.turnEndedAt,
+            terminalBoundaryAt: turn.terminalBoundaryAt,
+            unreadState: unreadState,
+            now: now
+        ) {
+            shown.append(row)
+        }
+        readGate.retain(sessionIDs: Set(judged.map(\.row.id)))
+        return shown.sorted(by: MonitorAggregation.rowOrder)
+    }
+
+    /// Nothing timed but a finished row waiting to be read: the reducer's edges
+    /// and the store's heartbeat are the only other reasons to ask again, and a
+    /// product with a timed source of its own composes it beside this Provider.
+    ///
+    /// That row waits on the user rather than on time, so its deadline is a
+    /// floor under the edges — and the access time it is waiting for moves in
+    /// the kernel with nothing to watch it, so it can only be asked at a
+    /// re-check. It costs nothing while no such row is listed, and nothing at
+    /// all while the screen is one nobody could read it on.
+    func nextRefreshDeadline() async -> Date? {
+        guard let readEvidence else { return nil }
+        return readGate.nextDeadline(
+            now: clock.now(),
+            screenIsAvailable: readEvidence.screen.isAvailable()
+        )
+    }
 
     func disconnect() async {
         hooks.disconnect()

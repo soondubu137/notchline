@@ -13,7 +13,23 @@ struct ProcessEntry: Sendable, Equatable {
 /// questions — so the reading that depends on them can be tested against a
 /// table of the test's own.
 nonisolated protocol ProcessTableReading: Sendable {
-    func processes() -> [ProcessEntry]
+    /// Every process running an executable with this last path component.
+    ///
+    /// **The name is the table's business rather than the caller's**, because
+    /// the kernel answers it far more cheaply than it answers a path:
+    /// `proc_pidpath` reconstructs a path from a vnode for every process on the
+    /// machine (2.3 ms for 713 of them, measured in Release on this machine),
+    /// while the short name in `PROC_PIDTBSDINFO` is 0.5 ms for the same walk.
+    /// Filtering here rather than after the fact is what makes the reading
+    /// cheap enough to take once a second while a finished row waits to be
+    /// read. The entries that come back still carry the full path, and the
+    /// caller still checks it.
+    ///
+    /// **Nil is the kernel declining to answer**, which is the one reading that
+    /// is not evidence: an empty list says no such process is running, and no
+    /// list at all says nothing at all. The live table cannot answer nil while
+    /// this app runs — it is at least one of the processes counted.
+    func processes(named name: String) -> [ProcessEntry]?
     /// The paths of the files `processIdentifier` holds open, for a process
     /// this user may inspect; empty otherwise.
     func openFilePaths(ofProcess processIdentifier: Int32) -> [String]
@@ -22,9 +38,9 @@ nonisolated protocol ProcessTableReading: Sendable {
 /// The live table, read through `libproc` — the same calls the terminal
 /// route already makes for a process's executable and parent.
 struct LibprocProcessTable: ProcessTableReading {
-    nonisolated func processes() -> [ProcessEntry] {
+    nonisolated func processes(named name: String) -> [ProcessEntry]? {
         let needed = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
-        guard needed > 0 else { return [] }
+        guard needed > 0 else { return nil }
         // Room for the processes that start between the two calls.
         var identifiers = [pid_t](
             repeating: 0,
@@ -38,16 +54,37 @@ struct LibprocProcessTable: ProcessTableReading {
                 Int32(buffer.count * MemoryLayout<pid_t>.stride)
             )
         }
-        guard filled > 0 else { return [] }
+        guard filled > 0 else { return nil }
         return identifiers
             .prefix(Int(filled) / MemoryLayout<pid_t>.stride)
-            .filter { $0 > 0 }
+            .filter { $0 > 0 && Self.shortName(ofProcess: $0) == name }
             .map {
                 ProcessEntry(
                     processIdentifier: $0,
                     executablePath: ProcessAncestryHostResolver.systemExecutablePath(ofProcess: $0)
                 )
             }
+    }
+
+    /// The name the kernel keeps beside a process, or nil for one this user may
+    /// not inspect.
+    ///
+    /// A copy of the executable's last path component, made when the process
+    /// was executed and truncated at 31 characters. It is a pre-filter and
+    /// never the verdict: the caller still reads the path the entry carries,
+    /// so a name that is a truncation of a longer one, or a binary since
+    /// renamed, cannot make a process pass for another.
+    nonisolated private static func shortName(ofProcess pid: pid_t) -> String? {
+        var info = proc_bsdinfo()
+        let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else {
+            return nil
+        }
+        return withUnsafePointer(to: &info.pbi_name) { pointer in
+            pointer.withMemoryRebound(to: CChar.self, capacity: Int(2 * MAXCOMLEN)) {
+                String(cString: $0)
+            }
+        }
     }
 
     nonisolated func openFilePaths(ofProcess processIdentifier: Int32) -> [String] {
@@ -161,15 +198,33 @@ final class AntigravityConversationScanner: ProductPresenceReporting, ThreadAdmi
         if let cached, now.timeIntervalSince(cached.readAt) < Self.readingLifetime, now >= cached.readAt {
             return cached
         }
-        let processes = table.processes()
+        guard let processes = table.processes(named: Self.executableName) else {
+            // The kernel would not say, so this reading retires nothing and
+            // claims nothing — it is not an empty machine.
+            let reading = (conversations: [AntigravityLiveConversation](), readAt: now, listedAnything: false)
+            cached = reading
+            return reading
+        }
         let directory = presenceDirectory.standardizedFileURL.path
         var conversations: [AntigravityLiveConversation] = []
+        // Every path here is compared as a *string* until one is a candidate.
+        // `URL(fileURLWithPath:)` stats the path it is given — it has to, to
+        // decide whether the last component is a directory — so the obvious
+        // spelling of this loop cost one `lstat` per process on the machine
+        // plus one per open file of every `agy` process. That was invisible
+        // while the reading happened on an edge; a finished row waiting to be
+        // read asks for it once a second, and it was then 293 of the app's 342
+        // active samples in a 20-second Release profile. `NSString`'s path
+        // arithmetic touches nothing (`AGENTS.md` §7's "measure, do not
+        // assume"), and the one comparison that must survive a `/private`
+        // prefix is made on the handful of candidates that reach it.
         for process in processes
-        where process.executablePath.map({ URL(fileURLWithPath: $0).lastPathComponent }) == Self.executableName {
-            for path in table.openFilePaths(ofProcess: process.processIdentifier) {
+        where process.executablePath.map({ ($0 as NSString).lastPathComponent })
+            == Self.executableName {
+            for path in table.openFilePaths(ofProcess: process.processIdentifier)
+            where path.hasSuffix(".lock") {
                 let url = URL(fileURLWithPath: path)
-                guard url.pathExtension == "lock",
-                      url.deletingLastPathComponent().standardizedFileURL.path == directory else {
+                guard url.deletingLastPathComponent().standardizedFileURL.path == directory else {
                     continue
                 }
                 let conversationID = url.deletingPathExtension().lastPathComponent
@@ -185,7 +240,7 @@ final class AntigravityConversationScanner: ProductPresenceReporting, ThreadAdmi
                 )
             }
         }
-        let reading = (conversations: conversations, readAt: now, listedAnything: !processes.isEmpty)
+        let reading = (conversations: conversations, readAt: now, listedAnything: true)
         cached = reading
         return reading
     }

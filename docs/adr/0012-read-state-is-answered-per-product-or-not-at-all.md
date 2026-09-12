@@ -269,6 +269,14 @@ The user's observation that "reading it in the CLI also clears the unread marker
 
 It at least falls in the safe direction: the row stays rather than vanishing early. And it converges on its own — the next thing the user does in that terminal, or the next Turn submitted from either side, takes the row away.
 
+### Addendum 2026-09-12: rule 5 answers for a third product, and the gesture is the product's
+
+This ADR was written about two products and its title is what generalises: **read state is answered per product, or not at all**. Rule 5 turned out to be the part that transfers, because it asks the kernel about a process rather than a product about itself. Antigravity CLI — Tier 0, no desktop application, no concept of read anywhere in it — now retires its finished rows by exactly this test, with the process taken from the presence lock its conversation holds. The reading itself is unchanged and is now written once (`TerminalReadEvidence`), rather than copied.
+
+**What does not transfer is what the terminal sends, and that is a per-product measurement rather than a property of terminals.** Claude Code enables focus reporting *and* all-motion mouse reporting, which is why the 2026-08-20 correction above had to pair the gesture with the foreground. Antigravity CLI's TUI enables neither (measured on a pty, 2026-09-12: `?1049h`, `?25l`, `?2004h`, and nothing else, at launch or later). So on that product the early-removal path this ADR lists under Costs — the pointer crossing a foreground terminal window — **cannot occur**, and the "read it, then sit motionless" hole is correspondingly wider: without focus reporting, even switching back to the tab sends nothing, so the row waits for a keystroke. Both differences fall the way this ADR prefers, and neither is a new rule.
+
+**The pairing is kept regardless**, for a reason the ADR should be explicit about: it is not a workaround for mouse reporting but the sentence rule 5 shares with rules 1–4 — *while the answer was in front of the user, the user did something only a person does*. A product that happens not to report motion today does not get a looser test than one that does.
+
 ## Rejected alternatives
 
 - **~~"Claude Desktop is in the foreground right now" means read.~~** The recorded reason was "it retires the row for a user who has left their seat", and that sentence still holds. **Accepted 2026-08-19** in a qualified form — see rule 3: plus the three readings (display awake, unlocked, no saver, session on console) and "only for the one session Desktop's records place on screen". The explicitly accepted cost is that original objection. What remains rejected is the **unqualified** version, which would retire rows behind a lock screen and a dark display, and would empty every Claude Code row at a touch of Claude Desktop.

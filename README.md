@@ -50,11 +50,11 @@ Support is tiered, and each tier is a promise about what the notch does. Tiers a
 
 | Tier | What the notch does | Products |
 | --- | --- | --- |
-| **0 — Listed** | A row appears when a turn starts, changes when the work ends, shows elapsed time, and takes you back to where it runs. Waits, request content and read state are not detected. | Antigravity CLI |
+| **0 — Listed** | A row appears when a turn starts, changes when the work ends, shows elapsed time, and takes you back to where it runs. Waits and request content are not detected. | Antigravity CLI |
 | **1 — Attended** | Adds waits: the row shows when a session needs you and what it is waiting for, and stops asking once you deal with it in the product. | — |
 | **2 — Answerable** | Adds answering: respond to supported approvals and questions from the notch, with a stale click unable to answer the wrong request. | Codex Desktop, Claude Code (Desktop + CLI) |
 
-Capabilities are declared per product, independently of tier. Codex navigates to the exact Thread, names its actual Desktop Project and reports final answer text; Claude Code raises the host window or terminal tab, names the working directory, and reads quota from up to three windows. Settings states each product's boundaries.
+Capabilities are declared per product, independently of tier. Codex navigates to the exact Thread, names its actual Desktop Project and reports final answer text; Claude Code raises the host window or terminal tab, names the working directory, and reads quota from up to three windows. Antigravity CLI sits at Tier 0 and still titles its rows with what you asked and retires a finished row once you have been at its terminal — read state is a capability, not a tier. Settings states each product's boundaries.
 
 See the [tiered support plan](docs/technical-explorations/multi-product-provider-architecture/tiered-support.md) for the full requirements and capability list.
 
@@ -63,7 +63,7 @@ See the [tiered support plan](docs/technical-explorations/multi-product-provider
 - **Existing activity** — Existing sessions appear only after a new lifecycle event establishes their state.
 - **Side chats** — Temporary side chats do not appear as rows.
 - **Claude Code navigation** — Exact session or terminal-tab selection is not always available, and full-screen hosts cannot be reached.
-- **Antigravity CLI** — Tier 0: a row shows Running from a turn's first model call until it ends, titled with what you asked, with no approval or question detection, and clears when the CLI process exits.
+- **Antigravity CLI** — Tier 0: a row shows Running from a turn's first model call until it ends, titled with what you asked, with no approval or question detection. A finished row clears once you type in the terminal that conversation runs in, when the CLI process exits, or on a right-click; coming back to look without typing does not clear it, because the CLI does not ask its terminal to report focus.
 - **Persistent history** — Recent sessions are temporary; there is no searchable archive or cross-device sync.
 - **Compatibility** — Some features depend on undocumented product behaviour and may break after updates.
 
