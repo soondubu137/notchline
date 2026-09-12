@@ -192,12 +192,12 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     /// Keeps a finished row listed until it has been read, and retires it the
     /// moment it has been.
     ///
-    /// The same gate the Codex side uses, given the same shape of answer: this
-    /// product's evidence is a focus instant rather than a blue dot, so the
-    /// unread set handed over is computed per refresh from those instants and
-    /// each Turn's own last moment -- see
+    /// The same filter the Codex side uses, given the same shape of answer:
+    /// this product's evidence is a focus instant rather than a blue dot, so
+    /// the verdicts handed over are computed per refresh from those instants
+    /// and each Turn's own last moment -- see
     /// ``ClaudeCodeReadStateSnapshot/readState(forSession:terminalBoundaryAt:)``.
-    private var terminalReadMembershipGate: TerminalUnreadMembershipGate
+    private var terminalReadMembershipGate: TerminalUnreadRowFilter
     /// Whether there is a screen the user could read a finished answer on.
     ///
     /// Read where the gate books its re-check, not inside the verdicts -- those
@@ -353,10 +353,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         // one `stat` per listed terminal row per second, and nothing at all
         // when no such row is listed.
         self.terminalGestures = terminalGestures ?? ControllingTerminalGestureReader()
-        self.terminalReadMembershipGate = TerminalUnreadMembershipGate(
-            settlingInterval: timing.terminalReadSettlingInterval,
-            unreadRecheckInterval: timing.terminalUnreadRecheckInterval
-        )
+        self.terminalReadMembershipGate = TerminalUnreadRowFilter(timing: timing)
 
         // Two edges, no cadence. An event arriving means a turn moved; the
         // sessions directory changing means one appeared or went away, which is
@@ -1088,13 +1085,36 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         // away therefore costs what a list of running rows costs -- nothing --
         // instead of a full account-tree read once per refresh, forever
         // (CR-Fable-003).
-        guard rows.contains(where: {
-            TerminalUnreadMembershipGate.isTerminal($0.status)
-                && !dismissedRowIDs.contains($0.id)
-        }) else {
+        let candidates = rows.map { row in
+            // Every row carries one: rows come only from the reducer, and
+            // the reducer stamps every turn with its last event. The fallback
+            // is a fail-closed default rather than a case -- an unknown
+            // boundary is read as "ended just now", so nothing can be judged
+            // already read on a boundary nobody supplied.
+            let boundary = boundaryByRowID[row.id] ?? clock.now()
+            return ReadGateCandidate(
+                row: row,
+                // What every read test below is dated against. The same
+                // fail-closed default as `boundary`, and the same instant as
+                // it on every row with no subagent that outlived its Turn.
+                turnEndedAt: turnEndByRowID[row.id] ?? boundary,
+                terminalBoundaryAt: boundary
+            )
+        }
+        guard TerminalUnreadRowFilter.needsReadEvidence(
+            rows,
+            dismissedRowIDs: dismissedRowIDs
+        ) else {
             sessionsSeenOnScreenSinceTheirTurnEnded.removeAll()
-            terminalReadMembershipGate.reset()
-            return (rows, nil)
+            return (
+                terminalReadMembershipGate.rows(
+                    candidates,
+                    dismissedRowIDs: dismissedRowIDs,
+                    now: clock.now(),
+                    verdict: { _ in .cannotBeAsked }
+                ),
+                nil
+            )
         }
 
         let readState = await readState.snapshot()
@@ -1102,16 +1122,12 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         let desktopIsInFrontOfTheUser = await reading.isInFrontOfTheUser()
         let displayedSession = await displayed.displayedSession()
         var unreadThreadIDs: Set<String> = []
-        /// A judged row, and whether the terminal reading is what decides it.
+        /// Each judged row, and whether the terminal reading is what decides
+        /// it. A row absent here was one nothing can speak for.
         ///
         /// The two sources carry different authority and one snapshot cannot
         /// hold both -- see where they are built below.
-        var judged: [(
-            row: MonitoredSession,
-            boundary: Date,
-            restsOnTerminal: Bool
-        )] = []
-        var shown: [MonitoredSession] = []
+        var restsOnTerminalByRowID: [String: Bool] = [:]
 
         /// Whether Claude Desktop has this session on screen right now.
         ///
@@ -1327,34 +1343,12 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
             return reading.lastGesture >= boundary
         }
 
-        for row in rows {
-            // The user has taken this row off the list, which is an answer no
-            // reading can improve on -- so it is judged by nobody, never enters
-            // the gate, and the `retain` below drops whatever entry it had.
-            // That entry is what booked the one-second re-check, and it went on
-            // booking it, with the row nowhere on screen, for as long as the
-            // session sat at its prompt (CR-Fable-003).
-            //
-            // The row is still reported. What this product lists is what this
-            // product knows about, and the removal is the store's record to
-            // keep: a product that stopped listing the Turn would be telling
-            // the store the Turn had ended, which is the one thing that makes
-            // it forget a removal -- and a forgotten removal puts the row back
-            // on the notch at the next hook event (CR-Fable-004).
-            if dismissedRowIDs.contains(row.id) {
-                shown.append(row)
-                continue
-            }
-            // Every row carries one: rows come only from the reducer, and
-            // the reducer stamps every turn with its last event. The fallback
-            // is a fail-closed default rather than a case -- an unknown
-            // boundary is read as "ended just now", so nothing can be judged
-            // already read on a boundary nobody supplied.
-            let boundary = boundaryByRowID[row.id] ?? clock.now()
-            // What every read test below is dated against. The same fail-closed
-            // default as `boundary`, and the same instant as it on every row
-            // with no subagent that outlived its Turn.
-            let turnEndedAt = turnEndByRowID[row.id] ?? boundary
+        // A row the user has taken off the list is judged by nobody: see
+        // ``TerminalUnreadRowFilter`` for why it is still reported and never
+        // enters the gate (CR-Fable-003, CR-Fable-004).
+        for candidate in candidates where !dismissedRowIDs.contains(candidate.row.id) {
+            let row = candidate.row
+            let turnEndedAt = candidate.turnEndedAt
             let state = readState.readState(
                 forSession: row.threadID,
                 terminalBoundaryAt: turnEndedAt
@@ -1410,25 +1404,24 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
                     // possible answer. Such a row leaves the way a terminal row
                     // always did: on the next submission, when the session goes
                     // away, or when the user removes it.
-                    shown.append(row)
                     break
                 }
                 if !terminalSaysRead {
                     unreadThreadIDs.insert(row.threadID)
                 }
-                judged.append((row, boundary, true))
+                restsOnTerminalByRowID[row.id] = true
             case .unread:
                 if comingBackShowedIt(row.threadID, since: turnEndedAt)
                     || isInFrontOfThem(row.threadID)
                     || movedOnFrom(row.threadID)
                     || terminalSaysRead {
-                    judged.append((row, boundary, terminalSaysRead))
+                    restsOnTerminalByRowID[row.id] = terminalSaysRead
                 } else {
                     unreadThreadIDs.insert(row.threadID)
-                    judged.append((row, boundary, false))
+                    restsOnTerminalByRowID[row.id] = false
                 }
             case .read:
-                judged.append((row, boundary, false))
+                restsOnTerminalByRowID[row.id] = false
             }
         }
         // A session nobody is listing any more takes its membership with it, so
@@ -1476,30 +1469,20 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
             source: .current,
             currentAsOf: now
         )
-        for (row, boundary, restsOnTerminal) in judged
-        where terminalReadMembershipGate.shouldDisplay(
-            sessionID: row.id,
-            threadID: row.threadID,
-            // The gate asks whether this thread is still working, so it is
-            // given that answer rather than the row's own status
-            // (`CONTEXT.md`, 派生状态). A finished row with a subagent still in
-            // flight takes the running path -- shown outright, entry dropped,
-            // no re-check booked -- so the one row carrying the evidence that
-            // anything is still running cannot be erased a settling interval
-            // after a `Stop` the user has already read.
-            status: MonitorAggregation.effectiveStatus(of: row),
-            turnEndedAt: turnEndByRowID[row.id] ?? boundary,
-            terminalBoundaryAt: boundary,
-            unreadState: restsOnTerminal ? terminalUnreadState : desktopUnreadState,
+        // The gate is given the thread's status rather than the row's, and
+        // retained to what was judged; both are the filter's rules, shared
+        // with every product (``TerminalUnreadRowFilter``).
+        let shown = terminalReadMembershipGate.rows(
+            candidates,
+            dismissedRowIDs: dismissedRowIDs,
             now: now
-        ) {
-            shown.append(row)
+        ) { candidate in
+            guard let restsOnTerminal = restsOnTerminalByRowID[candidate.row.id] else {
+                return .cannotBeAsked
+            }
+            return .judged(by: restsOnTerminal ? terminalUnreadState : desktopUnreadState)
         }
-        terminalReadMembershipGate.retain(sessionIDs: Set(judged.map(\.row.id)))
-
-        // Sorted again: the two halves above are appended in the order they
-        // were judged, not in row order.
-        return (shown.sorted(by: MonitorAggregation.rowOrder), readState.diagnostic)
+        return (shown, readState.diagnostic)
     }
 
     /// No cadence for the rows: turn changes and session changes both arrive as

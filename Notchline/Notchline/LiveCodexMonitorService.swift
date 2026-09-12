@@ -255,7 +255,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     private var lastTrustedSnapshot: AgentSnapshot?
     /// Whether this run has already compared the installed helper's bytes.
     private var didCompareHelperThisLaunch = false
-    private var terminalUnreadMembershipGate: TerminalUnreadMembershipGate
+    /// Keeps a finished row listed until Desktop no longer reports it unread
+    /// (``TerminalUnreadRowFilter``, the rules every product shares).
+    private var terminalUnreadMembershipGate: TerminalUnreadRowFilter
     /// The routing answer each live Turn started under.
     ///
     /// The snapshot beside it says what Desktop records for the thread *now*,
@@ -344,10 +346,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             rolloutWatcher.events(),
             invalidations
         ])
-        self.terminalUnreadMembershipGate = TerminalUnreadMembershipGate(
-            settlingInterval: timing.terminalReadSettlingInterval,
-            unreadRecheckInterval: timing.terminalUnreadRecheckInterval
-        )
+        self.terminalUnreadMembershipGate = TerminalUnreadRowFilter(timing: timing)
         self.presence = RunningApplicationPresence(
             processIdentifier: desktopProcessIdentifierProvider
         )
@@ -1192,13 +1191,12 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         approvalRouting: DesktopApprovalRoutingSnapshot,
         dismissedRowIDs: Set<String>
     ) async -> [MonitoredSession] {
-        var sessions: [MonitoredSession] = []
-        // Keyed on what was actually evaluated, not on every Hook state. A
+        // Only the rows built are handed to the gate, not every Hook state. A
         // state whose thread turns out to be a sub-agent stops producing a
         // session at all, and keying on states kept its gate entry alive,
         // frozen mid-window, reporting a deadline that could never be cleared
         // because nothing evaluated it again.
-        var evaluatedSessionIDs: Set<String> = []
+        var candidates: [ReadGateCandidate] = []
         // Every Turn this pass walked, whether or not it produced a row: the
         // pin is retained on what the reducer still holds, not on what the
         // panel happens to draw.
@@ -1288,57 +1286,31 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             ) else {
                 continue
             }
-            // A row the user has taken off the list is not evaluated, and so
-            // leaves the gate on the retain below. Read state is the only
-            // question the gate asks, and that question has already been
-            // answered by the user in the one way that outranks every source:
-            // they said they are done with the row. Left in, its entry went on
-            // booking a re-check a second for a row the panel no longer draws
-            // -- each one a full snapshot, LaunchServices round trip included
-            // (CR-Fable-003).
-            //
-            // It is still reported. Withholding it would tell the store the
-            // Turn had gone, which is the one thing that makes the store forget
-            // a removal -- and a forgotten removal is a dismissed row back on
-            // the notch at the next hook event (CR-Fable-004).
-            guard !dismissedRowIDs.contains(session.id) else {
-                sessions.append(session)
-                continue
-            }
-            evaluatedSessionIDs.insert(session.id)
-
-            // The gate asks whether this thread is still working, so it is
-            // given that answer rather than the row's own status: a finished
-            // row with a subagent still in flight takes the running path --
-            // shown outright, entry dropped, no re-check booked -- and the row
-            // carrying the only evidence that anything is still running cannot
-            // be erased a settling interval after the main agent's `Stop`.
-            //
-            // Its boundary moves with it. Once the last subagent stops the row
-            // is terminal again, and the window has to start from that instant
-            // instead of from a `Stop` that may be minutes old, or the row
-            // disappears the moment it stops saying anything is working.
-            //
-            // The Turn's own terminal goes in beside it and the two must not be
-            // collapsed back into one. The window is about how long this thread
-            // has been quiet; the blue dot is about a Turn's answer, and that
-            // answer was there to be read from the moment the Turn ended.
-            if terminalUnreadMembershipGate.shouldDisplay(
-                sessionID: session.id,
-                threadID: session.threadID,
-                status: MonitorAggregation.effectiveStatus(of: session),
-                turnEndedAt: state.turnEndedAt,
-                terminalBoundaryAt: state.terminalBoundaryAt,
-                unreadState: unreadState,
-                now: clock.now()
-            ) {
-                sessions.append(session)
-            }
+            // The Turn's own terminal goes in beside the thread's boundary and
+            // the two must not be collapsed back into one. The window is about
+            // how long this thread has been quiet; the blue dot is about a
+            // Turn's answer, and that answer was there to be read from the
+            // moment the Turn ended.
+            candidates.append(
+                ReadGateCandidate(
+                    row: session,
+                    turnEndedAt: state.turnEndedAt,
+                    terminalBoundaryAt: state.terminalBoundaryAt
+                )
+            )
         }
 
-        terminalUnreadMembershipGate.retain(sessionIDs: evaluatedSessionIDs)
         approvalRoutingPin.retain(turns: observedTurns)
-        return sessions
+        // Every row this product can draw is judged against Desktop's own
+        // unread set; there is no row here nothing can speak for. A row the
+        // user has taken off the list is still reported and judged by nobody,
+        // and a finished row whose thread is still working takes the running
+        // path -- both the filter's rules, shared with every product.
+        return terminalUnreadMembershipGate.rows(
+            candidates,
+            dismissedRowIDs: dismissedRowIDs,
+            now: clock.now()
+        ) { _ in .judged(by: unreadState) }
     }
 
     private var threadListRefreshIsDue: Bool {
