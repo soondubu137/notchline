@@ -11,25 +11,66 @@ import Foundation
 // this skeleton does not yet have seams for.
 
 /// Whether a product is open, as the user would judge it by glancing at their
-/// own machine (``AgentPresence``). Codex reads the running-application list;
-/// Claude Code reads its own session list, with a trust ceiling.
+/// own machine (``AgentPresence``). Codex reads the running-application list
+/// (``RunningApplicationPresence``); Claude Code reads its own session list,
+/// with a trust ceiling (``ClaudeCodeSessionListing``); Antigravity CLI reads
+/// the presence locks its processes hold.
 protocol ProductPresenceReporting: Sendable {
     func presence() async -> AgentPresence
 }
 
 /// A desktop product's presence: is an application with one of these bundle
 /// identifiers running. A kernel fact, so never `unknown`.
+///
+/// **The process as well as the answer**, because a desktop product's
+/// presence is one reading of the running-application list and a Provider may
+/// need both halves of it at once. Codex binds its hook evidence to the pid
+/// that vouched for it (CR-Fable-007), so the pid and the presence drawn beside
+/// it must come from the same look, not from two looks either side of a quit.
 struct RunningApplicationPresence: ProductPresenceReporting {
-    let bundleIdentifiers: [String]
+    private let runningProcessIdentifier: @MainActor @Sendable () -> pid_t?
+
+    init(bundleIdentifiers: [String]) {
+        runningProcessIdentifier = {
+            Self.runningProcessIdentifier(bundleIdentifiers: bundleIdentifiers)
+        }
+    }
+
+    /// A list standing in for the running-application list, for a test that
+    /// must not answer with whatever happens to be open on the machine.
+    init(processIdentifier: @escaping @MainActor @Sendable () -> pid_t?) {
+        runningProcessIdentifier = processIdentifier
+    }
+
+    /// The running process, or nil when none is.
+    func processIdentifier() async -> pid_t? {
+        await runningProcessIdentifier()
+    }
 
     func presence() async -> AgentPresence {
-        let identifiers = bundleIdentifiers
-        let isOpen = await MainActor.run {
-            identifiers.contains { identifier in
-                !NSRunningApplication.runningApplications(withBundleIdentifier: identifier).isEmpty
+        Self.presence(of: await processIdentifier())
+    }
+
+    /// What one reading says: open while a process runs, closed otherwise.
+    nonisolated static func presence(of processIdentifier: pid_t?) -> AgentPresence {
+        processIdentifier == nil ? .closed : .open
+    }
+
+    /// The first live process with one of these bundle identifiers.
+    ///
+    /// A terminated instance is skipped: the workspace keeps listing an
+    /// application for a moment after it has quit, and presence is the
+    /// user's judgement of their own machine, on which it is gone.
+    @MainActor
+    static func runningProcessIdentifier(bundleIdentifiers: [String]) -> pid_t? {
+        for identifier in bundleIdentifiers {
+            if let running = NSRunningApplication
+                .runningApplications(withBundleIdentifier: identifier)
+                .first(where: { !$0.isTerminated }) {
+                return running.processIdentifier
             }
         }
-        return isOpen ? .open : .closed
+        return nil
     }
 }
 

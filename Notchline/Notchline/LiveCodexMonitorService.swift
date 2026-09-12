@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDelivering,
@@ -127,7 +126,12 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     nonisolated private let screenAvailability: any ScreenAvailabilityReporting
     nonisolated let stateChangeEvents: AsyncStream<Void>
     nonisolated private let snapshotInvalidations: AsyncStream<Void>.Continuation
-    private let desktopProcessIdentifierProvider: @MainActor @Sendable () -> pid_t?
+    /// Whether Codex Desktop is running, and as which process.
+    ///
+    /// One reading answers both, because the pid is what binds hook evidence to
+    /// the process that vouched for it and the presence drawn beside it must
+    /// describe the same instant (``RunningApplicationPresence``).
+    private let presence: RunningApplicationPresence
     private var cachedQuota = QuotaSnapshot.unavailable
     private var quotaReadAt: Date?
     private var cachedAccountFingerprint: String?
@@ -278,7 +282,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard,
         desktopProcessIdentifierProvider: @escaping @MainActor @Sendable () -> pid_t? = {
-            LiveCodexMonitorService.desktopProcessIdentifier()
+            RunningApplicationPresence.runningProcessIdentifier(
+                bundleIdentifiers: [CodexDesktopNavigator.desktopBundleIdentifier]
+            )
         }
     ) {
         self.clock = clock
@@ -342,7 +348,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             settlingInterval: timing.terminalReadSettlingInterval,
             unreadRecheckInterval: timing.terminalUnreadRecheckInterval
         )
-        self.desktopProcessIdentifierProvider = desktopProcessIdentifierProvider
+        self.presence = RunningApplicationPresence(
+            processIdentifier: desktopProcessIdentifierProvider
+        )
     }
 
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
@@ -378,7 +386,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 rolloutWatcher.watch(paths: [])
             }
         }
-        let desktopProcessIdentifier = await desktopProcessIdentifierProvider()
+        let desktopProcessIdentifier = await self.presence.processIdentifier()
         // The pid binds the Turns, not just the decision to publish them.
         //
         // `hasCurrentHookObservation` gates whether this refresh trusts the
@@ -430,9 +438,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         // command output can. It is also knowable before anything is known
         // about turns, which is the asymmetry worth keeping — a just-launched
         // app can say Codex is open while still knowing nothing about its work.
-        let presence: AgentPresence = desktopProcessIdentifier == nil
-            ? .closed
-            : .open
+        let presence = RunningApplicationPresence.presence(of: desktopProcessIdentifier)
 
         let hasLiveHookObservation = hasCurrentHookObservation(
             hookState: hookState,
@@ -2226,13 +2232,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             return false
         }
         return true
-    }
-
-    @MainActor
-    private static func desktopProcessIdentifier() -> pid_t? {
-        NSRunningApplication.runningApplications(
-            withBundleIdentifier: "com.openai.codex"
-        ).first(where: { !$0.isTerminated })?.processIdentifier
     }
 }
 

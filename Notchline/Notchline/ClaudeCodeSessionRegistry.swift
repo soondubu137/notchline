@@ -99,7 +99,11 @@ nonisolated struct ClaudeCodeActivity: Sendable, Equatable {
 /// app's own quota reading is a Claude Code session too, and the command
 /// reports it as `kind: "interactive"` — indistinguishable from a human's by
 /// anything except the directory it runs in.
-protocol ClaudeCodeSessionListing: Sendable {
+///
+/// **It is this product's presence source** (``ProductPresenceReporting``), the
+/// one a Provider reads for every product: there is no application to ask, so
+/// the list that answers which sessions exist also answers whether any do.
+protocol ClaudeCodeSessionListing: ProductPresenceReporting {
     func liveSessions() async -> [ClaudeCodeSession]
     /// Whether Claude Code is open at all.
     ///
