@@ -131,7 +131,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     private let admission: any ThreadAdmitting
     /// What the terminal a Thread runs in says about the user having read its
     /// finished answer, or nil for a product that supplies no such evidence.
-    private let readEvidence: TerminalReadEvidence?
+    private let readEvidence: (any ReadEvidenceSource)?
     /// How much of the product's limits is left, or nil for a product that
     /// reports none (``UsageReading``).
     private let usage: (any UsageReading)?
@@ -155,7 +155,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         /// product that supplies none keeps a finished row until the Thread's
         /// next submission, its departure from the admission list or a
         /// right-click.
-        readEvidence: TerminalReadEvidence? = nil,
+        readEvidence: (any ReadEvidenceSource)? = nil,
         /// The product's quota, for one that reports limits. Its reads land on
         /// an edge the composer merges into `changeEvents`.
         usage: (any UsageReading)? = nil,
@@ -212,6 +212,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
             // standing, the gate's entries would go on booking a re-check a
             // second for rows nobody can see.
             readGate.reset()
+            await readEvidence?.forget()
             return snapshot(
                 availability: availability,
                 sessions: [],
@@ -240,13 +241,15 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
             ? "\(agent.displayName) is registered, but this app cannot tell whether it is open."
             : nil
         var rows: [MonitoredSession] = []
+        var readDiagnostic: String?
         if presence.isOpen {
-            rows = await rowsStillWorthShowing(
+            (rows, readDiagnostic) = await rowsStillWorthShowing(
                 state.turns,
                 dismissedRowIDs: dismissedRowIDs
             )
         } else {
             readGate.reset()
+            await readEvidence?.forget()
         }
         // Live text for a Thread this refresh does not list is pruned, and the
         // listed set is also what lets a message arriving later wake the panel
@@ -266,6 +269,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
             diagnostic: MonitorDiagnostics.combined(
                 unwatchable,
                 state.diagnostic,
+                readDiagnostic,
                 // Last, because it is the least urgent: the rows are all there
                 // and what is missing is the footer's lines.
                 await usage?.quotaDiagnostic()
@@ -279,8 +283,9 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     /// off.
     ///
     /// **A row is withheld only on evidence that somebody read it**, and only a
-    /// product that supplied ``TerminalReadEvidence`` has any: with none, every
-    /// row the reducer holds is listed and the gate is never consulted.
+    /// product that supplied a ``ReadEvidenceSource`` has any —
+    /// ``TerminalReadEvidence`` for a CLI product: with none, every row the
+    /// reducer holds is listed and the gate is never consulted.
     ///
     /// Which rows are judged at all, and how, is ``TerminalUnreadRowFilter``'s
     /// — the rules every Provider shares. What is this Provider's is only the
@@ -291,7 +296,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     private func rowsStillWorthShowing(
         _ turns: [HookTurnState],
         dismissedRowIDs: Set<String>
-    ) async -> [MonitoredSession] {
+    ) async -> (rows: [MonitoredSession], diagnostic: String?) {
         let candidates = turns.map { turn in
             ReadGateCandidate(
                 row: row(for: turn),
@@ -300,57 +305,29 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
             )
         }
         guard let readEvidence else {
-            return candidates.map(\.row).sorted(by: MonitorAggregation.rowOrder)
+            return (candidates.map(\.row).sorted(by: MonitorAggregation.rowOrder), nil)
         }
-        var verdicts: [String: ReadGateVerdict] = [:]
         let now = clock.now()
-        if TerminalUnreadRowFilter.needsReadEvidence(
+        guard TerminalUnreadRowFilter.needsReadEvidence(
             candidates.map(\.row),
             dismissedRowIDs: dismissedRowIDs
-        ) {
-            for candidate in candidates where !dismissedRowIDs.contains(candidate.row.id) {
-                // A thread still working goes to the gate without a reading:
-                // the gate shows it outright and drops its entry, whatever a
-                // reading would have said.
-                guard TerminalUnreadMembershipGate.isTerminal(
-                    MonitorAggregation.effectiveStatus(of: candidate.row)
-                ) else {
-                    continue
-                }
-                switch await readEvidence.verdict(
-                    forThreadID: candidate.row.threadID,
-                    turnEndedAt: candidate.turnEndedAt
-                ) {
-                case .cannotBeAsked:
-                    verdicts[candidate.row.id] = .cannotBeAsked
-                case .read:
-                    verdicts[candidate.row.id] = .judged(by: Self.terminalReading([], now: now))
-                case .unread:
-                    verdicts[candidate.row.id] = .judged(
-                        by: Self.terminalReading([candidate.row.threadID], now: now)
-                    )
-                }
+        ) else {
+            await readEvidence.forget()
+            let rows = readGate.rows(candidates, dismissedRowIDs: dismissedRowIDs, now: now) { _ in
+                .cannotBeAsked
             }
+            return (rows, nil)
         }
-        return readGate.rows(candidates, dismissedRowIDs: dismissedRowIDs, now: now) {
-            verdicts[$0.row.id] ?? .judged(by: Self.terminalReading([], now: now))
-        }
-    }
-
-    /// A terminal verdict as the gate reads one: authoritative and current by
-    /// construction, because it was computed in this refresh from a kernel
-    /// reading that cannot be a generation behind. A reading that failed
-    /// answered `cannotBeAsked` and took its row out of the gate rather than
-    /// into it with a stale verdict.
-    nonisolated private static func terminalReading(
-        _ unreadThreadIDs: Set<String>,
-        now: Date
-    ) -> DesktopUnreadStateSnapshot {
-        DesktopUnreadStateSnapshot(
-            unreadThreadIDs: unreadThreadIDs,
-            source: .current,
-            currentAsOf: now
+        let judgement = await readEvidence.verdicts(
+            for: candidates.filter { !dismissedRowIDs.contains($0.row.id) },
+            now: now
         )
+        let rows = readGate.rows(candidates, dismissedRowIDs: dismissedRowIDs, now: now) {
+            judgement.verdicts[$0.row.id] ?? .cannotBeAsked
+        }
+        // The diagnostic goes with the reading that produced it, so a list with
+        // nothing to judge says nothing about readings it did not take.
+        return (rows, judgement.diagnostic)
     }
 
     /// Two timed sources and nothing else: the usage reader's next read, and a

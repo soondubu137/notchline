@@ -26,6 +26,44 @@ nonisolated enum ReadGateVerdict: Sendable {
     case judged(by: DesktopUnreadStateSnapshot)
 }
 
+/// What a product's evidence said about the rows of one refresh.
+nonisolated struct ReadEvidenceJudgement: Sendable {
+    /// One verdict per row asked about, keyed by ``MonitoredSession/id``.
+    let verdicts: [String: ReadGateVerdict]
+    /// What the readings behind them had to say about their own health.
+    let diagnostic: String?
+}
+
+/// A product's evidence that a finished row has been read.
+///
+/// **The per-product half of read state**, and the only half: which rows are
+/// asked about, what is done with a verdict and when the gate looks again are
+/// ``TerminalUnreadRowFilter``'s. Codex's evidence is Desktop's unread set, read
+/// with its other Desktop state and handed to the filter directly; Claude
+/// Code's is the five routes of ``ClaudeCodeReadEvidence``; a CLI product's is
+/// its terminal (``TerminalReadEvidence``), which costs it one question —
+/// which process a Thread runs in.
+protocol ReadEvidenceSource: Sendable {
+    /// Whether there is a screen the answer could be read on. The re-check a
+    /// row waiting on the user books is deferred while there is none, and this
+    /// stream's edge is what starts it again.
+    nonisolated var screen: any ScreenAvailabilityReporting { get }
+    /// A verdict for every candidate.
+    ///
+    /// Asked only when a finished row the user has not removed is listed, and
+    /// only about rows the user has not removed: the readings behind a verdict
+    /// are the expensive part, and no answer can change a list without such a
+    /// row (CR-Fable-041, CR-Fable-003).
+    ///
+    /// - Parameter now: The instant the verdicts' readings are a complete
+    ///   account up to, and the one the gate will judge them at.
+    func verdicts(for candidates: [ReadGateCandidate], now: Date) async -> ReadEvidenceJudgement
+    /// Nothing is waiting to be read: no finished row is listed, or nothing is
+    /// listed at all. Whatever the evidence keeps across refreshes about rows
+    /// it has judged goes.
+    func forget() async
+}
+
 /// The terminal-unread membership gate applied to a refresh's rows: which
 /// finished rows stay listed until they have been read, and when to look at
 /// them again.

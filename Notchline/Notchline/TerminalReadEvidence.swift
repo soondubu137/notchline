@@ -36,7 +36,7 @@ import Foundation
 /// not by a return to the tab, and the pointer cannot retire one at all. Both
 /// degrade towards keeping the row, which is the direction this product
 /// prefers everywhere.
-struct TerminalReadEvidence: Sendable {
+struct TerminalReadEvidence: ReadEvidenceSource {
     /// Which process is running a Thread, from the product's own live list.
     let sessions: any SessionProcessLocating
     /// What that process's controlling terminal says about the user being at
@@ -72,6 +72,56 @@ struct TerminalReadEvidence: Sendable {
         case unread
     }
 
+    /// A verdict for every candidate: the terminal's for a finished Turn, and
+    /// for a thread still working the answer that shows it and drops its
+    /// entry, with no reading taken — nothing a terminal says can withhold a
+    /// row that is still running.
+    func verdicts(for candidates: [ReadGateCandidate], now: Date) async -> ReadEvidenceJudgement {
+        var verdicts: [String: ReadGateVerdict] = [:]
+        for candidate in candidates {
+            guard TerminalUnreadMembershipGate.isTerminal(
+                MonitorAggregation.effectiveStatus(of: candidate.row)
+            ) else {
+                verdicts[candidate.row.id] = .judged(by: Self.reading(unread: [], at: now))
+                continue
+            }
+            switch await verdict(
+                forThreadID: candidate.row.threadID,
+                turnEndedAt: candidate.turnEndedAt
+            ) {
+            case .cannotBeAsked:
+                verdicts[candidate.row.id] = .cannotBeAsked
+            case .read:
+                verdicts[candidate.row.id] = .judged(by: Self.reading(unread: [], at: now))
+            case .unread:
+                verdicts[candidate.row.id] = .judged(
+                    by: Self.reading(unread: [candidate.row.threadID], at: now)
+                )
+            }
+        }
+        return ReadEvidenceJudgement(verdicts: verdicts, diagnostic: nil)
+    }
+
+    /// Nothing is held across refreshes: every verdict is a kernel reading
+    /// taken on the spot.
+    func forget() async {}
+
+    /// A terminal verdict as the gate reads one: authoritative and current by
+    /// construction, because it was computed in this refresh from a kernel
+    /// reading that cannot be a generation behind. A reading that failed
+    /// answered `cannotBeAsked` and took its row out of the gate rather than
+    /// into it with a stale verdict.
+    ///
+    /// It carries its own authority rather than any desktop product's, and the
+    /// difference is not cosmetic: a user who has never opened Claude Desktop
+    /// has no tree at all, which reports `unavailable`, and a non-authoritative
+    /// snapshot may hide nothing -- so borrowing that source would leave every
+    /// terminal row permanently ungated, on exactly the machines this route
+    /// exists for.
+    nonisolated static func reading(unread: Set<String>, at now: Date) -> DesktopUnreadStateSnapshot {
+        DesktopUnreadStateSnapshot(unreadThreadIDs: unread, source: .current, currentAsOf: now)
+    }
+
     /// - Parameter turnEndedAt: The Turn's own terminal instant, never a
     ///   boundary a subagent moved forward: reading is done to an answer, and
     ///   the answer landed there (``HookTurnState/turnEndedAt``).
@@ -89,5 +139,24 @@ struct TerminalReadEvidence: Sendable {
             return .unread
         }
         return .read
+    }
+}
+
+/// The process each Thread ran as, in the list one refresh read.
+///
+/// For a Provider whose read evidence must be asked about the list that proved
+/// its rows exist, and not about a list looked up again: Claude Code's session
+/// list is a `claude` launch when it has gone stale, and a second reading in
+/// the middle of the verdicts could buy one, and describe a different instant
+/// from the rows it is judging.
+actor ListedSessionProcesses: SessionProcessLocating {
+    private var processIdentifierByThreadID: [String: Int32] = [:]
+
+    func hold(_ processIdentifiers: [String: Int32]) {
+        processIdentifierByThreadID = processIdentifiers
+    }
+
+    func processIdentifier(forThreadID threadID: String) -> Int32? {
+        processIdentifierByThreadID[threadID]
     }
 }
