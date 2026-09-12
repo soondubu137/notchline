@@ -63,7 +63,7 @@ See the [tiered support plan](docs/technical-explorations/multi-product-provider
 - **Existing activity** — Existing sessions appear only after a new lifecycle event establishes their state.
 - **Side chats** — Temporary side chats do not appear as rows.
 - **Claude Code navigation** — Exact session or terminal-tab selection is not always available, and full-screen hosts cannot be reached.
-- **Antigravity CLI** — Tier 0: a row shows Running from a turn's first model call until it ends, with no title and no approval or question detection, and clears when the CLI process exits.
+- **Antigravity CLI** — Tier 0: a row shows Running from a turn's first model call until it ends, titled with what you asked, with no approval or question detection, and clears when the CLI process exits.
 - **Persistent history** — Recent sessions are temporary; there is no searchable archive or cross-device sync.
 - **Compatibility** — Some features depend on undocumented product behaviour and may break after updates.
 

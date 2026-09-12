@@ -15,6 +15,39 @@ import Testing
 struct AntigravityConformanceTests {
     // MARK: - Fixtures
 
+    /// The transcript the payload names, as the test says it reads — and a
+    /// count of how many times it was asked, because reading it twice for one
+    /// Turn is a cost this app promises not to pay when the first read worked.
+    final class TranscriptStub: AntigravityTranscriptReading, @unchecked Sendable {
+        private let lock = NSLock()
+        private var answer: String?
+        private var paths: [String] = []
+
+        nonisolated init(_ answer: String? = "Rename the third product's row") {
+            self.answer = answer
+        }
+
+        nonisolated func holds(_ request: String?) {
+            lock.lock()
+            answer = request
+            lock.unlock()
+        }
+
+        /// Every path asked about, in order.
+        nonisolated var asked: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return paths
+        }
+
+        nonisolated func latestUserRequest(inTranscriptAt path: String) -> String? {
+            lock.lock()
+            defer { lock.unlock() }
+            paths.append(path)
+            return answer
+        }
+    }
+
     /// A process table the test writes.
     private final class TableStub: ProcessTableReading, @unchecked Sendable {
         private let lock = NSLock()
@@ -54,8 +87,13 @@ struct AntigravityConformanceTests {
         let scanner: AntigravityConversationScanner
         let provider: HookProductProvider
         let presenceDirectory: URL
+        /// What the transcript the payload names is holding, as the test says
+        /// it is. The file itself is read by ``AntigravityTranscriptFile``,
+        /// which has a suite of its own below.
+        let transcripts: TranscriptStub
 
-        init() throws {
+        init(transcripts: TranscriptStub = TranscriptStub()) throws {
+            self.transcripts = transcripts
             // Short on purpose: a Unix socket path may not exceed 104 bytes.
             root = URL(fileURLWithPath: "/tmp")
                 .appendingPathComponent("agy-\(UUID().uuidString.prefix(8))")
@@ -74,7 +112,7 @@ struct AntigravityConformanceTests {
             provider = HookProductProvider(
                 agent: .antigravity,
                 paths: paths,
-                vocabulary: AntigravityHookVocabulary(),
+                vocabulary: AntigravityHookVocabulary(transcripts: transcripts),
                 presence: scanner,
                 admission: scanner
             )
@@ -203,7 +241,10 @@ struct AntigravityConformanceTests {
         #expect(row.turnID.hasPrefix("local:"))
         #expect(row.status == .running)
         #expect(row.projectName == "demo")
-        #expect(row.title == "Untitled", "the prompt is in no payload")
+        #expect(
+            row.title == "Rename the third product's row",
+            "no payload carries the prompt, so the transcript the payload names is read for it"
+        )
         #expect(row.startedAt == t0)
         #expect(row.request == nil)
         #expect(started.quota == .noneReported)
@@ -316,6 +357,109 @@ struct AntigravityConformanceTests {
         try product.deliver("PreInvocation", invocation(0, of: conversation, workspaces: []), at: t0)
         let row = try #require(await product.provider.fetchSnapshot().sessions.first)
         #expect(row.projectName == "Untitled folder")
+    }
+
+    // MARK: - The prompt, read out of the transcript the payload names
+
+    /// The prompt is read at the turn's boundary, from the file the payload
+    /// itself names, and the row is titled with it.
+    @Test
+    func theTitleIsTheRequestReadOutOfTheTranscriptThePayloadNames() async throws {
+        let product = try Product(transcripts: TranscriptStub("Take the third product end to end"))
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        let row = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(row.title == "Take the third product end to end")
+        #expect(
+            product.transcripts.asked == [
+                "/Users/someone/.gemini/antigravity-cli/brain/\(conversation)/.system_generated/logs/transcript_full.jsonl"
+            ],
+            "the file the payload named, once, and nothing searched for"
+        )
+
+        // The invocations between say nothing new and cost no second reading.
+        for number in 1...3 {
+            try product.deliver(
+                "PreInvocation",
+                invocation(number, of: conversation),
+                at: t0.addingTimeInterval(Double(number))
+            )
+        }
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(8))
+        let done = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(done.title == "Take the third product end to end")
+        #expect(product.transcripts.asked.count == 1, "a Turn already named is not read for again")
+    }
+
+    /// A transcript this app reached before the product had written the user's
+    /// step is read again at the turn's end, and the row is named then rather
+    /// than staying `Untitled` for the life of the Turn.
+    @Test
+    func aTranscriptReachedTooEarlyIsReadAgainAtTheTurnsEnd() async throws {
+        let product = try Product(transcripts: TranscriptStub(nil))
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        let early = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(early.title == "Untitled")
+
+        product.transcripts.holds("Fix the row that always says Untitled")
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(6))
+        let named = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(named.turnID == early.turnID, "the same Turn, named late — not a second row")
+        #expect(named.title == "Fix the row that always says Untitled")
+        #expect(named.status == .completed)
+        #expect(product.transcripts.asked.count == 2)
+    }
+
+    /// A prompt read late may fill a blank title and may never rewrite one the
+    /// Turn already carries, nor reach the Turn after it.
+    @Test
+    func aLatePromptFillsABlankTitleAndOverwritesNothing() async throws {
+        let stub = TranscriptStub("What the first turn asked")
+        let product = try Product(transcripts: stub)
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        // The user types the next thing while the first turn is still running,
+        // so the file's last request is no longer this Turn's.
+        stub.holds("What the user typed next")
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(4))
+        let first = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(first.title == "What the first turn asked", "a named Turn keeps its name")
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0.addingTimeInterval(10))
+        let second = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(second.turnID != first.turnID)
+        #expect(second.title == "What the user typed next")
+    }
+
+    /// A transcript that never says what was asked leaves the row `Untitled`,
+    /// which is the honest answer, and is read at most twice for one Turn.
+    @Test
+    func aTranscriptThatSaysNothingLeavesTheRowUntitled() async throws {
+        let product = try Product(transcripts: TranscriptStub(nil))
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        try product.deliver("PreInvocation", invocation(1, of: conversation), at: t0.addingTimeInterval(1))
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(5))
+        // A repeated `Stop` is a late duplicate of a Turn already retired and
+        // is owed no reading at all.
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(6))
+
+        let row = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(row.title == "Untitled")
+        #expect(product.transcripts.asked.count == 2, "the boundary and the end, and nothing else")
     }
 
     /// A sibling surface's event through the shared file — a transcript under
@@ -462,5 +606,141 @@ struct AntigravityConformanceTests {
         #expect(ProductRegistry.spokenNames == "Codex, Claude Code and Antigravity")
         #expect(HookIntegrationPaths.live(for: .antigravity).hooksConfiguration.path.hasSuffix("/.gemini/config/hooks.json"))
         #expect(HookIntegrationPaths.live(for: .antigravity).hookSocket.path.utf8.count < 104)
+    }
+}
+
+/// ``AntigravityTranscriptFile`` against transcripts written the way `agy`
+/// 1.2.2 writes them — the shapes measured 2026-09-12 on this machine, with
+/// the requests of the fixture rather than of any conversation.
+@Suite
+struct AntigravityTranscriptFileTests {
+    private let reader = AntigravityTranscriptFile()
+
+    /// One step as the product appends it, with the envelope it wraps a
+    /// request in and the metadata it appends after it.
+    private func userStep(_ index: Int, request: String) -> [String: Any] {
+        [
+            "step_index": index,
+            "source": "USER_EXPLICIT",
+            "type": "USER_INPUT",
+            "status": "DONE",
+            "created_at": "2026-09-12T07:24:42Z",
+            "content": "<USER_REQUEST>\n\(request)\n</USER_REQUEST>\n"
+                + "<ADDITIONAL_METADATA>\nThe current local time is: 2026-09-12T00:24:42-07:00.\n"
+                + "</ADDITIONAL_METADATA>"
+        ]
+    }
+
+    private func write(_ steps: [[String: Any]]) throws -> String {
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("agy-transcript-\(UUID().uuidString.prefix(8)).jsonl")
+        var body = Data()
+        for step in steps {
+            body.append(try JSONSerialization.data(withJSONObject: step))
+            body.append(0x0A)
+        }
+        try body.write(to: url)
+        return url.path
+    }
+
+    /// The request comes out of its envelope, without the metadata the product
+    /// appends for its own model.
+    @Test
+    func theRequestComesOutOfItsEnvelopeWithoutTheMetadata() throws {
+        let path = try write([userStep(0, request: "List the files in the current directory, then say done.")])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        #expect(
+            reader.latestUserRequest(inTranscriptAt: path)
+                == "List the files in the current directory, then say done."
+        )
+    }
+
+    /// A conversation's later turns append their own steps, and the last
+    /// request is the one a row is named for.
+    @Test
+    func theLastRequestInTheFileIsTheOneRead() throws {
+        let path = try write([
+            userStep(0, request: "Read README.txt, then reply with exactly the word done."),
+            [
+                "step_index": 1, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE",
+                "created_at": "2026-09-12T07:24:45Z",
+                "tool_calls": [["name": "view_file", "args": ["toolAction": "Reading README.txt"]]]
+            ],
+            userStep(2, request: "Reply with exactly the word two.")
+        ])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        #expect(reader.latestUserRequest(inTranscriptAt: path) == "Reply with exactly the word two.")
+    }
+
+    /// The product's own message to its model is not a request, however much
+    /// its first sentence reads like one.
+    @Test
+    func aSystemMessageIsNotAUserRequest() throws {
+        let path = try write([
+            userStep(0, request: "Wait ten seconds, then fetch a page."),
+            [
+                "step_index": 1, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+                "created_at": "2026-09-12T07:24:59Z",
+                "content": "The following is a <SYSTEM_MESSAGE> not actually sent by the user. "
+                    + "<SYSTEM_MESSAGE>\n<USER_REQUEST>\nten seconds elapsed\n</USER_REQUEST>\n</SYSTEM_MESSAGE>"
+            ]
+        ])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        #expect(reader.latestUserRequest(inTranscriptAt: path) == "Wait ten seconds, then fetch a page.")
+    }
+
+    /// A file that is not there, is empty, or holds no request at all is
+    /// nothing to draw — never an empty title and never a crash.
+    @Test
+    func nothingReadableIsNoRequest() throws {
+        #expect(reader.latestUserRequest(inTranscriptAt: "/nonexistent/transcript_full.jsonl") == nil)
+
+        let empty = try write([])
+        defer { try? FileManager.default.removeItem(atPath: empty) }
+        #expect(reader.latestUserRequest(inTranscriptAt: empty) == nil)
+
+        let modelOnly = try write([
+            ["step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "content": "hello"]
+        ])
+        defer { try? FileManager.default.removeItem(atPath: modelOnly) }
+        #expect(reader.latestUserRequest(inTranscriptAt: modelOnly) == nil)
+
+        // A step whose content carries no envelope is skipped rather than
+        // drawn whole: the envelope is what says which part is the user's.
+        let unwrapped = try write([
+            [
+                "step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
+                "content": "The current local time is: 2026-09-12T00:24:42-07:00."
+            ]
+        ])
+        defer { try? FileManager.default.removeItem(atPath: unwrapped) }
+        #expect(reader.latestUserRequest(inTranscriptAt: unwrapped) == nil)
+    }
+
+    /// Only the tail is read, and the half-line the window opens on is not
+    /// mistaken for a step. A request past the window is not found, which is
+    /// the bound working rather than failing.
+    @Test
+    func onlyTheTailIsRead() throws {
+        let filler = String(repeating: "x", count: 4_000)
+        var steps: [[String: Any]] = [userStep(0, request: "The first thing asked, long ago")]
+        for index in 1...100 {
+            steps.append([
+                "step_index": index, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                "content": filler
+            ])
+        }
+        let farBack = try write(steps)
+        defer { try? FileManager.default.removeItem(atPath: farBack) }
+        let size = try FileManager.default.attributesOfItem(atPath: farBack)[.size] as? Int
+        #expect((size ?? 0) > AntigravityTranscriptFile.tailBytes, "the fixture has to exceed the window")
+        #expect(reader.latestUserRequest(inTranscriptAt: farBack) == nil)
+
+        // The same file with a request inside the window is found, so the nil
+        // above is the bound and not a parse failure.
+        steps.append(userStep(101, request: "The thing asked just now"))
+        let inWindow = try write(steps)
+        defer { try? FileManager.default.removeItem(atPath: inWindow) }
+        #expect(reader.latestUserRequest(inTranscriptAt: inWindow) == "The thing asked just now")
     }
 }

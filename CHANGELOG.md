@@ -6,11 +6,12 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ## Unreleased
 
-**A third product is a row: Antigravity CLI is listed.** Its switch in Settings writes two lifecycle definitions into `~/.gemini/config/hooks.json`, and a conversation's turns then appear as Running from the first model call until the turn ends. It is the first product to arrive as a folder and a registry entry rather than a rewrite, and the first with a declared boundary stated under its switch.
+**A third product is a row: Antigravity CLI is listed.** Its switch in Settings writes two lifecycle definitions into `~/.gemini/config/hooks.json`, and a conversation's turns then appear as Running from the first model call until the turn ends. Rows are titled with what was asked, read out of the product's own transcript because no payload carries it. It is the first product to arrive as a folder and a registry entry rather than a rewrite, and the first with a declared boundary stated under its switch.
 
 ### Added
 
-- **Antigravity CLI, listed only.** A row per conversation shows Running from a turn's first model call to its end and Completed after, named by the workspace folder, and clears when the `agy` process exits. Approvals and questions are not detected and rows have no title, which the Settings row says under its switch. (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`.)
+- **Antigravity CLI, listed only.** A row per conversation shows Running from a turn's first model call to its end and Completed after, named by the workspace folder, and clears when the `agy` process exits. Approvals and questions are not detected, which the Settings row says under its switch. (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`.)
+- **An Antigravity row is titled with what was asked.** No hook payload carries the prompt, so rows said `Untitled`. The transcript the payload already names carries it, and carries it before the first model call, so the title is there while the turn still runs — read from the tail of that file, once per turn, and again at the turn's end only if the first read was too early.
 
 ### Changed
 

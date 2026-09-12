@@ -4668,6 +4668,31 @@ actor HookEventRepository {
         if let namesATranscript = event.namesATranscript {
             turnsByThreadID[threadID]?.threadHasNoTranscript = !namesATranscript
         }
+        // A prompt that arrives after the turn opened, which fills a blank
+        // title and may never replace one.
+        //
+        // **For the product that has to read its prompt off disk.** Antigravity
+        // CLI puts the prompt in no payload; its translator reads it out of the
+        // transcript the payload names, and that file is written by the product
+        // moments before the boundary this app opens a Turn on. Every turn
+        // measured had it in time, but the race is the product's to win and not
+        // this app's, so the translator reads a second time at the turn's end
+        // and the answer lands here.
+        //
+        // A no-op for both shipping products, which name their prompt on the
+        // submission event that starts the turn and carry no prompt on any
+        // other. Guarded on the turn's own id, because a blank title is not a
+        // licence to take the *next* turn's words -- and on the title being
+        // blank, because a turn that has already said what it is asking must
+        // not have that rewritten by a later reading of a file the user has
+        // gone on typing into.
+        if carriesPrompt,
+           let late = HookSessionPreviewStore.normalized(event.prompt),
+           let turn = turnsByThreadID[threadID],
+           turn.turnID == turnID,
+           turn.promptPreview == nil {
+            turnsByThreadID[threadID]?.promptPreview = late
+        }
         return true
     }
 

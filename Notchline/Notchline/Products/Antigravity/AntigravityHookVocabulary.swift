@@ -18,7 +18,13 @@ import Foundation
 ///   so it does not count turns. The first invocation of a turn is the one
 ///   unambiguous submission boundary, and ``AntigravityPayloadTranslator``
 ///   proposes a local Turn identity there and retires it on `Stop`.
-/// - The prompt is not in any payload, so a row is `Untitled` at this tier.
+/// - **The prompt is in no payload**, so it is read out of the transcript the
+///   payload names — see ``AntigravityTranscriptFile``. It was `Untitled`
+///   until 2026-09-12, on the reading that a Tier 0 row is what the hooks
+///   alone can say; what overturned that is that the file is *named by the
+///   payload*, so reading it needs no discovery, no watcher and no guess, and
+///   an `Untitled` row is the one thing that made a list of three rows
+///   unusable.
 /// - `workspacePaths` names the workspace in the TUI and is empty under `-p`,
 ///   so a print-mode row is an `Untitled folder`.
 /// - Nothing observes a wait. `PreToolUse` fires before a tool runs whether
@@ -59,7 +65,10 @@ nonisolated struct AntigravityHookVocabulary: AgentHookVocabulary {
     nonisolated let legacyCommandMarkers: [String] = []
     /// No wait is ever opened here, so nothing is ever inferred closed.
     nonisolated let reportsApprovalDenials = false
-    nonisolated let carriesPromptText = false
+    /// True although no payload carries a prompt: ``AntigravityPayloadTranslator``
+    /// puts one on the canonical payload, and this is the reducer's switch for
+    /// reading it.
+    nonisolated let carriesPromptText = true
     nonisolated let carriesFinalAnswerText = false
     nonisolated let messageDeltaEventName: String? = nil
     nonisolated let wakesOnToolCallOpened = false
@@ -81,6 +90,12 @@ nonisolated struct AntigravityHookVocabulary: AgentHookVocabulary {
 
     nonisolated init(translator: AntigravityPayloadTranslator = AntigravityPayloadTranslator()) {
         payloadTranslator = translator
+    }
+
+    /// The vocabulary with a transcript reader of the caller's choosing, for a
+    /// test that writes the file the prompt is read out of.
+    nonisolated init(transcripts: any AntigravityTranscriptReading) {
+        payloadTranslator = AntigravityPayloadTranslator(transcripts: transcripts)
     }
 
     nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal? {
@@ -126,11 +141,28 @@ nonisolated struct AntigravityHookVocabulary: AgentHookVocabulary {
 /// `Stop`, exactly as it does for the product whose refusals abort a turn
 /// without a hook.
 ///
+/// **The prompt, which is read rather than received.** No payload carries it,
+/// so on the boundary above this asks ``AntigravityTranscriptReading`` for the
+/// conversation's last user request and puts it on the canonical payload under
+/// `prompt`, where the reducer already looks. The file is the one the payload
+/// itself names, so nothing is searched for and nothing is watched.
+///
+/// **And read a second time if the first was too early.** The user's step is
+/// appended before the first model call in every turn measured, but that is a
+/// race this app does not control and could not measure through the product's
+/// own hooks. So a Turn whose first read came back empty is remembered, and
+/// its `Stop` — where the step is on disk beyond any doubt — reads again and
+/// carries the prompt then. The reducer fills a blank title from a late
+/// prompt and never overwrites one, so the second read costs nothing when the
+/// first succeeded, and it is skipped entirely in that case.
+///
 /// **What it is not.** It is not a guess about state: it opens nothing on
-/// silence, ends nothing on silence, and reads no file. A launch mid-turn
-/// sees a later invocation with no open Turn and starts one from that moment,
-/// which is the same late start the reducer gives any product whose first
-/// event this app saw was not the first it sent.
+/// silence and ends nothing on silence. The one file it reads is read only
+/// because an event named it, never on a timer and never to decide whether
+/// something is running. A launch mid-turn sees a later invocation with no
+/// open Turn and starts one from that moment, which is the same late start the
+/// reducer gives any product whose first event this app saw was not the first
+/// it sent.
 ///
 /// **Whose events.** The hooks file is shared with the product's other
 /// surfaces, which the documentation says write their transcripts under
@@ -144,10 +176,19 @@ final class AntigravityPayloadTranslator: HookPayloadTranslating, @unchecked Sen
     /// The id each conversation's last `Stop` retired, for the duplicate that
     /// arrives after it.
     private var lastRetiredTurnIDs: [String: String] = [:]
+    /// The conversations whose open Turn was opened without a prompt, because
+    /// the transcript had not been written that far yet. Their `Stop` reads
+    /// again; every other conversation's does not.
+    private var conversationsAwaitingAPrompt: Set<String> = []
     private let mint: @Sendable () -> String
+    private let transcripts: any AntigravityTranscriptReading
 
-    init(mint: @escaping @Sendable () -> String = { "local:" + UUID().uuidString.lowercased() }) {
+    init(
+        mint: @escaping @Sendable () -> String = { "local:" + UUID().uuidString.lowercased() },
+        transcripts: any AntigravityTranscriptReading = AntigravityTranscriptFile()
+    ) {
         self.mint = mint
+        self.transcripts = transcripts
     }
 
     func canonicalPayload(from body: Data, receivedAt: Date) -> Data? {
@@ -162,8 +203,8 @@ final class AntigravityPayloadTranslator: HookPayloadTranslating, @unchecked Sen
               !conversation.isEmpty else {
             return nil
         }
-        let transcript = object["transcriptPath"] as? String
-        if let transcript, !transcript.isEmpty,
+        let transcript = (object["transcriptPath"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+        if let transcript,
            !transcript.contains("/\(AntigravityHookVocabulary.stateDirectoryRelativeToHome.split(separator: "/").last!)/") {
             return nil
         }
@@ -177,22 +218,41 @@ final class AntigravityPayloadTranslator: HookPayloadTranslating, @unchecked Sen
             let invocation = (object["invocationNum"] as? NSNumber)?.intValue ?? 0
             lock.lock()
             defer { lock.unlock() }
-            if invocation != 0, let open = openTurnIDs[conversation] {
+            if invocation != 0, openTurnIDs[conversation] != nil {
                 // The Turn is open and this is a later model call of it.
-                _ = open
                 return nil
             }
             let turnID = mint()
             openTurnIDs[conversation] = turnID
             canonical["turn_id"] = turnID
+            // Read under the lock, and only here. A turn's later model calls
+            // reach the line above and stop there, so a seven-tool turn reads
+            // the transcript once and not eight times -- which is the whole
+            // reason this is inside the branch rather than ahead of it.
+            if let prompt = transcript.flatMap(transcripts.latestUserRequest(inTranscriptAt:)) {
+                canonical["prompt"] = prompt
+                conversationsAwaitingAPrompt.remove(conversation)
+            } else {
+                conversationsAwaitingAPrompt.insert(conversation)
+            }
         case AntigravityHookVocabulary.stopEvent:
             lock.lock()
-            defer { lock.unlock() }
+            let hadAnOpenTurn = openTurnIDs[conversation] != nil
             let turnID = openTurnIDs.removeValue(forKey: conversation)
                 ?? lastRetiredTurnIDs[conversation]
                 ?? mint()
             lastRetiredTurnIDs[conversation] = turnID
+            // The second read is owed only to a Turn that opened without a
+            // prompt. A `Stop` that reuses a retired id is a late duplicate of
+            // a Turn already named, so it is owed nothing.
+            let readsAgain = hadAnOpenTurn
+                && conversationsAwaitingAPrompt.remove(conversation) != nil
+            lock.unlock()
             canonical["turn_id"] = turnID
+            if readsAgain,
+               let prompt = transcript.flatMap(transcripts.latestUserRequest(inTranscriptAt:)) {
+                canonical["prompt"] = prompt
+            }
         default:
             // Not registered by this app; handed on under the open Turn, if
             // any, so the reducer reports it as unrecognised rather than
@@ -205,7 +265,7 @@ final class AntigravityPayloadTranslator: HookPayloadTranslating, @unchecked Sen
            let first = paths.first, !first.isEmpty {
             canonical["cwd"] = first
         }
-        if let transcript, !transcript.isEmpty {
+        if let transcript {
             canonical["transcript_path"] = transcript
         }
         return try? JSONSerialization.data(withJSONObject: canonical)
