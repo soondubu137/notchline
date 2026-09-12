@@ -47,63 +47,23 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     nonisolated var recordWatcher: ClaudeCodeSessionRecordWatcher {
         sessionSource.recordWatcher
     }
-    /// The transcripts of the turns that are still going in a session which
-    /// reports no status of its own.
+    /// Interrupts and answered dialogs Claude Code writes down where no hook
+    /// reaches, and the two watchers on those files
+    /// (``ClaudeCodeTurnEvidence``).
+    private let turnEvidence: ClaudeCodeTurnEvidence
+    /// The transcripts of the turns still going in a session that reports no
+    /// status of its own.
     ///
-    /// The same job as ``recordWatcher`` for the sessions that one cannot
-    /// answer for: a desktop-hosted session publishes no working status, so the
-    /// only report its interrupt makes is the record Claude Code appends to
-    /// this file (CC-022). A file rather than the directory it sits in, for the
-    /// reason given on ``ClaudeCodeSessionRecordWatcher`` -- an append inside a
-    /// directory produces no directory event.
-    ///
-    /// **It deliberately does not invalidate the session list.** That is the
-    /// difference between this edge and the record one: an edge here means a
-    /// file this app reads itself has changed, and the answer costs a 64 KiB
-    /// tail read rather than a `claude` launch. Invalidating as well would buy
-    /// a subprocess for an answer no subprocess holds.
-    ///
-    /// Not private, for the reason ``recordWatcher`` is not: what is watched,
-    /// and for how long, is an invariant a test has to be able to state.
-    nonisolated let transcriptWatcher: PathSetChangeWatcher
-    /// Claude Desktop's own log, while a dialog it raised is still open.
-    ///
-    /// **The third watcher pointed at only what is worth watching, and the one
-    /// with the strongest reason to be.** ``ClaudeDesktopFocusLogReader``
-    /// deliberately has no watcher at all, because a wake-up per line of a log
-    /// that records oauth lookups and git timings buys nothing -- and that
-    /// argument holds for exactly as long as nothing is waiting on the file.
-    /// While a desktop-hosted session is sitting on a permission dialog,
-    /// something is: the line saying the human answered is the only report that
-    /// dialog is over (see ``ClaudeDesktopPermissionLogReader``), and without
-    /// this edge it would wait out the heartbeat -- a whole minute of a row
-    /// asking for an answer already given.
-    ///
-    /// Pointed at the log only while such a wait is open, and at nothing the
-    /// rest of the time, so the noise the focus reader declined to pay for is
-    /// still not paid for.
-    ///
-    /// It does not invalidate the session list, for the reason
-    /// ``transcriptWatcher`` does not: the answer is in a file this app reads
-    /// itself, and no `claude` launch holds it.
-    ///
-    /// Not private, for the reason the other two are not.
-    nonisolated let permissionLogWatcher: PathSetChangeWatcher
-    /// Which sessions the user has already read, when anything can say.
-    private let readState: any ClaudeCodeReadStateProviding
-    /// When Claude Desktop last recorded a human answering one of its dialogs.
-    ///
-    /// The desktop half of "the approval has been answered", and the only half
-    /// that reaches a desktop-hosted session -- see
-    /// ``ClaudeDesktopPermissionLogReader`` for why no hook and no session
-    /// status can.
-    private let permissions: any DesktopPermissionResponseReporting
-    /// The file behind that, for the watcher rather than the reader.
-    ///
-    /// Held separately because the reader answers questions and the watcher
-    /// needs a path; a test pointing one at its own log has to be able to point
-    /// the other at the same one.
-    nonisolated private let permissionLogURL: URL
+    /// Not private, so a test can state what is watched and for how long --
+    /// see ``ClaudeCodeTurnEvidence/transcriptWatcher``.
+    nonisolated var transcriptWatcher: PathSetChangeWatcher {
+        turnEvidence.transcriptWatcher
+    }
+    /// Claude Desktop's own log, while a dialog it raised is still open -- see
+    /// ``ClaudeCodeTurnEvidence/permissionLogWatcher``.
+    nonisolated var permissionLogWatcher: PathSetChangeWatcher {
+        turnEvidence.permissionLogWatcher
+    }
     /// Whether a finished row has been read: the five routes, and the
     /// on-screen membership they keep across refreshes
     /// (``ClaudeCodeReadEvidence``).
@@ -200,7 +160,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         // a row draws has changed, and "this session has text where it had
         // none" is part of that projection -- while the deltas themselves stay
         // off it, because three a second is not a redraw rate.
-        self.transcripts = transcripts ?? ClaudeCodeTranscriptReader()
+        let resolvedTranscripts = transcripts ?? ClaudeCodeTranscriptReader()
+        self.transcripts = resolvedTranscripts
         // The quota's own edge. Nothing waits for the reading any more, so the
         // reading has to say when it landed -- otherwise a figure read at
         // second five would not be drawn until whatever happened to refresh
@@ -229,7 +190,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         let resolvedReadState = readState ?? ClaudeCodeDesktopReadStateRepository(
             changeDebounceInterval: timing.unreadStateDebounceInterval
         )
-        self.readState = resolvedReadState
         let resolvedActivations = activations ?? DesktopActivationWatcher(
             bundleIdentifier: Self.desktopBundleIdentifier,
             clock: clock
@@ -278,31 +238,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         )
         self.terminalReadMembershipGate = TerminalUnreadRowFilter(timing: timing)
 
-        let transcriptWatcher = PathSetChangeWatcher(
-            debounceInterval: timing.unreadStateDebounceInterval
+        let turnEvidence = ClaudeCodeTurnEvidence(
+            sessions: sessionSource,
+            transcripts: resolvedTranscripts,
+            permissions: permissions
+                ?? ClaudeDesktopPermissionLogReader(logURL: permissionLogURL),
+            permissionLogURL: permissionLogURL,
+            readState: resolvedReadState,
+            timing: timing
         )
-        self.transcriptWatcher = transcriptWatcher
-        let permissionLogWatcher = PathSetChangeWatcher(
-            debounceInterval: timing.unreadStateDebounceInterval
-        )
-        self.permissionLogWatcher = permissionLogWatcher
-        self.permissions = permissions
-            ?? ClaudeDesktopPermissionLogReader(logURL: permissionLogURL)
-        self.permissionLogURL = permissionLogURL
+        self.turnEvidence = turnEvidence
         self.stateChangeEvents = DirectoryChangeWatcher.merged([
             repository.changeEvents(),
-        ] + sessionSource.changeEvents + [
-            // A transcript gaining a record while its turn is still going.
-            // Only one kind of record can end that turn, but this is a signal
-            // and not a reading: what arrived is answered by the refresh, in
-            // the reader that already knows how to answer it. Nothing here
-            // invalidates the session list -- see ``transcriptWatcher``.
-            transcriptWatcher.events(),
-            // Claude Desktop logging that a dialog it raised has been
-            // answered. A signal and not a reading, exactly like the one above
-            // it, and pointed at the log only while such an answer is what the
-            // app is waiting for -- see ``permissionLogWatcher``.
-            permissionLogWatcher.events(),
+        ] + sessionSource.changeEvents + turnEvidence.changeEvents + [
             // Claude Desktop writing a session's record. It is the low-latency
             // half of retiring a finished row: the write that stamps a focus is
             // an atomic replace inside the account folder, so this edge lands
@@ -344,7 +292,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
             // on the record of whatever turn happened to be running when it
             // was.
             await sessionSource.stopWatching()
-            transcriptWatcher.watch(paths: [])
+            await turnEvidence.stopWatching()
             // Nothing is listed, so nothing is waiting to be read. Left alone,
             // the gate would go on reporting a re-check deadline for rows this
             // branch is not going to publish, and a session that was on screen
@@ -367,135 +315,14 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         let sessionReading = await sessionSource.read(observing: consumed)
         let listed = await sessionSource.currentReading()
         let presence = sessionReading.presence
-        let live = listed.sessions
         let liveByID = listed.sessionsByID
 
-        // The events are drained first and this is applied to what they left,
-        // so an event that arrived after the list was read still wins -- the
-        // reducer compares the two instants and keeps the later one.
-        //
-        // This is the only route out of a turn a user interrupted: no hook
-        // fires for that, so without it the row keeps saying *Running* -- or
-        // *Approval needed*, which asks the user to answer something nobody is
-        // waiting for any more (CC-019).
-        let stopped = Dictionary(
-            live.compactMap { session -> (String, Date)? in
-                guard let activity = session.activity, !activity.isWorking else {
-                    return nil
-                }
-                return (session.sessionID, activity.observedAt)
-            },
-            // The list is keyed the same way ``liveByID`` above is, and for the
-            // same reason: two entries naming one session is somebody else's
-            // bug, not a reason to trap.
-            uniquingKeysWith: { first, _ in first }
-        )
-        // The same reading's other word, and the only evidence this product
-        // gives that an approval was *answered*. No hook fires when a human
-        // approves: `PermissionRequest` opens the wait and the next event is
-        // the call's own `PostToolUse`, which lands when the tool finishes
-        // rather than when the dialog closes. `busy` means no dialog is in
-        // front of the user, so it ends the wait the moment the record's flip
-        // brings this refresh round -- see
-        // ``HookEventRepository/endAnsweredApprovalWaits(_:)`` for
-        // the measurement and for why `idle` is not allowed to say the same.
-        let working = Dictionary(
-            live.compactMap { session -> (String, Date)? in
-                guard let activity = session.activity, activity.state == .busy else {
-                    return nil
-                }
-                return (session.sessionID, activity.observedAt)
-            },
-            uniquingKeysWith: { first, _ in first }
-        )
-        // The other half of the same question, for the sessions the reading
-        // above cannot answer for at all. A desktop-hosted session never
-        // reports a working status -- the terminal interface publishes that
-        // field and the desktop app runs the CLI without one -- so `stopped`
-        // above is empty for it however long ago it was interrupted (CC-022).
-        // What it does leave is a record in its own transcript, and that record
-        // names the turn it ended.
-        //
-        // Asked only of the sessions that say nothing, and only about a turn
-        // this app is still holding open: a session that answers for itself is
-        // answered by its own answer, and a file read that nothing is waiting
-        // on is a file read not worth doing.
-        var interruptions: [TurnInterruption] = []
-        for turn in consumed.turns where turn.sessionStatus.keepsTiming {
-            guard let session = liveByID[turn.threadID],
-                  session.activity == nil else {
-                continue
-            }
-            guard let endedAt = await transcripts.interruption(
-                forSession: session.sessionID,
-                workingDirectory: session.workingDirectory,
-                turnID: turn.turnID,
-                after: turn.lastEventAt
-            ) else {
-                continue
-            }
-            interruptions.append(
-                TurnInterruption(
-                    threadID: turn.threadID,
-                    turnID: turn.turnID,
-                    endedAt: endedAt
-                )
-            )
-        }
-
-        var hookState = consumed
-        if !stopped.isEmpty {
-            hookState = await hookEvents.endTurnsForStoppedSessions(stopped)
-        }
-        if !interruptions.isEmpty {
-            hookState = await hookEvents.endInterruptedTurns(interruptions)
-        }
-        // After both, and disjoint from `stopped` by construction: a session is
-        // either working or it is not. A turn those two just ended keeps no
-        // approval for this to clear, and a turn still running is exactly the
-        // one that has an answered dialog to forget.
-        if !working.isEmpty {
-            hookState = await hookEvents.endAnsweredApprovalWaits(working)
-        }
-        // And the same sentence for the sessions that cannot say it themselves.
-        // A desktop-hosted session publishes no status ever, so `working` above
-        // is empty for it however long ago the user answered -- the same shape
-        // as CC-022 / #41 one paragraph up, and answered the same way: with
-        // something the desktop app writes down. Claude Desktop logs both ends
-        // of every dialog it raises, joined by a request id.
-        //
-        // **Asked only while an approval is actually open.** Everything here is
-        // free until a dialog exists to close: no log read, no account-tree
-        // read, and no watcher. That gate is what keeps a second reading of
-        // Claude Desktop's tree off the ordinary refresh (CR-Fable-003), and it
-        // closes again the moment the wait does.
-        let waitsOnAnApproval = hookState.turns.contains { turn in
-            turn.pendingApproval != nil || turn.subagentsAwaitingApproval
-        }
-        if waitsOnAnApproval {
-            let answered = await permissions.answeredAt()
-            if !answered.isEmpty {
-                // The log names Desktop's own id for the session; the reducer
-                // knows the CLI's. Desktop's records carry both, which is the
-                // join this app already keeps for the read state -- so no id is
-                // guessed and a session whose record cannot say is left alone.
-                let records = await readState.snapshot()
-                let answeredByThread = Dictionary(
-                    answered.compactMap { desktopSessionID, at -> (String, Date)? in
-                        guard let threadID = records.cliSessionID(
-                            forDesktopSessionID: desktopSessionID
-                        ) else {
-                            return nil
-                        }
-                        return (threadID, at)
-                    },
-                    uniquingKeysWith: { first, second in max(first, second) }
-                )
-                if !answeredByThread.isEmpty {
-                    hookState = await hookEvents.endAnsweredApprovalWaits(answeredByThread)
-                }
-            }
-        }
+        // What Claude Code writes down about these Turns where no hook reaches
+        // -- an interrupt, a dialog answered in its own window -- applied
+        // through the reducer (``ClaudeCodeTurnEvidence``). The events are
+        // drained first and this is applied to what they left, so an event that
+        // arrived after the list was read still wins.
+        var hookState = await turnEvidence.settle(consumed, in: hookEvents)
         // The reducer's own account of its health. It stands for the run
         // rather than for one drain, so every snapshot the calls above return
         // carries the whole of it; joining the drain's copy to a later one
@@ -596,44 +423,9 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         )
         let visibleRows = read.rows
 
-        // Claude Desktop's log, and only while its answer is what this app is
-        // waiting for. Recomputed from the state the calls above left, so a
-        // wait they just closed unwatches it in the same refresh.
-        //
-        // Held to sessions that report no status of their own, which is the
-        // only place this evidence is needed: a terminal-hosted session's
-        // `waiting` to `busy` flip already arrives on the record edge, and it
-        // is the reading this app trusts first.
-        let awaitsADesktopAnswer = hookState.turns.contains { turn in
-            guard turn.pendingApproval != nil || turn.subagentsAwaitingApproval,
-                  let session = liveByID[turn.threadID] else {
-                return false
-            }
-            return session.activity == nil
-        }
-        permissionLogWatcher.watch(paths: awaitsADesktopAnswer ? [permissionLogURL] : [])
-
-        // And the transcripts of exactly the turns the reading above cannot
-        // see stop -- the ones whose session reports nothing. Watched from
-        // `rows` for the same reason: a row withheld for presence is still a
-        // turn this app is holding.
-        //
-        // A session that answers for itself is not watched here at all, even
-        // while its turn runs: its record already reports the flip, and the
-        // reading behind it is the one this app trusts first.
-        var watchedTranscripts: Set<URL> = []
-        for row in rows where row.status.keepsTiming {
-            guard let session = liveByID[row.threadID],
-                  session.activity == nil,
-                  let url = await transcripts.transcriptURL(
-                    forSession: session.sessionID,
-                    workingDirectory: session.workingDirectory
-                  ) else {
-                continue
-            }
-            watchedTranscripts.insert(url)
-        }
-        transcriptWatcher.watch(paths: watchedTranscripts)
+        // The transcripts and Claude Desktop's log, watched only while a Turn
+        // they could end or a dialog they could close is open.
+        await turnEvidence.watch(openTurnsIn: hookState)
 
         let watchFailure = sessionReading.unwatchableReason
 

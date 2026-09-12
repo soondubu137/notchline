@@ -82,42 +82,17 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// thread's current setting and lags a switch by however long Desktop takes
     /// to persist one.
     private let turnReviewer: any TurnReviewerReading
-    /// Whether a Turn this app still holds open was stopped by the user, and
-    /// which Turn that thread's rollout says it is on.
-    ///
-    /// The Codex half of [ADR 0011](../../docs/adr/0011-a-turn-may-end-on-evidence-that-is-not-a-hook-event.md):
-    /// pressing stop sends no `Stop` and no `PostToolUse` for the call left
-    /// open, so without this the row says *Running* until the user resumes that
-    /// thread or waves the row away. The same rollout the reviewer is read
-    /// from carries the answer — see ``CodexRolloutTurnAbortReader``.
-    ///
-    /// **One reader, two questions, one read.** They are the two halves of what
-    /// a file can settle about a Turn this app is holding open — whose it is
-    /// and whether it is over — and both are answered from the same cached tail
-    /// of the same rollout, so the second costs nothing the first had not
-    /// already spent. See ``CodexTurnOnRecordReading`` for the identity half.
-    private let turnAbort: any CodexTurnAbortReading & CodexTurnOnRecordReading
+    /// What each thread's rollout says about a Turn no hook reports -- which
+    /// held Turn it is on, and whether the user stopped it -- and the watcher
+    /// on those files (``CodexRolloutTurnEvidence``).
+    private let rolloutEvidence: CodexRolloutTurnEvidence
     /// The rollouts of the Turns that are still going, and nothing else.
     ///
-    /// The edge under the reading above, and the same shape as the Claude Code
-    /// side's `transcriptWatcher`: an abort appends a record to a file inside a
-    /// directory, which produces no directory-level event, so the file itself
-    /// is watched. Without it the abort waits for whatever wakes this service
-    /// next — at best the metadata interval, and on a thread that had gone
-    /// quiet, the heartbeat.
-    ///
-    /// **Pointed at open Turns only.** A finished row's rollout is not watched,
-    /// and neither is a thread this app has no live Turn for, so a quiet
-    /// monitor still watches nothing at all. What it costs while a Turn runs is
-    /// one wake-up per append, and a Codex turn appends 0.17–0.3 records a
-    /// second over its life (measured over this machine's rollouts, with bursts
-    /// to ~6/s that the debounce collapses).
-    ///
-    /// It reads nothing itself: an edge means *this file changed*, and the
-    /// refresh it wakes is what asks the reader the question.
-    ///
-    /// Not private, so a test can state what is watched and for how long.
-    nonisolated let rolloutWatcher: PathSetChangeWatcher
+    /// Not private, so a test can state what is watched and for how long --
+    /// see ``CodexRolloutTurnEvidence/rolloutWatcher``.
+    nonisolated var rolloutWatcher: PathSetChangeWatcher {
+        rolloutEvidence.rolloutWatcher
+    }
     /// Whether there is a screen the user could read this app's output on.
     ///
     /// Two things consult it, both because the work behind them is only worth
@@ -308,11 +283,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         self.unreadState = unreadState
         self.approvalRouting = approvalRouting
         self.turnReviewer = turnReviewer
-        self.turnAbort = turnAbort
-        let rolloutWatcher = PathSetChangeWatcher(
-            debounceInterval: timing.unreadStateDebounceInterval
-        )
-        self.rolloutWatcher = rolloutWatcher
+        let rolloutEvidence = CodexRolloutTurnEvidence(turnAbort: turnAbort, timing: timing)
+        self.rolloutEvidence = rolloutEvidence
         self.screenAvailability = screenAvailability
         // Background reads land after the snapshot that started them has already
         // been published, so their results need a trigger of their own. The
@@ -352,7 +324,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             // a reading -- what arrived is answered by the refresh, in the
             // reader that knows how to answer it -- and the one record that
             // matters is the abort no hook reports. See ``rolloutWatcher``.
-            rolloutWatcher.events(),
+            rolloutEvidence.rolloutWatcher.events(),
             invalidations
         ])
         self.terminalUnreadMembershipGate = TerminalUnreadRowFilter(timing: timing)
@@ -415,7 +387,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         // Only resuming that exact thread, or dismissing the row by hand, took
         // it off the notch.
         //
-        // ``endAbortedTurns(in:)`` does not rescue this one, and the difference
+        // ``CodexRolloutTurnEvidence`` does not rescue this one, and the difference
         // is worth naming: that reading answers a Turn Codex *stopped*, and a
         // Desktop that died wrote no `turn_aborted` any more than it sent a
         // `Stop`. The evidence for a dead producer is the dead producer.
@@ -524,30 +496,18 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 startThreadMetadataRefreshIfPossible()
 
                 hookState = await hookEvents.applying(threadAdmission, to: hookState)
-                // The one thing that ends a Codex Turn without a hook event,
-                // and the reason it has to exist: pressing stop in Desktop
-                // sends nothing at all -- no `Stop`, and not even the
-                // `PostToolUse` for the call that was still open -- so the row
-                // said *Running* with its timer counting until the user
-                // resumed that exact thread or waved the row away. Codex does
-                // write the abort down, in the same rollout the reviewer is
-                // read from (ADR 0011, ``CodexRolloutTurnAbortReader``).
-                //
-                // Identity before termination: a prompt held back is settled
-                // first, so that a Turn resumed and then stopped again inside
-                // one refresh interval is the Turn the abort reading below is
-                // asked about. The same rollout answers both, and the two
-                // questions are the two halves of ADR 0011 — which Turn this
-                // thread is on, and whether it is over.
-                hookState = await adoptTurnsOnRecord(in: hookState)
-                // After the reconciliation above, so a Turn this refresh is
-                // about to drop is never asked about, and before the rows are
-                // built, so an abort found here is a Completed row in this
-                // snapshot rather than in the next one.
-                hookState = await endAbortedTurns(in: hookState)
+                // The one thing that ends a Codex Turn without a hook event, and
+                // the Turn a thread is really on when a prompt was held back,
+                // both read out of the thread's rollout
+                // (``CodexRolloutTurnEvidence``). After the reconciliation above,
+                // so a Turn this refresh is about to drop is never asked about,
+                // and before the rows are built, so an abort found here is a
+                // Completed row in this snapshot rather than in the next one.
+                await rolloutEvidence.hold(rolloutPaths: rolloutPaths(ofThreadsIn: hookState))
+                hookState = await rolloutEvidence.settle(hookState, in: hookEvents)
                 // After the reduction, so a Turn this refresh just ended stops
                 // being watched in the same pass that ended it.
-                await watchRollouts(ofOpenTurnsIn: hookState)
+                await rolloutEvidence.watch(openTurnsIn: hookState)
                 // After the reconciliation above, so a turn this refresh is
                 // about to drop is never asked about -- and, like the two reads
                 // above it, in the background: what it fetches is the row's
@@ -1245,7 +1205,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             guard !inFlightMetadataThreadIDs.contains(threadID) else { continue }
             // **A prompt this thread is holding back counts as its newest
             // Turn here.** Settling one reads the rollout path this record
-            // carries (``adoptTurnsOnRecord(in:)``), and the resumed-Turn case
+            // carries (``CodexRolloutTurnEvidence``), and the resumed-Turn case
             // is the very one that moves that path -- so a hold is behind the
             // record for the same reason a Turn is, and asks again on the same
             // terms. Without it the path stayed up to an interval behind and
@@ -1833,120 +1793,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         inFlightProgressReads.removeAll()
     }
 
-    /// Gives a thread the held Turn its own rollout names, and only that one.
-    ///
-    /// **The Codex side of "a Turn's identity may be settled by evidence that
-    /// is not a hook event"**, and the companion to the abort reading below.
-    /// A prompt naming a Turn the reducer was not holding is held back rather
-    /// than adopted, because a nested agent runs under the parent thread's
-    /// `session_id` with a turn id of its own and no `agent_id` to be told
-    /// apart by (``HookTurnState/heldTurnStart``). Its own events prove nothing
-    /// — they carry that same id — so what settles it is the thread's rollout,
-    /// where Codex writes each Turn's `turn_context` ~65 ms *before* that
-    /// Turn's first hook. A reviewer's turns are written to a rollout of its
-    /// own, so this thread's record never names one.
-    ///
-    /// Asked only of threads with a prompt actually held, which is a thread
-    /// with something nested running on it or a Turn the user has just resumed
-    /// — and asked of the same cached tail the abort reading below already
-    /// takes of the same file on the same refresh, so it adds no read. Nothing
-    /// is asked about a thread whose rollout the App Server has not handed
-    /// over, on the same terms as that reading: a row this app cannot draw is
-    /// not one worth reading a file for.
-    ///
-    /// **Deliberately not held to Turns that are still going**, which is the
-    /// one place it differs from the abort reading. The resumed-Turn case ends
-    /// with the interrupted Turn *finished* — by that reading, a refresh
-    /// earlier — and the prompt held during it still waiting to be adopted, so
-    /// a `keepsTiming` filter here would close the door on the very case this
-    /// exists to open. A hold left on a finished Turn costs one `lstat`: its
-    /// rollout has stopped changing, so the reader answers from its cache.
-    private func adoptTurnsOnRecord(in hookState: HookStateSnapshot) async -> HookStateSnapshot {
-        var records: [TurnOnRecord] = []
-        for turn in hookState.turns {
-            guard let held = turn.heldTurnStart,
-                  let rolloutPath = rolloutPath(ofThread: turn.threadID) else {
-                continue
-            }
-            guard await turnAbort.turnOnRecord(inRolloutAt: rolloutPath)
-                == held.turnID else {
-                continue
-            }
-            records.append(
-                TurnOnRecord(threadID: turn.threadID, turnID: held.turnID)
-            )
-        }
-        guard !records.isEmpty else { return hookState }
-        return await hookEvents.adoptTurnsOnRecord(records)
-    }
-
-    /// Ends the Turns Codex recorded as aborted, and only those.
-    ///
-    /// **The Codex side of "a Turn may end on evidence that is not a Hook
-    /// event"** (ADR 0011). A user pressing stop in Codex Desktop produces no
-    /// hook of any kind, so the reducer holds that Turn open for ever: no event
-    /// will name its `turn_id` again, membership reconciliation keeps the row
-    /// because the thread is still listed, and this product has no
-    /// activity-status read like `claude agents --json` to fall back on. What
-    /// Codex leaves instead is a `turn_aborted` record in the thread's own
-    /// rollout, and it names the Turn.
-    ///
-    /// The reducer stays the only thing that computes Turn state: this hands it
-    /// a fact about a Turn Codex wrote down and lets
-    /// ``HookEventRepository/endInterruptedTurns(_:)`` apply the rules any
-    /// event gets. Held to Turns that are still going and to threads the App
-    /// Server has handed over a path for -- a row this app cannot draw is not
-    /// one worth reading a file for.
-    private func endAbortedTurns(in hookState: HookStateSnapshot) async -> HookStateSnapshot {
-        var interruptions: [TurnInterruption] = []
-        for turn in hookState.turns where turn.sessionStatus.keepsTiming {
-            guard let rolloutPath = rolloutPath(ofThread: turn.threadID) else {
-                continue
-            }
-            guard let endedAt = await turnAbort.abortedAt(
-                turnID: turn.turnID,
-                inRolloutAt: rolloutPath,
-                after: turn.lastEventAt
-            ) else {
-                continue
-            }
-            interruptions.append(
-                TurnInterruption(
-                    threadID: turn.threadID,
-                    turnID: turn.turnID,
-                    endedAt: endedAt,
-                    // The stop killed the `wait_agent` this Turn was going to
-                    // collect its subagents with, so their results can never
-                    // reach it. See ``TurnInterruption/orphansSubagents`` for
-                    // the measurement, and why a row that went on counting
-                    // them said the thread was working for as long as an
-                    // orphan ran -- on a Turn the user ended by hand.
-                    orphansSubagents: true
-                )
-            )
-        }
-        guard !interruptions.isEmpty else { return hookState }
-        return await hookEvents.endInterruptedTurns(interruptions)
-    }
-
-    /// Watches the rollouts of the Turns that are still going, and no others.
-    ///
-    /// The same set the reading above asks about, so the edge and the answer
-    /// cannot disagree about which files are worth anything. It doubles as the
-    /// reader's retention: a rollout nothing is waiting on is one nothing needs
-    /// a cached answer about either.
-    private func watchRollouts(ofOpenTurnsIn hookState: HookStateSnapshot) async {
-        var paths: Set<String> = []
-        for turn in hookState.turns where turn.sessionStatus.keepsTiming {
-            guard let rolloutPath = rolloutPath(ofThread: turn.threadID) else {
-                continue
-            }
-            paths.insert(rolloutPath)
-        }
-        rolloutWatcher.watch(paths: Set(paths.map { URL(fileURLWithPath: $0) }))
-        await turnAbort.retain(rolloutPaths: paths)
-    }
-
     /// The rollout this thread is written to, as the App Server reports it.
     ///
     /// The only source for it. A thread this app has not been handed yet draws
@@ -1957,6 +1803,16 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             return nil
         }
         return path
+    }
+
+    /// The rollout of every thread these Turns are on that the App Server has
+    /// reported one for.
+    private func rolloutPaths(ofThreadsIn hookState: HookStateSnapshot) -> [String: String] {
+        var paths: [String: String] = [:]
+        for turn in hookState.turns {
+            paths[turn.threadID] = rolloutPath(ofThread: turn.threadID)
+        }
+        return paths
     }
 
     /// Reads every unarchived thread.

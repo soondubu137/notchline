@@ -148,6 +148,28 @@ struct SeparateSessionReading: ProductSessionReading {
     func stopWatching() async {}
 }
 
+/// Evidence about a Turn the reducer holds that is not a hook event: an
+/// interrupt the product wrote down, a dialog answered in the product's own
+/// window, the Turn a thread's own record says it is on
+/// ([ADR 0011](../../docs/adr/0011-a-turn-may-end-on-evidence-that-is-not-a-hook-event.md)).
+///
+/// **It hands facts to the reducer and decides nothing.** The reducer stays the
+/// only thing that computes Turn state, applying to each fact the ordering
+/// guards any event gets; a source may end a Turn, close a wait or settle
+/// which Turn a thread is on, and never open, name or describe one. Claude
+/// Code's is ``ClaudeCodeTurnEvidence``, Codex's ``CodexRolloutTurnEvidence``.
+protocol TurnEvidenceSource: Sendable {
+    /// Applies what the product's records say about these Turns, through the
+    /// reducer, and returns what it left.
+    func settle(_ state: HookStateSnapshot, in reducer: HookEventRepository) async -> HookStateSnapshot
+    /// Points any watcher at the records of the Turns still open once the
+    /// refresh has settled them, and at nothing else, so a Turn the refresh
+    /// just ended stops being watched in the pass that ended it.
+    func watch(openTurnsIn state: HookStateSnapshot) async
+    /// Nothing is being monitored.
+    func stopWatching() async
+}
+
 extension HookEventRepository {
     /// Holds the Turns to the Threads a product vouches for (ADR 0017).
     ///
@@ -197,6 +219,9 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     /// How much of the product's limits is left, or nil for a product that
     /// reports none (``UsageReading``).
     private let usage: (any UsageReading)?
+    /// What the product writes down about its Turns beyond the hooks, applied
+    /// in order after admission (``TurnEvidenceSource``).
+    private let turnEvidence: [any TurnEvidenceSource]
     /// Keeps a finished row listed until it has been read, and retires it the
     /// moment it has been.
     ///
@@ -241,6 +266,9 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         /// Whether the product is open and which Threads it vouches for, read
         /// together once per refresh.
         sessions: any ProductSessionReading,
+        /// Interrupts and answered waits the product records somewhere a hook
+        /// does not reach, in the order they are to be applied.
+        turnEvidence: [any TurnEvidenceSource] = [],
         /// What retires a finished row once it has been read. A terminal
         /// product supplies it by naming the process each Thread runs in; a
         /// product that supplies none keeps a finished row until the Thread's
@@ -267,6 +295,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         )
         self.hooks = hooks
         self.sessions = sessions
+        self.turnEvidence = turnEvidence
         self.readEvidence = readEvidence
         self.usage = usage
         self.readGate = TerminalUnreadRowFilter(timing: timing)
@@ -304,6 +333,9 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
             readGate.reset()
             await readEvidence?.forget()
             await sessions.stopWatching()
+            for source in turnEvidence {
+                await source.stopWatching()
+            }
             return snapshot(
                 availability: availability,
                 sessions: [],
@@ -320,6 +352,12 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         let reading = await sessions.read(observing: state)
         let presence = reading.presence
         state = await hooks.repository.applying(reading.admission, to: state)
+        for source in turnEvidence {
+            state = await source.settle(state, in: hooks.repository)
+        }
+        for source in turnEvidence {
+            await source.watch(openTurnsIn: state)
+        }
 
         // Presence unknown is the one state this skeleton reports as
         // unwatchable: the product may be open and busy, and drawing nothing
