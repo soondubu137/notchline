@@ -26425,12 +26425,13 @@ for line in sys.stdin:
             let settings = root
                 .appendingPathComponent("s-\(abs(contents.hashValue)).json")
             try Data(contents.utf8).write(to: settings)
-            let setup = ClaudeCodeHookSetup(
+            let setup = ManagedHooksSetup(
                 paths: HookIntegrationPaths(
                     supportDirectory: root.appendingPathComponent("AS"),
                     hooksConfiguration: settings,
                     agent: .claudeCode
-                )
+                ),
+                vocabulary: ClaudeCodeHookVocabulary()
             )
             #expect(await setup.status() == .notInstalled)
             #expect(
@@ -27582,13 +27583,13 @@ for line in sys.stdin:
         let configuration = ManagedHooksConfiguration.command(
             "/Users/someone/Library/Application Support/Notchline/agents/claudeCode/hook.sh",
             arguments: [],
-            legacyCommands: [ClaudeCodeHookSetup.legacyHookPath],
+            legacyCommands: [ClaudeCodeHookVocabulary.legacyHookPath],
             definitions: definitions
         )
 
         let legacyHandler: [String: Any] = [
             "type": "http",
-            "url": "http://127.0.0.1:51741\(ClaudeCodeHookSetup.legacyHookPath)",
+            "url": "http://127.0.0.1:51741\(ClaudeCodeHookVocabulary.legacyHookPath)",
             "timeout": 5,
             "headers": ["Authorization": "Bearer abc"]
         ]
@@ -30999,7 +31000,7 @@ for line in sys.stdin:
             hooksConfiguration: root.appendingPathComponent("settings.json"),
             agent: .claudeCode
         )
-        let setup = ClaudeCodeHookSetup(paths: paths)
+        let setup = ManagedHooksSetup(paths: paths, vocabulary: ClaudeCodeHookVocabulary())
 
         // An events directory left by the version that wrote one file per
         // event. Nothing reads it any more, so preparing the helper takes it
@@ -31341,7 +31342,7 @@ for line in sys.stdin:
             hooksConfiguration: root.appendingPathComponent("settings.json"),
             agent: .claudeCode
         )
-        let setup = ClaudeCodeHookSetup(paths: paths)
+        let setup = ManagedHooksSetup(paths: paths, vocabulary: ClaudeCodeHookVocabulary())
         #expect(await setup.prepareHelper())
 
         let recorder = RecordedHookDelivery()
@@ -32076,7 +32077,7 @@ for line in sys.stdin:
 
     /// Hands one payload to a listening socket, the way the helper does.
     ///
-    /// Deliberately the same shape as `ClaudeCodeHookSetup.helperScript`:
+    /// Deliberately the same shape as `ManagedHooksSetup.helperScript`:
     /// connect, write once, close. The close is the frame — there is no length
     /// header — so a helper that kept the descriptor open would hang the read,
     /// and this proves the product's own client does not.
@@ -34550,7 +34551,7 @@ private extension Collection {
 private final class ClaudeCodeHarness {
     let root: URL
     let paths: HookIntegrationPaths
-    let setup: ClaudeCodeHookSetup
+    let setup: ManagedHooksSetup
     let service: ClaudeCodeMonitorService
     /// No port, and therefore nothing to hand out.
     ///
@@ -34772,7 +34773,7 @@ private final class ClaudeCodeHarness {
             hooksConfiguration: root.appendingPathComponent("settings.json"),
             agent: .claudeCode
         )
-        setup = ClaudeCodeHookSetup(paths: paths)
+        setup = ManagedHooksSetup(paths: paths, vocabulary: ClaudeCodeHookVocabulary())
         readState = CountingClaudeReadState(
             wrapping: ClaudeCodeDesktopReadStateRepository(
                 stateDirectoryURL: root.appendingPathComponent(
@@ -34982,7 +34983,7 @@ private final class ClaudeCodeHarness {
     /// gained a window a person can answer inside, this fixture went on writing
     /// the old shape and every harness test lost its rows to `repairRequired`.
     func registerHooks() throws {
-        let configuration = ClaudeCodeHookSetup(paths: paths).configuration
+        let configuration = ManagedHooksSetup(paths: paths, vocabulary: ClaudeCodeHookVocabulary()).configuration
         var hooks: [String: Any] = [:]
         for definition in configuration.definitions {
             hooks[definition.event] = [["hooks": [configuration.handler(for: definition)]]]
@@ -35000,7 +35001,7 @@ private final class ClaudeCodeHarness {
         var hooks: [String: Any] = [:]
         let handler: [String: Any] = [
             "type": "http",
-            "url": "http://127.0.0.1:\(port)\(ClaudeCodeHookSetup.legacyHookPath)",
+            "url": "http://127.0.0.1:\(port)\(ClaudeCodeHookVocabulary.legacyHookPath)",
             "timeout": 5,
             "headers": ["Authorization": "Bearer whatever-they-pasted"]
         ]

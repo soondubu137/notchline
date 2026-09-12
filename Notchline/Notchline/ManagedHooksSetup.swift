@@ -1,20 +1,29 @@
 import Foundation
 
-/// Installs Claude Code's hook registration, and the helper it names.
+/// Installs a product's hook registration and the helper it names — for any
+/// product whose file this app may write and whose hooks run as registered,
+/// with no trust step after the write.
 ///
-/// **Two files, two owners, and this app now writes both.**
-/// `~/.claude/settings.json` still belongs to the user; what changed with
-/// ADR 0016 is that the app is allowed to add and remove its own `hooks` keys
-/// in it rather than print a block for the user to paste. The edit goes through
-/// the same ``ManagedHooksFileEditor`` the Codex side has always used — only
-/// this app's own keys are touched, anything it cannot positively identify is
-/// refused rather than coerced, the bytes are proved unchanged across the
-/// read-modify-write, and the result is read back before success is reported.
-/// The copy at ``HookIntegrationPaths/hooksBackup`` is refreshed immediately
-/// before every write, so `settings.json.notchline-backup` always holds the
-/// file as it was just before this app last changed it — the same rule the
-/// Codex file gets, for reasons that turned out to apply there at least as
-/// strongly (``ManagedHooksFileEditor``).
+/// Written for Claude Code and named after it until 2026-09-11; nothing in it
+/// was Claude Code's except the vocabulary handed in, so it is now the setup a
+/// hook-based product gets by default (`tiered-support.md` §5.4). Codex keeps
+/// ``CodexHookRegistrar``: its definitions are content-hashed and trusted one
+/// by one, so it never rewrites a complete registration ([ADR 0014](../../docs/adr/0014-the-codex-hook-definition-is-never-rewritten.md))
+/// and records which definitions still await trust. The two share the helper
+/// (``AgentHookHelper/prepare(at:answerWindowSeconds:fileManager:)``), the
+/// editor and the configuration value; what differs is that policy.
+///
+/// **Two files, two owners, and this app writes both.** The product's settings
+/// file (`~/.claude/settings.json` for Claude Code) still belongs to the user;
+/// what changed with ADR 0016 is that the app is allowed to add and remove its
+/// own `hooks` keys in it rather than print a block for the user to paste. The
+/// edit goes through the same ``ManagedHooksFileEditor`` the Codex side has
+/// always used — only this app's own keys are touched, anything it cannot
+/// positively identify is refused rather than coerced, the bytes are proved
+/// unchanged across the read-modify-write, and the result is read back before
+/// success is reported. The copy at ``HookIntegrationPaths/hooksBackup`` is
+/// refreshed immediately before every write, so the `.notchline-backup` always
+/// holds the file as it was just before this app last changed it.
 ///
 /// The asymmetry ADR 0010 recorded is therefore gone. It cost one thing only —
 /// installation friction on the product whose users are least likely to accept
@@ -22,7 +31,7 @@ import Foundation
 /// written and tested the whole time. What replaced the ADR's safety argument
 /// is not confidence, it is the backup and the strictness above.
 ///
-/// **There is no longer a port, and that is the other change this type carries.**
+/// **There is no port, and that is the other thing this type carries.**
 /// The registration used to be an `http` handler naming `127.0.0.1:51741`,
 /// which had two faults no registration could fix. When the app is not running
 /// nothing owns the port, so every event prints `connect ECONNREFUSED` in the
@@ -39,23 +48,14 @@ import Foundation
 /// bind. What it costs is a process per event: 6.3 ms measured, against 1.2 ms
 /// for the loopback POST it replaces, and against the 30 ms the Codex helper on
 /// the other side of this app has always cost.
-actor ClaudeCodeHookSetup {
-    /// The marker an HTTP-era registration is recognised by.
-    ///
-    /// Kept so that a user who pasted the old block has it *replaced* rather
-    /// than added to. Before ADR 0016 being recognised was the whole of what
-    /// this app could do about it; now the same marker is what lets
-    /// ``ManagedHooksConfiguration/installing(into:isNewFile:)`` strip the dead
-    /// handler out on the way to writing the current one.
-    static let legacyHookPath = "/codex-in-notch/hook"
-
+actor ManagedHooksSetup {
     private let paths: HookIntegrationPaths
     private let vocabulary: any AgentHookVocabulary
     private let fileManager: FileManager
 
     init(
         paths: HookIntegrationPaths,
-        vocabulary: any AgentHookVocabulary = ClaudeCodeHookVocabulary(),
+        vocabulary: any AgentHookVocabulary,
         fileManager: FileManager = .default
     ) {
         self.paths = paths
@@ -96,36 +96,22 @@ actor ClaudeCodeHookSetup {
     /// one thing this whole transport exists to avoid.
     @discardableResult
     func prepareHelper() -> Bool {
-        let desired = AgentHookHelper.script(
-            socketPath: paths.hookSocket.path,
-            answerWindowSeconds: vocabulary.answerWindowSeconds
-        )
-        if let installed = try? String(contentsOf: paths.hookHelper, encoding: .utf8),
-           installed == desired,
-           fileManager.isExecutableFile(atPath: paths.hookHelper.path) {
+        switch AgentHookHelper.prepare(
+            at: paths,
+            answerWindowSeconds: vocabulary.answerWindowSeconds,
+            fileManager: fileManager
+        ) {
+        case .current:
             return true
-        }
-        do {
-            try fileManager.createDirectory(
-                at: paths.agentDirectory,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            try desired.write(to: paths.hookHelper, atomically: true, encoding: .utf8)
-            try fileManager.setAttributes(
-                [.posixPermissions: 0o700],
-                ofItemAtPath: paths.hookHelper.path
-            )
-            // Whatever the queue-era install left in this folder. Nothing here
-            // is read or branched on -- it is a delete list, so an upgraded
-            // install does not keep an events directory and two state files
-            // nothing will ever open again.
+        case .written:
+            // A fresh helper is the moment to clear what earlier builds left
+            // beside it; nothing else is deleted on this product's behalf.
             for url in paths.retiredArtifacts
             where fileManager.fileExists(atPath: url.path) {
                 try? fileManager.removeItem(at: url)
             }
             return true
-        } catch {
+        case .failed:
             return false
         }
     }
@@ -187,7 +173,7 @@ actor ClaudeCodeHookSetup {
         .command(
             paths.hookHelper.path,
             arguments: [],
-            legacyCommands: [Self.legacyHookPath],
+            legacyCommands: vocabulary.legacyCommandMarkers,
             definitions: vocabulary.managedDefinitions,
             // No `description` key, even on a file this app creates: Claude
             // Code validates this file's keys, and inventing one would make
@@ -206,12 +192,7 @@ actor ClaudeCodeHookSetup {
     }
 
     private func readSettings() -> [String: Any]? {
-        guard let data = try? Data(contentsOf: paths.hooksConfiguration),
-              !data.isEmpty,
-              let decoded = try? JSONSerialization.jsonObject(with: data) else {
-            return nil
-        }
-        return decoded as? [String: Any]
+        paths.readConfigurationRoot(fileManager: fileManager)
     }
 }
 

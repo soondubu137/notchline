@@ -61,6 +61,6 @@ It is implemented by writing the bytes `write(_:replacing:)` just read and compa
 
 ## Where it lands
 
-`ClaudeCodeHookSetup.install()` / `uninstall()`, `ManagedHooksFileEditor.preserveRecoveryCopy(of:)`, `ClaudeCodeMonitorService.installHooks()` / `removeHooks()`, `MonitorStore`'s per-product switches (`integrationSwitchIsOnByAgent`, `setupStatusByAgent`, `integrationBusyAgents`, one convergence task per product), and `ProductConnectionRows`' two rows with two switches.
+`ClaudeCodeHookSetup.install()` / `uninstall()` (the actor is `ManagedHooksSetup` since 2026-09-11), `ManagedHooksFileEditor.preserveRecoveryCopy(of:)`, `ClaudeCodeMonitorService.installHooks()` / `removeHooks()`, `MonitorStore`'s per-product switches (`integrationSwitchIsOnByAgent`, `setupStatusByAgent`, `integrationBusyAgents`, one convergence task per product), and `ProductConnectionRows`' two rows with two switches.
 
 Tests: `bothProductsInstallTheirOwnRegistration`, `theUsersSettingsAreCopiedBesideThemselvesBeforeEveryChange`, `theUsersCodexHooksAreCopiedBesideThemselvesBeforeEveryChange`, `aRefusedCodexInstallLeavesNeitherAnEditNorACopy`, `installingTouchesOnlyThisAppsOwnKeysInTheUsersSettings`, `aSettingsShapeThisAppCannotReadIsRefusedRatherThanOverwritten`, `aPartialRegistrationReportsThatItNeedsRepair`, `eachProductsIntegrationSwitchMovesOnlyItsOwnProduct`.

@@ -193,6 +193,18 @@ nonisolated struct HookIntegrationPaths: Sendable {
         hooksConfiguration.appendingPathExtension("notchline-backup")
     }
 
+    /// The registration file's root object, or nil when there is no file, an
+    /// empty one, or one that is not JSON with an object at its root. Callers
+    /// treat nil as "nothing of ours registered", never as an error.
+    nonisolated func readConfigurationRoot(fileManager: FileManager) -> [String: Any]? {
+        guard let data = try? Data(contentsOf: hooksConfiguration),
+              !data.isEmpty,
+              let decoded = try? JSONSerialization.jsonObject(with: data) else {
+            return nil
+        }
+        return decoded as? [String: Any]
+    }
+
     /// The Codex paths, which is what the no-argument spelling has always
     /// meant.
     nonisolated static func live(
@@ -347,6 +359,56 @@ nonisolated enum AgentHookHelper {
     /// A home directory is a user-chosen string and this one is pasted into a
     /// script, so the escape is not decoration: `O'Brien` would otherwise end
     /// the quoting and leave the rest of the path as shell words.
+    /// What ``prepare(at:answerWindowSeconds:fileManager:)`` found or did.
+    nonisolated enum Preparation: Sendable, Equatable {
+        /// The helper on disk is byte-for-byte this build's and executable.
+        case current
+        /// It was not, and has just been written.
+        case written
+        /// It could not be written.
+        case failed
+    }
+
+    /// Puts this build's helper at the product's path, if it is not already
+    /// there, and says which.
+    ///
+    /// Compared before written, because a write that changes nothing still
+    /// costs a file event and, on the Codex side, would be a rewrite of a
+    /// script whose definition is hashed. The directory is created `0700`
+    /// alongside, since the socket that will sit beside the helper is this
+    /// user's alone.
+    @discardableResult
+    nonisolated static func prepare(
+        at paths: HookIntegrationPaths,
+        answerWindowSeconds: Int,
+        fileManager: FileManager
+    ) -> Preparation {
+        let desired = script(
+            socketPath: paths.hookSocket.path,
+            answerWindowSeconds: answerWindowSeconds
+        )
+        if let installed = try? String(contentsOf: paths.hookHelper, encoding: .utf8),
+           installed == desired,
+           fileManager.isExecutableFile(atPath: paths.hookHelper.path) {
+            return .current
+        }
+        do {
+            try fileManager.createDirectory(
+                at: paths.agentDirectory,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            try desired.write(to: paths.hookHelper, atomically: true, encoding: .utf8)
+            try fileManager.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: paths.hookHelper.path
+            )
+            return .written
+        } catch {
+            return .failed
+        }
+    }
+
     nonisolated static func singleQuoted(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
@@ -424,6 +486,11 @@ protocol AgentHookVocabulary: Sendable {
     /// to a signal, or the integration would install a hook whose events it then
     /// discards — a test pins that.
     nonisolated var managedDefinitions: [ManagedHookDefinition] { get }
+    /// How this product's handlers were spelled by earlier builds of this app,
+    /// so that an install can recognise and strip them and a removal can prove
+    /// none survived. Substrings of the command, matched by
+    /// ``ManagedHooksConfiguration``.
+    nonisolated var legacyCommandMarkers: [String] { get }
     /// Whether a refused approval is reported as an event of its own.
     ///
     /// Codex sends nothing at all when a human refuses -- measured 2026-08-15,
@@ -635,6 +702,9 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     nonisolated let answeringTimeoutSeconds = CodexHookVocabulary.answeringTimeout
     nonisolated let answering: any RequestAnswering = CodexRequestAnswering()
     nonisolated let agent: AgentKind = .codex
+    /// The Python helper the first builds registered.
+    nonisolated static let legacyHelperMarker = "codex_in_notch_hook.py"
+    nonisolated let legacyCommandMarkers = [CodexHookVocabulary.legacyHelperMarker]
     nonisolated let restoreDefinitionAdvice =
         "Run /hooks in Codex and trust the definition again."
     /// A refusal produces no event whatsoever, so it has to be inferred.
@@ -847,6 +917,10 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     nonisolated let answeringTimeoutSeconds = ClaudeCodeHookVocabulary.answeringTimeout
     nonisolated let answering: any RequestAnswering = ClaudeCodeRequestAnswering()
     nonisolated let agent: AgentKind = .claudeCode
+    /// The path the pre-ADR-0013 `http` handlers posted to. Still recognised so
+    /// an install strips the dead handler and a removal can prove it gone.
+    nonisolated static let legacyHookPath = "/codex-in-notch/hook"
+    nonisolated let legacyCommandMarkers = [ClaudeCodeHookVocabulary.legacyHookPath]
     /// ADR 0016: this app writes that file now, so the repair is a switch
     /// rather than an edit, and the sentence says which one.
     nonisolated let restoreDefinitionAdvice =
@@ -1281,7 +1355,6 @@ actor CodexHookRegistrar {
     /// is installed — which would invite a second registration beside the
     /// first. Matched by containment, so it recognises both the namespaced path
     /// and the flat one that preceded it.
-    nonisolated static let legacyHelperMarker = "codex_in_notch_hook.py"
 
     private let paths: HookIntegrationPaths
     private let fileManager: FileManager
@@ -1378,30 +1451,11 @@ actor CodexHookRegistrar {
     /// watching for a row to change.
     @discardableResult
     func prepareHelper() -> Bool {
-        let desired = AgentHookHelper.script(
-            socketPath: paths.hookSocket.path,
-            answerWindowSeconds: CodexHookVocabulary().answerWindowSeconds
-        )
-        if let installed = try? String(contentsOf: paths.hookHelper, encoding: .utf8),
-           installed == desired,
-           fileManager.isExecutableFile(atPath: paths.hookHelper.path) {
-            return true
-        }
-        do {
-            try fileManager.createDirectory(
-                at: paths.agentDirectory,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-            try desired.write(to: paths.hookHelper, atomically: true, encoding: .utf8)
-            try fileManager.setAttributes(
-                [.posixPermissions: 0o700],
-                ofItemAtPath: paths.hookHelper.path
-            )
-            return true
-        } catch {
-            return false
-        }
+        AgentHookHelper.prepare(
+            at: paths,
+            answerWindowSeconds: CodexHookVocabulary().answerWindowSeconds,
+            fileManager: fileManager
+        ) != .failed
     }
 
     func install() throws {
@@ -1453,12 +1507,7 @@ actor CodexHookRegistrar {
     // MARK: - Internals
 
     private func readConfigurationRoot() -> [String: Any]? {
-        guard let data = try? Data(contentsOf: paths.hooksConfiguration),
-              !data.isEmpty,
-              let decoded = try? JSONSerialization.jsonObject(with: data) else {
-            return nil
-        }
-        return decoded as? [String: Any]
+        paths.readConfigurationRoot(fileManager: fileManager)
     }
 
     private func removeRetiredArtifacts() {
@@ -1493,7 +1542,7 @@ actor CodexHookRegistrar {
     private var managedConfiguration: ManagedHooksConfiguration {
         .command(
             Self.command(forHelper: paths.hookHelper),
-            legacyCommands: [Self.legacyHelperMarker],
+            legacyCommands: CodexHookVocabulary().legacyCommandMarkers,
             definitions: Self.managedDefinitions,
             descriptionForNewFiles: "User-level Codex lifecycle hooks."
         )

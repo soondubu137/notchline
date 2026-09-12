@@ -18,7 +18,7 @@ Codex still *runs* nothing until the user trusts the definitions via `/hooks` �
 
 ## 2. Turning the Claude Code switch on
 
-Same store path and convergence, different service: `ClaudeCodeHookSetup.install()`.
+Same store path and convergence, different setup actor: `ManagedHooksSetup.install()` — the setup any hook-based product without a trust step gets, written for Claude Code and named after it until 2026-09-11. It and `CodexHookRegistrar` share the helper write (`AgentHookHelper.prepare`), the file read and the editor; what differs is Codex's trust policy.
 
 - The helper script is written first; if that fails, **the whole install aborts** (`verificationFailed`) — a registration pointing at a script that does not exist prints `ENOENT … posix_spawn` once per event.
 - Then *the same* strict editor handles `~/.claude/settings.json`, with the same backup rule (`settings.json.notchline-backup`), byte-equality guard and read-back verification as Codex.

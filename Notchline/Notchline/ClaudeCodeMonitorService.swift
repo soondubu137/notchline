@@ -30,7 +30,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     /// promised by any official contract -- see the registry.
     nonisolated static let desktopBundleIdentifier = "com.anthropic.claudefordesktop"
 
-    private let setup: ClaudeCodeHookSetup
+    private let setup: ManagedHooksSetup
     private let hookEvents: HookEventRepository
     private let sessions: any ClaudeCodeSessionListing
     private let listener: AgentHookListener
@@ -210,7 +210,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
 
     init(
         paths: HookIntegrationPaths = .liveClaudeCode(),
-        setup: ClaudeCodeHookSetup? = nil,
+        setup: ManagedHooksSetup? = nil,
         hookEvents: HookEventRepository? = nil,
         sessions: (any ClaudeCodeSessionListing)? = nil,
         listener: AgentHookListener? = nil,
@@ -238,7 +238,8 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     ) {
         self.commandIsInstalled = commandIsInstalled
             ?? { ClaudeExecutableLocator.locate() != nil }
-        let resolvedSetup = setup ?? ClaudeCodeHookSetup(paths: paths)
+        let resolvedSetup = setup
+            ?? ManagedHooksSetup(paths: paths, vocabulary: ClaudeCodeHookVocabulary())
         self.setup = resolvedSetup
         // The one folder this app's own quota reading runs in, named once and
         // given to everything that has to be able to tell that reading apart
