@@ -207,7 +207,11 @@ struct HookProductConformanceTests {
         #expect(registered.availability == .ready)
         #expect(registered.presence == .open)
         #expect(registered.sessions.isEmpty)
-        #expect(registered.quota == .unavailable)
+        // No windows rather than one made of dashes: a Provider that reads no
+        // quota gets an outer footer row and no lines under it
+        // (`quota-footer-v2.md` §5).
+        #expect(registered.quota == .noneReported)
+        #expect(registered.quota.windows.isEmpty)
 
         try product.deliver(submission("t1", turn: "p1"), at: t0)
         let running = await product.provider.fetchSnapshot()

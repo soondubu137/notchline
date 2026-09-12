@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Built 2026-09-11** as `AgentKind.antigravity`: `Products/Antigravity/`, one registry entry, and `AntigravityConformanceTests`. Tier 0, no capability above it. This is P5's first half in [`tiered-support.md`](tiered-support.md) §8; the T1 terminal is not started |
+| Status | **Built and run 2026-09-11** as `AgentKind.antigravity`: `Products/Antigravity/`, one registry entry, and `AntigravityConformanceTests`. Tier 0, no capability above it. This is P5's first half in [`tiered-support.md`](tiered-support.md) §8; the T1 terminal is not started. **Taken end to end through a Release build the same evening** (§6): the switch's own registration is one `agy` loads, a turn is a row, and the click focuses the Terminal window the conversation runs in. One defect fell out of it — a footer line of dashes under a product that has no quota — fixed, and priced against P4's baseline in §7 |
 | Investigated | 2026-09-11 |
 | Product | Antigravity CLI `agy` 1.2.2, an arm64 Go binary at `~/.local/bin/agy`; state under `~/.gemini/antigravity-cli/`, shared configuration under `~/.gemini/config/` |
 | Source baseline | Local `master`, `ee19188` |
@@ -67,13 +67,43 @@ Interruption was not measured cleanly — the TUI's `Ctrl-C` landed after the tu
 
 Two seams had to be cut in the shared code first, each its own commit: the container key and list shape in `ManagedHooksConfiguration`, and the registration dialect, announcing helper and payload translator in the hook transport. The store, the overlay, the footer, the grouped list, the setup actor, the reducer, the listener and the Settings rows changed by one line (the caption under a row now shows a declared boundary). The navigator was renamed `ProcessHostNavigator`, since Antigravity's rows go back to a terminal the same way Claude Code's do.
 
-## 6. Not done, and not claimed
+## 6. The live run, and the one defect it found
+
+Staged 2026-09-11 against a Release build of this tree: the app's own Settings switch, the product's own binary, and no probe anywhere in the path.
+
+**The registration the app writes is one the product accepts.** Driven first against a throwaway home (`CFFIXED_USER_HOME` moves every path the app reads; `HOME` moves every path `agy` reads), so the switch's write landed in a copy rather than in the user's file. Flipping it wrote the two definitions under `notchline` in that home's `~/.gemini/config/hooks.json`, and the next `agy` launch logged `hooks_manager.go:53] loaded 1 named hooks from 1 hooks.json file(s)` — the only confirmation the product gives, and the one thing §1's silent shape mistake would have taken away. That home could not authenticate (the copied credentials are refused and the CLI asks to log in again, which is not worth chasing), so the rest ran against the real one.
+
+**A turn is a row, and the row goes back to where the work is.** `agy -p` in a Terminal window: the row appeared as `Working...`, turned `Completed` a second later, and left the list fifteen seconds after that, when the process exited and the admission list emptied — the `-p` lifecycle §3 describes, watched rather than argued. A TUI turn in a second window drew `Antigravity · notchline · Untitled · Completed · took 1 second`: the workspace's last component for a project, `Untitled` for a prompt no payload carries, exactly what §2 predicted. Pressing the row raised Terminal **and focused the window running that conversation**, not merely the application — the tty route reads the host off the process the lock names, and Antigravity's rows get the same pane-by-tty focus Claude Code's do.
+
+**The defect.** The footer drew Antigravity as an outer row *and* one window line reading `-- left`, `--`. [`quota-footer-v2.md`](../../quota-footer-v2.md) §5 says the opposite in as many words — *a product with no limits still gets its row, an outer row and no inner ones*, because the absence of lines is what says there is nothing to report — and the store had held that rule, tested, since the footer was built. What produced the extra line was `HookProductProvider` answering `QuotaSnapshot.unavailable`, which is the **single-window** form: one window with nothing known about it. That is right for a product whose limits exist and could not be read this minute, and wrong for ever for a product that has none. `QuotaSnapshot.noneReported` is the empty-window value, the Provider answers it, and the two conformance suites pin it. No test could have found this: both shipping products always have windows, so the third product is the first to reach the case, and it is visible only in a footer drawn from a live snapshot.
+
+Two smaller things, neither a defect: the settings card reads `Integration not installed` after the switch goes on until something forces a refresh (`Recheck`, or any event) — **Claude Code's row does the same at HEAD**, so it is the store's, not this product's; and `SetupDescription.installedMessage` promises a backup beside a file the app has just created, where there is nothing to back up.
+
+## 7. What it costs, measured under Release
+
+Release build of this tree, `ps -o time` deltas, one display, all three products registered, nothing else running. P4's baseline in [`tiered-support.md`](tiered-support.md) is the column on the right.
+
+| Window | Measured | P4 baseline, two products |
+| --- | --- | --- |
+| Launch | 0.50 s CPU, 85 MB RSS | 0.24 s, 80 MB |
+| Idle, no rows | 0.26 and 0.27 s per 60 s | 0.34–0.38 s per 60 s |
+| Idle, no rows, this product's switch **off** | 0.42 s per 60 s | — |
+| 200 hook events, transport only | 0.03 s CPU in 1.55 s wall | 0.04–0.05 s in 0.65 s |
+| One running row | 0.38 s per 60 s | 0.40–0.51 s per 60 s |
+
+No regression, and the switch-off window reading *higher* than the two switch-on windows is the measure of how much of that figure is this product's: none of it, within the noise the two shipping products make on their own.
+
+**The one number that looks like a regression, and is not.** 200 events that each open and close a row — 100 whole turns in 1.9 seconds — cost **1.70 s** CPU, 35× the baseline's burst. Sampling the app through it puts every heavy frame in `SwiftUI` layout, so the suspicion is that this is the overlay redrawing rather than anything the product does, and the control settles it: the same 200 events carrying a sibling surface's transcript path, so the translator declines each one and no row is drawn, cost **0.03 s** — the same as 200 fabricated Claude Code events measured back to back on the same build, and the same as the baseline. The transport, the translator and the reducer cost what they have always cost; 100 rows arriving and leaving inside two seconds costs the overlay 17 ms each, against the 200 ms an expand already costs it (`AGENTS.md` §7), and no conversation produces turns at that rate.
+
+Ten expand/collapse cycles read 3.39 s with a row and 3.44 s with none, so that figure is the method's one-second dwell and not comparable to the baseline's; it is recorded here only because the two runs agreeing is what says the product is not in it.
+
+## 8. Not done, and not claimed
 
 - **The T1 terminal** of P5 (WezTerm's pane-by-tty) is untouched.
 - **Antigravity IDE and 2.0** share the hooks file. Their payloads name transcripts under `antigravity/` and `antigravity-ide/`, and the translator declines them, so they are neither rows nor diagnostics; observing them is a separate product.
-- **No Release measurement.** The Provider runs nothing until its switch is on, and its refresh cost is one `proc_listpids` walk plus the fd list of each `agy` process; measured by hand at a few milliseconds, not against P4's baseline.
-- **No live end-to-end through the app** was staged. The socket round trip is proven by a test that runs the announcing helper as the product runs it; the product itself was only ever driven against the probe.
+- **Interruption is still unmeasured.** §4 stands: whether `Ctrl-C` fires `Stop` with a different `terminationReason` is the first thing to measure for Tier 1, and the live run did not reach it.
+- **The throwaway home cannot authenticate**, so a future run that must not touch `~/.gemini` at all has to solve that first. Everything above except the loaded-hooks line was measured against the real one.
 
-## 7. NO-GO check
+## 9. NO-GO check
 
 No Turn state is inferred from silence; no historical hook is replayed; another surface's runtime is declined by its transcript path rather than mistaken for the CLI's; no permission prompt is created to observe one. The product enters Tier 0 and no higher, and the registry ([`non-public-codex-integration-features.md`](../../non-public-codex-integration-features.md)) records what it depends on that no documentation promises.

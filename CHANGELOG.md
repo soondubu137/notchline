@@ -16,6 +16,10 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 - **A row's caption in Settings can state what the product will never say.** A failure the product reported still takes the line; otherwise a product listed at a lower tier shows its declared boundary there, so the absence of an approval on its rows is announced once rather than discovered.
 
+### Fixed
+
+- **The quota footer stops drawing a dashed line under a product it reads no quota for.** Antigravity CLI kept an outer row reading `-- today` and one window line reading `-- left` under it, which is how a reading that has not come back yet looks — for a window that does not exist. It now gets the outer row alone, the form the footer was designed with. (`docs/quota-footer-v2.md` §5.)
+
 ### Known limitations
 
 Everything listed under `0.2.7` and earlier still stands, unchanged.

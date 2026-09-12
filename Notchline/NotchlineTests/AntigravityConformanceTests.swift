@@ -206,7 +206,8 @@ struct AntigravityConformanceTests {
         #expect(row.title == "Untitled", "the prompt is in no payload")
         #expect(row.startedAt == t0)
         #expect(row.request == nil)
-        #expect(started.quota == .unavailable)
+        #expect(started.quota == .noneReported)
+        #expect(started.quota.windows.isEmpty, "no quota is read for this product")
 
         for number in 1...4 {
             try product.deliver("PreInvocation", invocation(number, of: conversation), at: t0.addingTimeInterval(Double(number)))
@@ -401,6 +402,47 @@ struct AntigravityConformanceTests {
     }
 
     // MARK: - Registry and Settings
+
+    /// **The footer names the product and claims nothing about it.**
+    ///
+    /// An outer row and no inner ones, which is `quota-footer-v2.md` §5's form
+    /// for a connected product this app reads no quota for. The store's side
+    /// of that rule was written and tested with a hand-built snapshot; this
+    /// product is the first to produce one, and until 2026-09-11 it produced
+    /// ``QuotaSnapshot/unavailable`` instead — the *single-window* form — so a
+    /// live Antigravity drew one `-- left` line under its name on every
+    /// render, for ever, saying a reading had not come back for a window that
+    /// does not exist. Found by running a turn through the built app.
+    @Test @MainActor
+    func theFooterNamesTheProductAndClaimsNothingAboutIt() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation)
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+
+        let store = MonitorStore(services: [])
+        // A fresh store carries the preview's own Codex answer; a closed one
+        // takes it back out, so the footer below is this product's alone.
+        for agent in [AgentKind.codex, .claudeCode] {
+            store.applyForTesting(
+                AgentSnapshot(
+                    agent: agent,
+                    availability: .ready,
+                    sessions: [],
+                    quota: .unavailable,
+                    diagnostic: nil,
+                    presence: .closed
+                )
+            )
+        }
+        store.applyForTesting(await product.provider.fetchSnapshot())
+
+        #expect(store.footerRules.map(\.agent) == [.antigravity])
+        let rule = try #require(store.footerRules.first)
+        #expect(rule.windows.isEmpty, "no line of dashes under a product with no windows")
+        #expect(rule.today.text == "-- today")
+    }
 
     /// The product is one descriptor: its file, its two definitions, no trust
     /// step, and the boundary Settings states for a Tier 0 product.

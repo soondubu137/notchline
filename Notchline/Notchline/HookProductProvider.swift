@@ -238,7 +238,12 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
             agent: agent,
             availability: availability,
             sessions: sessions,
-            quota: .unavailable,
+            // No quota, rather than a quota that could not be read: this
+            // Provider reads none and no product built on it has claimed one,
+            // so its footer group is a name and a spend with no lines under
+            // it (`quota-footer-v2.md` §5). A product that adds a quota
+            // reading beside this composes it and publishes its own windows.
+            quota: .noneReported,
             diagnostic: diagnostic,
             setupStatus: setupStatus,
             presence: presence

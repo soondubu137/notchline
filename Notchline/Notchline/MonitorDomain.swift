@@ -768,11 +768,26 @@ struct QuotaSnapshot: Equatable, Sendable {
     let windows: [QuotaWindow]
     let todayTokens: Int64?
 
+    /// One window, with nothing known about it: the product has limits and
+    /// this app cannot read them right now. The footer draws a `-- left` line
+    /// for it, which is the honest thing to draw for a window that exists.
     nonisolated static let unavailable = QuotaSnapshot(
         remainingPercent: nil,
         resetsAt: nil,
         todayTokens: nil
     )
+
+    /// No windows at all: this product publishes no quota this app reads, and
+    /// none is being waited for.
+    ///
+    /// The distinction is the footer's, and the third product is the first to
+    /// need it. `quota-footer-v2.md` §5: *a product with no limits still gets
+    /// its row — an outer row and no inner ones*, because the absence of lines
+    /// is what says there is nothing to report. Given ``unavailable`` instead,
+    /// a product that will never have a window draws one line of dashes under
+    /// its name on every render, for ever, which reads as a reading that has
+    /// not come back yet.
+    nonisolated static let noneReported = QuotaSnapshot(windows: [])
 
     nonisolated init(windows: [QuotaWindow], todayTokens: Int64? = nil) {
         self.windows = windows
