@@ -24,7 +24,7 @@ Same store path and convergence, different setup actor: `ManagedHooksSetup.insta
 - Then *the same* strict editor handles `~/.claude/settings.json`, with the same backup rule (`settings.json.notchline-backup`), byte-equality guard and read-back verification as Codex.
 - **Thirteen definitions**: `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionRequest`, `PermissionDenied`, `Elicitation`, `ElicitationResult`, `SubagentStart`, `SubagentStop`, `MessageDisplay`, `Stop`, `StopFailure`. Handlers carry `args: []` to select Claude Code's exec form (one process launched; measured 6.3 ms against 10.9 ms for the other form) — **except `PermissionRequest`, which carries `args: ["wait"]` and `timeout: 86400`**, the same one-definition shape as on Codex and for the same reason. There is no trust hash on this side, so the change costs the user nothing. No `description` key is written even in a file this app created, because Claude Code validates these keys.
 - A pre-ADR-0013 `http` handler is recognised by its `/codex-in-notch/hook` marker and **removed** while the current handler is written.
-- There is no trust step. The socket binds at the next refresh's `prepareTransport()`.
+- There is no trust step. The socket binds at the next refresh's `HookLifecycleSource.gate(productName:)`, which writes the helper before it reads the status and binds only once that status is `active`.
 
 > Count these in `HookIntegration.swift`'s two `managedDefinitions`, never from prose: this line has read six, five, eleven and twelve at various times, and each was a document lagging an event being added.
 

@@ -59,9 +59,14 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     private let clock: any MonitorClock
     private let timing: MonitorTiming
     private let client: any CodexAppServerCommunicating
+    /// The hook transport, wired once (``HookLifecycleSource``) with Codex's
+    /// registrar as its setup. The reducer and the registrar are kept under
+    /// their own names as well: this actor reads the one constantly, and asks
+    /// the other what only a trust-step policy has -- the cached registration
+    /// and the file's own edge.
+    private let hooks: HookLifecycleSource
     private let hookEvents: HookEventRepository
     private let hookRegistrar: CodexHookRegistrar
-    nonisolated private let hookListener: AgentHookListener
     private let projectMetadata: any DesktopProjectMetadataProviding
     private let unreadState: any DesktopUnreadStateProviding
     /// Which threads Codex answers approval requests for on the user's behalf.
@@ -253,8 +258,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// turns away.
     private var lastConnectFailure: (any Error)?
     private var lastTrustedSnapshot: AgentSnapshot?
-    /// Whether this run has already compared the installed helper's bytes.
-    private var didCompareHelperThisLaunch = false
     /// Keeps a finished row listed until Desktop no longer reports it unread
     /// (``TerminalUnreadRowFilter``, the rules every product shares).
     private var terminalUnreadMembershipGate: TerminalUnreadRowFilter
@@ -296,12 +299,14 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         self.hookRegistrar = hookRegistrar
         // The transport belongs to this service rather than to the store, so
         // the store stays a reducer with an inbox and nothing that binds. One
-        // connection carries one payload; the closure below is called on the
-        // listener's serial read queue, which is what keeps arrival order.
-        self.hookListener = hookListener ?? AgentHookListener(clock: clock) {
-            [hookEvents] body, receivedAt, descriptor in
-            hookEvents.deliver(body, at: receivedAt, on: descriptor)
-        }
+        // connection carries one payload, delivered on the listener's serial
+        // read queue, which is what keeps arrival order.
+        self.hooks = HookLifecycleSource(
+            setup: hookRegistrar,
+            repository: hookEvents,
+            listener: hookListener,
+            clock: clock
+        )
         self.projectMetadata = projectMetadata
         self.unreadState = unreadState
         self.approvalRouting = approvalRouting
@@ -357,7 +362,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         // before this app decides the registration is complete -- a Codex that
         // was already running has them loaded -- so the socket has to be bound
         // by then, not after.
-        await prepareTransport()
+        await hooks.prepareTransport()
         // Every branch below that returns without evaluating rows has to say so,
         // because the gate is the one piece of state here that a refresh must
         // *touch* to keep honest. Its entries are pruned and hidden inside
@@ -1007,7 +1012,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// which connection they go down is the registry's. This is the boundary
     /// the store reaches both through.
     func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
-        await hookEvents.answer(answer, on: handle.ticket)
+        await hooks.answer(answer, on: handle)
     }
 
     /// Nothing: the quota arrives over the App Server and leaves no files
@@ -1016,52 +1021,27 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
 
     func setupStatus() async -> IntegrationSetupStatus {
         await hookRegistrar.invalidateRegistration()
-        return IntegrationSetupStatus.card(
-            registration: await hookRegistrar.registration(),
-            hasObservedEvent: await hookEvents.observedState().hasObservedEvent
-        )
+        return await hooks.setupStatus()
     }
 
     func installIntegration() async throws {
-        try await hookRegistrar.install()
-        didCompareHelperThisLaunch = true
+        try await hooks.install()
         // The support directory exists now. On a first run the socket could not
         // bind at launch because there was nowhere to bind it; this is the
         // moment it becomes possible, and doing it here is what keeps the first
         // turn after setup from waiting out a refresh deadline.
-        await prepareTransport()
+        await hooks.prepareTransport()
     }
 
     func removeIntegration() async throws {
         await hookEvents.resetIntegrationObservation(clearTurns: true)
-        hookListener.stop()
-        try await hookRegistrar.uninstall()
+        hooks.disconnect()
+        try await hooks.remove()
         observedDesktopProcessIdentifier = nil
         hookTrackedThreadIDs = []
         stopThreadReadsWithNoConsumer()
         lastTrustedSnapshot = nil
         terminalUnreadMembershipGate.reset()
-    }
-
-    /// Binds the socket, and writes the helper on the two occasions it can be
-    /// wrong.
-    ///
-    /// The bind returns immediately once the descriptor is held, so repeating
-    /// it costs nothing. The helper is a different matter: comparing its bytes
-    /// used to sit on the refresh path as `upgradeManagedHookIfNeeded()`,
-    /// reading a file to answer a question that can only change when the app
-    /// itself is upgraded. So the comparison happens once per launch, and again
-    /// only if a `stat` says the file has gone -- which a user emptying the
-    /// support folder can cause, and which is loud when it happens: `/bin/sh`
-    /// on a missing path writes to stderr, and Codex renders that as a hook
-    /// error in the user's session (ADR 0013).
-    private func prepareTransport() async {
-        let helperIsInstalled = await hookRegistrar.isHelperInstalled
-        if !didCompareHelperThisLaunch || !helperIsInstalled {
-            didCompareHelperThisLaunch = true
-            await hookRegistrar.prepareHelper()
-        }
-        hookListener.start(socketURL: hookRegistrar.socketURL)
     }
 
     nonisolated private func nanoseconds(_ seconds: TimeInterval) -> UInt64 {

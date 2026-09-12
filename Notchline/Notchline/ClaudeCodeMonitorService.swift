@@ -30,14 +30,12 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     /// promised by any official contract -- see the registry.
     nonisolated static let desktopBundleIdentifier = "com.anthropic.claudefordesktop"
 
-    /// The hook transport, wired once (``HookLifecycleSource``); the three
-    /// below are its members, kept as their own names because the rest of this
-    /// actor reads them constantly.
+    /// The hook transport, wired once (``HookLifecycleSource``); the reducer
+    /// below is its member, kept under its own name because the rest of this
+    /// actor reads it constantly.
     private let hooks: HookLifecycleSource
-    private let setup: ManagedHooksSetup
     private let hookEvents: HookEventRepository
     private let sessions: any ClaudeCodeSessionListing
-    private let listener: AgentHookListener
     private let transcripts: ClaudeCodeTranscriptReader
     private let usage: ClaudeCodeUsageReader
     /// Whether there is a `claude` on this machine for the registry to run.
@@ -205,7 +203,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     /// ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``.
     nonisolated private let screenAvailability: any ScreenAvailabilityReporting
     private let clock: any MonitorClock
-    private var lastDiagnostic: String?
     /// Whether ``sessionsWatcher`` was attached at the end of the last refresh.
     ///
     /// Only ever used to spot it becoming attached, which is an edge the
@@ -269,7 +266,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
             listener: listener
         )
         self.hooks = hooks
-        self.setup = hooks.setup
         let repository = hooks.repository
         self.hookEvents = repository
         let resolvedSessions = sessions ?? ClaudeCodeSessionRegistry(
@@ -283,7 +279,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         // a row draws has changed, and "this session has text where it had
         // none" is part of that projection -- while the deltas themselves stay
         // off it, because three a second is not a redraw rate.
-        self.listener = hooks.listener
         self.transcripts = transcripts ?? ClaudeCodeTranscriptReader()
         // The quota's own edge. Nothing waits for the reading any more, so the
         // reading has to say when it landed -- otherwise a figure read at
@@ -442,16 +437,16 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     // MARK: - AgentMonitoring
 
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
-        // Before the status gate, not after it. The helper has to exist from
-        // the moment the user *could* have pasted the block naming it, and
-        // that moment is not the moment this app decides the paste is
-        // complete -- a registration made while this app was closed is live in
-        // their next session either way, and a missing helper there prints the
-        // one line CC-021 is about. Cheap enough to repeat: one read and a
-        // string comparison once the file is right.
-        await setup.prepareHelper()
-        let status = await setup.status()
-        guard status == .active else {
+        // The registration checked and the socket bound, in the order every
+        // hook product refreshes in (``HookLifecycleSource/gate(productName:)``).
+        // Both are this app's own files in this app's own directory, so unlike
+        // the port they replaced there is nothing to lose a race for and
+        // nothing in the user's file to follow.
+        let status: IntegrationSetupStatus
+        switch await hooks.gate(productName: agent.displayName) {
+        case let .open(openStatus):
+            status = openStatus
+        case let .closed(availability, closedStatus, diagnostic):
             // Nothing is being monitored, so nothing is worth an edge. Left
             // alone, an integration switched off would keep a descriptor open
             // on the record of whatever turn happened to be running when it
@@ -466,16 +461,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
             terminalReadMembershipGate.reset()
             sessionsSeenOnScreenSinceTheirTurnEnded.removeAll()
             return snapshot(
-                availability: .setupRequired,
+                availability: availability,
                 sessions: [],
-                setupStatus: status,
-                diagnostic: status == .repairRequired
-                    ? "The Claude Code hook registration is not what this version "
-                        + "needs; paste it again from Settings. A missing event "
-                        + "raises no error, it simply never arrives, and a handler "
-                        + "of an outdated shape (one missing `async`, say) leaves "
-                        + "the session waiting on this app to answer."
-                    : "The Claude Code integration is not registered yet."
+                setupStatus: closedStatus,
+                diagnostic: diagnostic
             )
         }
 
@@ -499,31 +488,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
             await sessions.invalidate()
         }
         wasWatchingSessionsDirectory = watchingSessionsDirectory
-
-        // Install the helper the registration names, and bind the socket it
-        // hands payloads to. Both are this app's own files in this app's own
-        // directory, so unlike the port they used to replace there is nothing
-        // here to lose a race for and nothing in the user's file to follow.
-        guard await prepareTransport() else {
-            recordWatcher.watch(processIdentifiers: [])
-            transcriptWatcher.watch(paths: [])
-            // Nothing is listed, so nothing is waiting to be read. Left alone,
-            // the gate would go on reporting a re-check deadline for rows this
-            // branch is not going to publish, and a session that was on screen
-            // when the integration was switched off would still be holding a
-            // claim to have been seen there when it comes back.
-            terminalReadMembershipGate.reset()
-            sessionsSeenOnScreenSinceTheirTurnEnded.removeAll()
-            return snapshot(
-                availability: .disconnected,
-                sessions: [],
-                setupStatus: status,
-                diagnostic: "Cannot open the hook helper or bind its socket in "
-                    + "this app's support folder. Either the folder is not "
-                    + "writable, or another copy of this app is already running "
-                    + "and receiving the events — only one copy can."
-            )
-        }
 
         let consumed = await hookEvents.drainDeliveredEvents()
         // Presence first, and once. It is asked before the list rather than
@@ -719,11 +683,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
                 }
             }
         }
-        // What draining the queue had to say about it survives whichever of
-        // those calls ran, none of which knows anything about the files this
-        // refresh read: a corrupt event is reported on the refresh that found
-        // it, whether or not a turn also ended in the same one.
-        let hookDiagnostic = MonitorDiagnostics.combined(consumed.diagnostic, hookState.diagnostic)
+        // The reducer's own account of its health. It stands for the run
+        // rather than for one drain, so every snapshot the calls above return
+        // carries the whole of it; joining the drain's copy to a later one
+        // said the same sentence twice.
+        let hookDiagnostic = hookState.diagnostic
 
         // What this refresh's reading of the list says exists. Three things
         // are held to it below, and "the same set" is meant literally.
@@ -1657,17 +1621,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         return Set(names ?? [])
     }
 
-    /// Ensures the helper exists and the socket is bound.
-    ///
-    /// Both every refresh, and cheap on both counts: the helper is one read and
-    /// a string comparison, and ``AgentHookListener/start(socketURL:)`` returns
-    /// immediately once it holds that socket. Repeating it is what repairs a
-    /// support folder a user emptied while the app was running, which is the
-    /// same reason the sessions watcher re-attaches here.
-    private func prepareTransport() async -> Bool {
-        await hooks.prepareTransport()
-    }
-
     private func row(
         for turn: HookTurnState,
         in session: ClaudeCodeSession,
@@ -1798,8 +1751,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         quota: QuotaSnapshot = .unavailable,
         presence: AgentPresence = .unknown
     ) -> AgentSnapshot {
-        lastDiagnostic = diagnostic
-        return AgentSnapshot(
+        AgentSnapshot(
             agent: .claudeCode,
             availability: availability,
             sessions: sessions,

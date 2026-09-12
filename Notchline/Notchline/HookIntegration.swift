@@ -1438,7 +1438,7 @@ nonisolated enum HookInstallStateFile {
 /// ``ManagedHooksConfiguration`` load-bearing for the *user's own* definitions
 /// rather than merely tidy: removing a group from the middle renumbers every
 /// group after it and silently drops their trust.
-actor CodexHookRegistrar {
+actor CodexHookRegistrar: HookRegistrationSetup {
     /// Registered from the vocabulary rather than listed again here.
     ///
     /// The registrar's list and the reducer's list used to be two hand-synced
@@ -1552,11 +1552,48 @@ actor CodexHookRegistrar {
     /// watching for a row to change.
     @discardableResult
     func prepareHelper() -> Bool {
-        AgentHookHelper.prepare(
+        didCompareHelperThisLaunch = true
+        return AgentHookHelper.prepare(
             at: paths,
             answerWindowSeconds: CodexHookVocabulary().answerWindowSeconds,
             fileManager: fileManager
         ) != .failed
+    }
+
+    /// Whether this run has already compared the installed helper's bytes.
+    private var didCompareHelperThisLaunch = false
+
+    /// Binds the socket on every refresh, and writes the helper on the two
+    /// occasions it can be wrong.
+    ///
+    /// Comparing the helper's bytes used to sit on the refresh path as
+    /// `upgradeManagedHookIfNeeded()`, reading a file to answer a question
+    /// that can only change when the app itself is upgraded. So the comparison
+    /// happens once per launch, and again only if a `stat` says the file has
+    /// gone -- which a user emptying the support folder can cause, and which is
+    /// loud when it happens: `/bin/sh` on a missing path writes to stderr, and
+    /// Codex renders that as a hook error in the user's session (ADR 0013).
+    ///
+    /// **The socket is bound whatever the write says.** A helper already on
+    /// disk from an earlier launch still delivers, and a Codex that was running
+    /// before this app has its trusted definitions loaded and firing; refusing
+    /// to listen because a rewrite failed would drop events a working helper
+    /// is sending.
+    func prepareHelperForTransport() -> Bool {
+        if !didCompareHelperThisLaunch || !isHelperInstalled {
+            prepareHelper()
+        }
+        return true
+    }
+
+    /// The settings card's status: the registration, projected against whether
+    /// any of its definitions has been seen to fire -- the only evidence that
+    /// Codex's trust step was completed.
+    func status(observedBy repository: HookEventRepository) async -> IntegrationSetupStatus {
+        IntegrationSetupStatus.card(
+            registration: registration(),
+            hasObservedEvent: await repository.observedState().hasObservedEvent
+        )
     }
 
     func install() throws {

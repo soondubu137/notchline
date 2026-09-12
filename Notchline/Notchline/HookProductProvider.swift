@@ -194,33 +194,20 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     }
 
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
-        let status = await hooks.setupStatus()
-        guard status == .active else {
+        let status: IntegrationSetupStatus
+        switch await hooks.gate(productName: agent.displayName) {
+        case let .open(openStatus):
+            status = openStatus
+        case let .closed(availability, closedStatus, diagnostic):
             // Nothing is listed, so nothing is waiting to be read. Left
             // standing, the gate's entries would go on booking a re-check a
             // second for rows nobody can see.
             readGate.reset()
             return snapshot(
-                availability: .setupRequired,
+                availability: availability,
                 sessions: [],
-                setupStatus: status,
-                diagnostic: status == .repairRequired
-                    ? "The \(agent.displayName) hook registration is not what this "
-                        + "version writes; turn its switch on in Settings to rewrite it."
-                    : "The \(agent.displayName) integration is not registered yet.",
-                presence: .unknown
-            )
-        }
-        guard await hooks.prepareTransport() else {
-            readGate.reset()
-            return snapshot(
-                availability: .disconnected,
-                sessions: [],
-                setupStatus: status,
-                diagnostic: "Cannot open the hook helper or bind its socket in this "
-                    + "app's support folder. Either the folder is not writable, or "
-                    + "another copy of this app is already running and receiving the "
-                    + "events — only one copy can.",
+                setupStatus: closedStatus,
+                diagnostic: diagnostic,
                 presence: .unknown
             )
         }

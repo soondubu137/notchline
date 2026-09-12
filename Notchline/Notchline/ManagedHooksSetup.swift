@@ -48,7 +48,7 @@ import Foundation
 /// bind. What it costs is a process per event: 6.3 ms measured, against 1.2 ms
 /// for the loopback POST it replaces, and against the 30 ms the Codex helper on
 /// the other side of this app has always cost.
-actor ManagedHooksSetup {
+actor ManagedHooksSetup: HookRegistrationSetup {
     private let paths: HookIntegrationPaths
     private let vocabulary: any AgentHookVocabulary
     private let fileManager: FileManager
@@ -117,6 +117,13 @@ actor ManagedHooksSetup {
         }
     }
 
+    /// Every refresh: the comparison is one read and a string compare, and
+    /// a helper that is missing or stale is the one thing that must never be
+    /// left in place while the registration names it.
+    func prepareHelperForTransport() -> Bool {
+        prepareHelper()
+    }
+
     // MARK: - Reading what is registered
 
     /// How complete the registration is, read-only.
@@ -131,6 +138,10 @@ actor ManagedHooksSetup {
             registration: configuration.registration(in: readSettings()),
             hasObservedEvent: true
         )
+    }
+
+    func status(observedBy repository: HookEventRepository) -> IntegrationSetupStatus {
+        status()
     }
 
     // MARK: - Writing the registration
