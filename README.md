@@ -20,7 +20,7 @@
 
 ## Overview
 
-Notchline shows which sessions are working, waiting for you or completed. Hover to see monitored sessions, read previews, answer supported requests or return to the originating conversation. Displays without a notch use a compact pill. Currently supports Codex Desktop, Claude Code (Desktop + CLI) and, as a listed-only product, Antigravity CLI.
+Notchline shows which sessions are working, waiting for you or completed. Hover to see monitored sessions, read previews, answer supported requests or return to the originating conversation. Displays without a notch use a compact pill. Currently supports Codex Desktop, Claude Code (Desktop + CLI) and Antigravity CLI, each at the tier it earns.
 
 <p align="center">
   <img src="design/assets/07-readme/notchline-anatomy.png" width="880" alt="Notchline anatomy: the compact view with the status mark, session and subagent counts, project name, unread dot and elapsed timer; and the expanded view with the live session list grouped into one block per product, recent sessions and usage.">
@@ -44,12 +44,26 @@ My screens are already full of code editors, browser windows, and communication 
 - **Usage** — Check quota windows and today’s token usage for connected products.
 - **Display settings** — Choose a display and adjust the compact overlay’s appearance.
 
+## Supported products
+
+Support is tiered, and each tier is a promise about what the notch does. Tiers are cumulative: a product sits at the highest tier whose every requirement it meets, and anything it cannot observe is declared rather than guessed.
+
+| Tier | What the notch does | Products |
+| --- | --- | --- |
+| **0 — Listed** | A row appears when a turn starts, changes when the work ends, shows elapsed time, and takes you back to where it runs. Waits, request content and read state are not detected. | Antigravity CLI |
+| **1 — Attended** | Adds waits: the row shows when a session needs you and what it is waiting for, and stops asking once you deal with it in the product. | — |
+| **2 — Answerable** | Adds answering: respond to supported approvals and questions from the notch, with a stale click unable to answer the wrong request. | Codex Desktop, Claude Code (Desktop + CLI) |
+
+Capabilities are declared per product, independently of tier. Codex navigates to the exact Thread, names its actual Desktop Project and reports final answer text; Claude Code raises the host window or terminal tab, names the working directory, and reads quota from up to three windows. Settings states each product's boundaries.
+
+See the [tiered support plan](docs/technical-explorations/multi-product-provider-architecture/tiered-support.md) for the full requirements and capability list.
+
 ## Limitations
 
 - **Existing activity** — Existing sessions appear only after a new lifecycle event establishes their state.
 - **Side chats** — Temporary side chats do not appear as rows.
 - **Claude Code navigation** — Exact session or terminal-tab selection is not always available, and full-screen hosts cannot be reached.
-- **Antigravity CLI** — Listed only: a row shows Running from a turn's first model call until it ends, with no title and no approval or question detection, and clears when the CLI process exits.
+- **Antigravity CLI** — Tier 0: a row shows Running from a turn's first model call until it ends, with no title and no approval or question detection, and clears when the CLI process exits.
 - **Persistent history** — Recent sessions are temporary; there is no searchable archive or cross-device sync.
 - **Compatibility** — Some features depend on undocumented product behaviour and may break after updates.
 
@@ -88,7 +102,7 @@ Product adapters collect local hook events and metadata, reduce them into sessio
 
 ## Next steps
 
-Introduce tiered support for more coding agents: a shared monitoring core for Turn starts and endings, with optional product-specific capabilities such as wait detection, previews, navigation, read state, subagents, quota, and answers. Products can add these capabilities independently while sharing the same lifecycle rules. See the [tiered support plan](docs/technical-explorations/multi-product-provider-architecture/README.md).
+The tier ladder is in place: a shared monitoring core handles turn starts and endings, and each product opts into wait detection, previews, navigation, read state, subagents, quota and answers. Next is adding further coding agents at the tier they earn, and raising Antigravity CLI if its hooks ever observe a wait. See the [architecture plan](docs/technical-explorations/multi-product-provider-architecture/README.md).
 
 ## Comparison with Open Island
 
@@ -97,7 +111,7 @@ Introduce tiered support for more coding agents: a shared monitoring core for Tu
 | Capability | Notchline | Open Island |
 | --- | --- | --- |
 | Shared features | Notch overlay, previews, supported request answers, Codex deep links and Recent | Same core features |
-| Supported products | Codex Desktop, Claude Code (Desktop + CLI) and Antigravity CLI (listed only) | Also standalone Codex CLI, Cursor, Gemini CLI, OpenCode and more |
+| Supported products | Codex Desktop, Claude Code (Desktop + CLI) and Antigravity CLI (Tier 0) | Also standalone Codex CLI, Cursor, Gemini CLI, OpenCode and more |
 | Completed rows | Cleared using per-Thread read evidence | Visibility follows activity and process state |
 | Codex Projects | Actual Desktop Project assignments and Chats | Working-directory names |
 | Codex automatic approvals | Distinguishes automatic review from requests needing a person | No equivalent filter found |
