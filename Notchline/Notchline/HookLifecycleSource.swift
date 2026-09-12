@@ -16,6 +16,9 @@ struct HookLifecycleSource: Sendable {
     let setup: ManagedHooksSetup
     let repository: HookEventRepository
     let listener: AgentHookListener
+    /// What stands between the socket and the reducer for a product whose
+    /// payloads are not spelled the reducer's way; nil for the two that are.
+    let translator: (any HookPayloadTranslating)?
 
     init(
         paths: HookIntegrationPaths,
@@ -44,9 +47,40 @@ struct HookLifecycleSource: Sendable {
             ignoredWorkingDirectory: ignoredWorkingDirectory
         )
         self.repository = repository
+        let translator = vocabulary.payloadTranslator
+        self.translator = translator
         self.listener = listener ?? AgentHookListener(clock: clock) { body, receivedAt, descriptor in
-            repository.deliver(body, at: receivedAt, on: descriptor)
+            Self.deliver(body, at: receivedAt, on: descriptor, through: translator, to: repository)
         }
+    }
+
+    /// One payload, as the helper delivered it, into the reducer — through the
+    /// product's translator where it has one. The listener's delivery closure
+    /// and a test that hands payloads over without a socket both go this way,
+    /// so neither can reach the reducer with bytes the other would not.
+    @discardableResult
+    nonisolated func deliver(
+        _ body: Data,
+        at receivedAt: Date,
+        on descriptor: Int32? = nil
+    ) -> AgentHookListener.Disposition {
+        Self.deliver(body, at: receivedAt, on: descriptor, through: translator, to: repository)
+    }
+
+    nonisolated private static func deliver(
+        _ body: Data,
+        at receivedAt: Date,
+        on descriptor: Int32?,
+        through translator: (any HookPayloadTranslating)?,
+        to repository: HookEventRepository
+    ) -> AgentHookListener.Disposition {
+        guard let translator else {
+            return repository.deliver(body, at: receivedAt, on: descriptor)
+        }
+        guard let canonical = translator.canonicalPayload(from: body, receivedAt: receivedAt) else {
+            return .close
+        }
+        return repository.deliver(canonical, at: receivedAt, on: descriptor)
     }
 
     /// The reducer's "ask me again" edge.

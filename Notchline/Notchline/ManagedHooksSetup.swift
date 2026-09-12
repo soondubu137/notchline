@@ -99,6 +99,7 @@ actor ManagedHooksSetup {
         switch AgentHookHelper.prepare(
             at: paths,
             answerWindowSeconds: vocabulary.answerWindowSeconds,
+            announcesEvent: vocabulary.registrationDialect.eventNameArrivesAsArgument,
             fileManager: fileManager
         ) {
         case .current:
@@ -170,14 +171,20 @@ actor ManagedHooksSetup {
     /// registered a shape this build calls `mismatched`. A fixture that asks
     /// the product what it writes cannot drift from it.
     nonisolated var configuration: ManagedHooksConfiguration {
-        .command(
-            paths.hookHelper.path,
-            arguments: [],
+        let dialect = vocabulary.registrationDialect
+        return .command(
+            dialect.handlersAreShellCommandLines
+                ? AgentHookHelper.shellCommandLine(forHelper: paths.hookHelper)
+                : paths.hookHelper.path,
+            arguments: dialect.handlersAreShellCommandLines ? nil : [],
+            containerKey: dialect.containerKey,
             legacyCommands: vocabulary.legacyCommandMarkers,
             definitions: vocabulary.managedDefinitions,
             // No `description` key, even on a file this app creates: Claude
-            // Code validates this file's keys, and inventing one would make
-            // this app's first act putting something unrecognised in it.
+            // Code validates this file's keys, Antigravity CLI would read one
+            // as a hook named `description` and refuse the file, and inventing
+            // one would make this app's first act putting something
+            // unrecognised in the user's file.
             descriptionForNewFiles: nil
         )
     }

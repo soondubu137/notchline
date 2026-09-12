@@ -325,11 +325,31 @@ nonisolated enum AgentHookHelper {
     ///   answer on the events that ask. It has to be *inside* the timeout the
     ///   definition registers: a helper that gives up on its own exits 0, and
     ///   one the product kills is a hook error in the user's session.
+    /// - Parameter announcesEvent: whether the registration hands the helper
+    ///   the event's name as `$1`, because the product's payload does not
+    ///   carry one (``HookRegistrationDialect/eventNameArrivesAsArgument``).
+    ///   The name then goes ahead of the payload on a line of its own, and the
+    ///   product's ``HookPayloadTranslating`` reads it back off the front.
+    ///   Antigravity CLI is the product this exists for: its five hook payloads
+    ///   share one set of fields and none of them is the event (measured
+    ///   2026-09-11, 1.2.2). The two products whose payloads name their event
+    ///   keep the script they had, byte for byte.
     nonisolated static func script(
         socketPath: String,
-        answerWindowSeconds: Int
+        answerWindowSeconds: Int,
+        announcesEvent: Bool = false
     ) -> String {
-        """
+        let forward = announcesEvent
+            ? """
+            # This product's payload does not say which event fired; the
+            # registration passed the name as $1, and it goes ahead of the
+            # payload on one line.
+            { printf '%s\\n' "${1:-}"; cat; } | /usr/bin/nc -U -w 1 \(singleQuoted(socketPath)) >/dev/null
+            """
+            : """
+            /usr/bin/nc -U -w 1 \(singleQuoted(socketPath)) >/dev/null
+            """
+        return """
         #!/bin/sh
         # Notchline — hands one hook payload to the running app, and on the
         # events that ask a person, carries the app's answer back.
@@ -348,10 +368,21 @@ nonisolated enum AgentHookHelper {
             /usr/bin/nc -U -w \(answerWindowSeconds) \(singleQuoted(socketPath))
             exit 0
         fi
-        /usr/bin/nc -U -w 1 \(singleQuoted(socketPath)) >/dev/null
+        \(forward)
         exit 0
 
         """
+    }
+
+    /// The helper named through `/bin/sh` with its path quoted, for a product
+    /// that parses `command` with a shell and has no `args` key.
+    ///
+    /// Codex has always been registered this way (``CodexHookRegistrar``);
+    /// Antigravity CLI's schema is the same shape. The path is the one string
+    /// such a product never sees rewritten, so the quoting here is part of the
+    /// registration's identity and not a detail of it.
+    nonisolated static func shellCommandLine(forHelper helper: URL) -> String {
+        "/bin/sh \(singleQuoted(helper.path))"
     }
 
     /// Wraps a path for `sh`, including one with a quote in it.
@@ -381,11 +412,13 @@ nonisolated enum AgentHookHelper {
     nonisolated static func prepare(
         at paths: HookIntegrationPaths,
         answerWindowSeconds: Int,
+        announcesEvent: Bool = false,
         fileManager: FileManager
     ) -> Preparation {
         let desired = script(
             socketPath: paths.hookSocket.path,
-            answerWindowSeconds: answerWindowSeconds
+            answerWindowSeconds: answerWindowSeconds,
+            announcesEvent: announcesEvent
         )
         if let installed = try? String(contentsOf: paths.hookHelper, encoding: .utf8),
            installed == desired,
@@ -473,6 +506,56 @@ nonisolated enum HookSignal: Sendable, Equatable {
     case subagentStopped
     /// Recognised and consumed, with nothing to say about turn state.
     case inert
+}
+
+/// How one product's registration file is arranged, and how its helper learns
+/// which event fired.
+///
+/// Three facts the two shipping products happened to share and a third did
+/// not, so they were never written down until Antigravity CLI arrived with
+/// the opposite answer to each (measured 2026-09-11, 1.2.2): its root is a set
+/// of named hooks rather than one `hooks` object, its handler schema has no
+/// `args` key, and its payloads carry no event name at all.
+nonisolated struct HookRegistrationDialect: Sendable, Equatable {
+    /// The key at the file's root the events sit under. See
+    /// ``ManagedHooksConfiguration/containerKey``.
+    let containerKey: String
+    /// Whether a handler is one shell command line (`/bin/sh '…/hook.sh'`,
+    /// as Codex has always been registered) rather than an executable with an
+    /// `args` key (Claude Code's exec form, one process instead of two).
+    let handlersAreShellCommandLines: Bool
+    /// Whether each definition hands the helper its event's name as `$1`,
+    /// because the payload does not carry one. The helper then writes the
+    /// name ahead of the payload (``AgentHookHelper/script(socketPath:answerWindowSeconds:announcesEvent:)``)
+    /// and the product's ``HookPayloadTranslating`` reads it back off the
+    /// front.
+    let eventNameArrivesAsArgument: Bool
+
+    /// `hooks` at the root, the exec form, and a payload that names its event.
+    nonisolated static let standard = HookRegistrationDialect(
+        containerKey: "hooks",
+        handlersAreShellCommandLines: false,
+        eventNameArrivesAsArgument: false
+    )
+}
+
+/// Turns one product's payload, as its helper delivered it, into the payload
+/// the reducer reads (``HookPayload``).
+///
+/// The reducer's field names are the two shipping products' — `session_id`,
+/// `turn_id`, `cwd` — and it keys everything on the first two. A product that
+/// spells them otherwise, or does not send one of them, gets one of these in
+/// front of the reducer rather than a second decoder inside it: the reducer
+/// keeps every rule it has, and what a product means by "a Turn" stays in the
+/// product's own folder. The one stateful thing a translator may do is propose
+/// a **local** Turn identity at an unambiguous submission boundary, which is
+/// the allowance `multi-product-provider-architecture/README.md` §6.1 makes
+/// and the only one.
+nonisolated protocol HookPayloadTranslating: Sendable {
+    /// The canonical payload for `body`, or nil for bytes that are not this
+    /// product's business — dropped without a report, because a product that
+    /// shares its hooks file with a sibling product sees the sibling's events.
+    func canonicalPayload(from body: Data, receivedAt: Date) -> Data?
 }
 
 /// How one product's lifecycle events are spelled.
@@ -607,6 +690,15 @@ protocol AgentHookVocabulary: Sendable {
     /// `tiered-support.md` §2): the reducer then holds no connection for its
     /// requests and the row offers no affirmative.
     nonisolated var answering: (any RequestAnswering)? { get }
+    /// How this product's file arranges a registration, and how its helper
+    /// is told what fired. ``HookRegistrationDialect/standard`` for a product
+    /// whose file is `hooks` at the root and whose payload names its event.
+    nonisolated var registrationDialect: HookRegistrationDialect { get }
+    /// What turns this product's payload into the one the reducer reads, for
+    /// a product that spells its fields differently; nil for one that spells
+    /// them as the reducer does. Runs on the transport's read queue, before
+    /// anything else sees the bytes.
+    nonisolated var payloadTranslator: (any HookPayloadTranslating)? { get }
     /// `nil` means "not recognised": drop it and say so.
     nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal?
 
@@ -638,14 +730,19 @@ protocol AgentHookVocabulary: Sendable {
 }
 
 extension AgentHookVocabulary {
+    nonisolated var registrationDialect: HookRegistrationDialect { .standard }
+    nonisolated var payloadTranslator: (any HookPayloadTranslating)? { nil }
+
     /// The event whose connection an answer travels back on, if any.
     ///
     /// Read off the registration rather than named a second time: a definition
     /// that hands the helper ``AgentHookHelper/answeringArgument`` is exactly a
     /// definition whose connection is being held open, so the transport and the
-    /// registration cannot disagree about which one that is.
+    /// registration cannot disagree about which one that is. The argument is
+    /// compared, not merely present: a product whose every definition names
+    /// its event as the argument holds no connection open on any of them.
     nonisolated var answeringEventName: String? {
-        managedDefinitions.first { $0.argument != nil }?.event
+        managedDefinitions.first { $0.argument == AgentHookHelper.answeringArgument }?.event
     }
 
     /// How long the helper waits for an answer, which is inside
@@ -1539,7 +1636,7 @@ actor CodexHookRegistrar {
     /// indirection that lets behaviour change without touching the definition,
     /// and that is the entire reason this shape exists.
     nonisolated static func command(forHelper helper: URL) -> String {
-        "/bin/sh \(AgentHookHelper.singleQuoted(helper.path))"
+        AgentHookHelper.shellCommandLine(forHelper: helper)
     }
 
     /// The strict editor for this build's definitions.

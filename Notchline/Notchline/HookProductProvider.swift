@@ -112,8 +112,16 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         )
     }
 
-    /// The reducer, for a test that hands payloads over without a socket.
+    /// The reducer, for a test that reads what landed.
     nonisolated var repository: HookEventRepository { hooks.repository }
+
+    /// One payload as the product's helper would deliver it, for a test that
+    /// hands payloads over without a socket — through the product's translator,
+    /// exactly as the socket's arrive.
+    @discardableResult
+    nonisolated func deliver(_ body: Data, at receivedAt: Date) -> AgentHookListener.Disposition {
+        hooks.deliver(body, at: receivedAt)
+    }
 
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         let status = await hooks.setupStatus()
