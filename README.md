@@ -54,7 +54,7 @@ Support is tiered, and each tier is a promise about what the notch does. Tiers a
 | **1 — Attended** | Adds waits: the row shows when a session needs you and what it is waiting for, and stops asking once you deal with it in the product. | — |
 | **2 — Answerable** | Adds answering: respond to supported approvals and questions from the notch, with a stale click unable to answer the wrong request. | Codex Desktop, Claude Code (Desktop + CLI) |
 
-Capabilities are declared per product, independently of tier. Codex navigates to the exact Thread, names its actual Desktop Project and reports final answer text; Claude Code raises the host window or terminal tab, names the working directory, and reads quota from up to three windows. Antigravity CLI sits at Tier 0 and still titles its rows with what you asked and retires a finished row once you have been at its terminal — read state is a capability, not a tier. Settings states each product's boundaries.
+Capabilities are declared per product, independently of tier. Codex navigates to the exact Thread, names its actual Desktop Project and reports final answer text; Claude Code raises the host window or terminal tab, names the working directory, and reads quota from up to three windows. Antigravity CLI sits at Tier 0 and still titles its rows with what you asked and retires a finished row once you type in its terminal — read state is a capability, not a tier. Settings states each product's boundaries.
 
 See the [tiered support plan](docs/technical-explorations/multi-product-provider-architecture/tiered-support.md) for the full requirements and capability list.
 

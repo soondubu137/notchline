@@ -10,9 +10,9 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ### Added
 
-- **Antigravity CLI, listed only.** A row per conversation shows Running from a turn's first model call to its end and Completed after, named by the workspace folder, and clears when it has been read or when the `agy` process exits. Approvals and questions are not detected, which the Settings row says under its switch. (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`.)
+- **Antigravity CLI, listed only.** A row per conversation shows Running from a turn's first model call to its end and Completed after, named by the workspace folder, and clears once you type in its terminal or when the `agy` process exits. Approvals and questions are not detected, which the Settings row says under its switch. (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`.)
 - **An Antigravity row is titled with what was asked.** No hook payload carries the prompt, so rows said `Untitled`. The transcript the payload already names carries it, and carries it before the first model call, so the title is there while the turn still runs — read from the tail of that file, once per turn, and again at the turn's end only if the first read was too early.
-- **An Antigravity row leaves once you have read it.** A finished row used to stand on the notch until the conversation's next turn — in an open TUI session, for as long as you left it there. It now retires the way a Claude Code terminal row does: the terminal that conversation runs in has been typed at since the turn ended, with that terminal in front of you. A conversation under `tmux`, `ssh` or a pipe keeps the old lifecycle.
+- **An Antigravity row leaves once you type in its terminal.** A finished row used to stand on the notch until the conversation's next turn — in an open TUI session, for as long as you left it there. It now retires when the terminal that conversation runs in has been typed at since the turn ended, with that terminal in front of you. A conversation under `tmux`, `ssh` or a pipe keeps the old lifecycle.
 
 ### Changed
 
@@ -24,6 +24,8 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 - **The quota footer stops drawing a dashed line under a product it reads no quota for.** Antigravity CLI kept an outer row reading `-- today` and one window line reading `-- left` under it, which is how a reading that has not come back yet looks — for a window that does not exist. It now gets the outer row alone, the form the footer was designed with. (`docs/quota-footer-v2.md` §5.)
 
 ### Known limitations
+
+- **Reading an Antigravity answer without typing keeps its row, in every terminal.** The CLI turns on no focus reporting, so coming back to its tab reaches nothing this app can see. Asking the terminal which tab it shows was built and measured instead, then declined: it cost Notchline about 0.6 s of CPU a minute while a row waited, and Ghostty could only answer by working directory. (`antigravity-cli.md` §3.2.)
 
 Everything listed under `0.2.7` and earlier still stands, unchanged.
 
