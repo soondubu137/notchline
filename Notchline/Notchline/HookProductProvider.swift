@@ -79,9 +79,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents: AsyncStream<Void>
 
-    private let setup: ManagedHooksSetup
-    private let hookEvents: HookEventRepository
-    private let listener: AgentHookListener
+    private let hooks: HookLifecycleSource
     private let presence: any ProductPresenceReporting
     private let admission: any ThreadAdmitting
 
@@ -99,31 +97,26 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         changeEvents: [AsyncStream<Void>] = []
     ) {
         self.agent = agent
-        self.setup = ManagedHooksSetup(paths: paths, vocabulary: vocabulary, fileManager: fileManager)
-        let repository = HookEventRepository(
+        let hooks = HookLifecycleSource(
             paths: paths,
-            fileManager: fileManager,
+            vocabulary: vocabulary,
             clock: clock,
             timing: timing,
-            vocabulary: vocabulary
+            fileManager: fileManager
         )
-        self.hookEvents = repository
-        self.listener = AgentHookListener(clock: clock) { [repository] body, receivedAt, descriptor in
-            repository.deliver(body, at: receivedAt, on: descriptor)
-        }
+        self.hooks = hooks
         self.presence = presence
         self.admission = admission
         self.stateChangeEvents = DirectoryChangeWatcher.merged(
-            [repository.changeEvents()] + changeEvents
+            [hooks.changeEvents()] + changeEvents
         )
     }
 
     /// The reducer, for a test that hands payloads over without a socket.
-    nonisolated var repository: HookEventRepository { hookEvents }
+    nonisolated var repository: HookEventRepository { hooks.repository }
 
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
-        await setup.prepareHelper()
-        let status = await setup.status()
+        let status = await hooks.setupStatus()
         guard status == .active else {
             return snapshot(
                 availability: .setupRequired,
@@ -136,7 +129,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
                 presence: .unknown
             )
         }
-        guard await prepareTransport() else {
+        guard await hooks.prepareTransport() else {
             return snapshot(
                 availability: .disconnected,
                 sessions: [],
@@ -149,11 +142,11 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
             )
         }
 
-        var state = await hookEvents.drainDeliveredEvents()
+        var state = await hooks.repository.drainDeliveredEvents()
         let presence = await presence.presence()
         switch await admission.admission() {
         case let .exactly(threadIDs, readAt):
-            state = await hookEvents.removeThreads(notIn: threadIDs, snapshotStartedAt: readAt)
+            state = await hooks.repository.removeThreads(notIn: threadIDs, snapshotStartedAt: readAt)
         case .everyObservedThread, .unknown:
             break
         }
@@ -182,28 +175,23 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     func nextRefreshDeadline() async -> Date? { nil }
 
     func disconnect() async {
-        listener.stop()
+        hooks.disconnect()
     }
 
     func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
-        await hookEvents.answer(answer, on: handle.ticket)
+        await hooks.answer(answer, on: handle)
     }
 
     func setupStatus() async -> IntegrationSetupStatus {
-        await setup.status()
+        await hooks.setupStatus()
     }
 
     func installIntegration() async throws {
-        try await setup.install()
+        try await hooks.install()
     }
 
     func removeIntegration() async throws {
-        try await setup.uninstall()
-    }
-
-    private func prepareTransport() async -> Bool {
-        guard await setup.prepareHelper() else { return false }
-        return listener.start(socketURL: setup.socketURL)
+        try await hooks.remove()
     }
 
     private func row(for turn: HookTurnState) -> MonitoredSession {

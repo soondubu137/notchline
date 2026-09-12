@@ -30,6 +30,10 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     /// promised by any official contract -- see the registry.
     nonisolated static let desktopBundleIdentifier = "com.anthropic.claudefordesktop"
 
+    /// The hook transport, wired once (``HookLifecycleSource``); the three
+    /// below are its members, kept as their own names because the rest of this
+    /// actor reads them constantly.
+    private let hooks: HookLifecycleSource
     private let setup: ManagedHooksSetup
     private let hookEvents: HookEventRepository
     private let sessions: any ClaudeCodeSessionListing
@@ -238,9 +242,6 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     ) {
         self.commandIsInstalled = commandIsInstalled
             ?? { ClaudeExecutableLocator.locate() != nil }
-        let resolvedSetup = setup
-            ?? ManagedHooksSetup(paths: paths, vocabulary: ClaudeCodeHookVocabulary())
-        self.setup = resolvedSetup
         // The one folder this app's own quota reading runs in, named once and
         // given to everything that has to be able to tell that reading apart
         // from a session the user started. It reaches the app by two routes and
@@ -257,13 +258,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         let resolvedScreenAvailability = screenAvailability
             ?? ScreenAvailabilityWatcher()
         self.screenAvailability = resolvedScreenAvailability
-        let repository = hookEvents ?? HookEventRepository(
+        let hooks = HookLifecycleSource(
             paths: paths,
+            vocabulary: ClaudeCodeHookVocabulary(),
             clock: clock,
             timing: timing,
-            vocabulary: ClaudeCodeHookVocabulary(),
-            ignoredWorkingDirectory: quotaDirectory
+            ignoredWorkingDirectory: quotaDirectory,
+            setup: setup,
+            repository: hookEvents,
+            listener: listener
         )
+        self.hooks = hooks
+        self.setup = hooks.setup
+        let repository = hooks.repository
         self.hookEvents = repository
         let resolvedSessions = sessions ?? ClaudeCodeSessionRegistry(
             clock: clock,
@@ -276,11 +283,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         // a row draws has changed, and "this session has text where it had
         // none" is part of that projection -- while the deltas themselves stay
         // off it, because three a second is not a redraw rate.
-        let resolvedListener = listener ?? AgentHookListener(clock: clock) {
-            [repository] body, receivedAt, descriptor in
-            repository.deliver(body, at: receivedAt, on: descriptor)
-        }
-        self.listener = resolvedListener
+        self.listener = hooks.listener
         self.transcripts = transcripts ?? ClaudeCodeTranscriptReader()
         // The quota's own edge. Nothing waits for the reading any more, so the
         // reading has to say when it landed -- otherwise a figure read at
@@ -1557,11 +1560,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     /// which connection they go down is the registry's. This is the boundary
     /// the store reaches both through.
     func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
-        await hookEvents.answer(answer, on: handle.ticket)
+        await hooks.answer(answer, on: handle)
     }
 
     func setupStatus() async -> IntegrationSetupStatus {
-        await setup.status()
+        await hooks.setupStatus()
     }
 
 
@@ -1572,15 +1575,15 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     /// specific: the switch in Settings is the same switch Codex has, and it
     /// converges through the same path in ``MonitorStore``.
     func installIntegration() async throws {
-        try await setup.install()
+        try await hooks.install()
     }
 
     func removeIntegration() async throws {
-        try await setup.uninstall()
+        try await hooks.remove()
     }
 
     func disconnect() async {
-        listener.stop()
+        hooks.disconnect()
     }
 
     /// The process running a session, for navigation.
@@ -1679,8 +1682,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     /// support folder a user emptied while the app was running, which is the
     /// same reason the sessions watcher re-attaches here.
     private func prepareTransport() async -> Bool {
-        guard await setup.prepareHelper() else { return false }
-        return listener.start(socketURL: setup.socketURL)
+        await hooks.prepareTransport()
     }
 
     private func row(
