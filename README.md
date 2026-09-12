@@ -20,7 +20,7 @@
 
 ## Overview
 
-Notchline shows which sessions are working, waiting for you or completed. Hover to see monitored sessions, read previews, answer supported requests or return to the originating conversation. Displays without a notch use a compact pill. Currently supports Codex Desktop, Claude Code (Desktop + CLI) and Antigravity CLI, with the coverage listed below.
+Notchline shows which sessions are working, waiting for you or completed. Hover to see monitored sessions, read previews, answer supported requests or return to the originating conversation. Displays without a notch use a compact pill. Currently supports Codex Desktop, Claude Code (Desktop + CLI) and Antigravity (Desktop + CLI), with the coverage listed below.
 
 <p align="center">
   <img src="design/assets/07-readme/notchline-anatomy.png" width="880" alt="Notchline anatomy: the compact view with the status mark, session and subagent counts, project name, unread dot and elapsed timer; and the expanded view with the live session list grouped into one block per product, recent sessions and usage.">
@@ -61,7 +61,7 @@ Support has six cumulative levels. Each level adds the capabilities below; read 
 | --- | --- | --- |
 | **Codex Desktop** | **L6** for ordinary approvals; `request_permissions` and synchronous questions are reading-only, asynchronous questions preview-only | Exact Thread navigation, Desktop Project identity, Desktop read removal, final-answer previews, subagents, a quota window and today's tokens |
 | **Claude Code (Desktop + CLI)** | **L6** for tool approvals, plan approval and question sets | Working-directory Projects; Desktop/terminal read removal under stated conditions; host navigation with terminal-tab selection where supported; subagents, up to three quota windows and today's tokens. No final-answer preview |
-| **Antigravity CLI** | **L3** for observed CLI Turns: prompt-derived titles and event-updated progress. No approval/input detection, request reading or answering | Conditional terminal read removal and navigation; final-answer previews. No quota, today's tokens, subagents or cold-start recovery; Project names depend on mode |
+| **Antigravity** (Desktop + CLI) | **L3** for observed Turns on both surfaces: prompt-derived titles and event-updated progress; Desktop rows use Desktop's Projects. No approval/input detection, request reading or answering | Read removal from Desktop's view record or, for the CLI, conditional terminal gestures; Desktop raised or CLI terminal selected; final-answer previews. No quota, today's tokens, subagents or cold-start recovery |
 
 No product recovers pre-launch Turn state. Read removal only clears a monitoring row; it never archives the Thread. Unsupported features and temporary read failures are different. See the [support contract and full capability matrix](docs/product-support.md) for each level's requirements, exclusions, request forms and host/mode conditions.
 
@@ -70,7 +70,7 @@ No product recovers pre-launch Turn state. Read removal only clears a monitoring
 - **Existing activity** — Existing sessions appear only after a new lifecycle event establishes their state.
 - **Side chats** — Temporary side chats do not appear as rows.
 - **Claude Code navigation** — Exact session or terminal-tab selection is not always available, and full-screen hosts cannot be reached.
-- **Antigravity CLI** — L3: a row shows `Working...` from a Turn's first model call until its observed end, titled with what you asked, with no approval or question detection or usage quota. The line under the title updates after each model call, so a sentence written before a command appears once that command returns. A finished row clears once you type or paste in the foreground terminal that conversation runs in, when the CLI process exits, or on a right-click; coming back to look without typing does not clear it, because the CLI does not ask its terminal to report focus.
+- **Antigravity** — L3, for Desktop and the CLI through one switch: a row shows `Working...` from a Turn's first model call until its observed end, titled with what you asked, with no approval or question detection or usage quota. The line under the title updates after each model call, so a sentence written before a command appears once that command returns. A finished row clears once you type or paste in the foreground terminal that conversation runs in, when the CLI process exits, or on a right-click; coming back to look without typing does not clear it, because the CLI does not ask its terminal to report focus. A Desktop row is filed under Desktop's Project and clears once Desktop records the conversation as viewed after it finished — when you switch to another conversation or back to Desktop's window on it; clicking it raises Desktop. A Turn stopped with Desktop's **Stop execution** sends no end, so its row keeps `Working...` until the next Turn, Desktop quitting or a right-click.
 - **Persistent history** — Recent sessions are temporary; there is no searchable archive or cross-device sync.
 - **Compatibility** — Some features depend on undocumented product behaviour and may break after updates.
 
@@ -109,7 +109,7 @@ Product adapters collect local hook events and metadata, reduce them into sessio
 
 ## Next steps
 
-The shared monitoring core handles Turn starts and endings, and each product opts into wait detection, previews, navigation, read state, subagents, quota and answers. Next is adding further coding agents at the support level they earn, and raising Antigravity CLI if its hooks ever observe a wait. See the [architecture plan](docs/technical-explorations/multi-product-provider-architecture/README.md).
+The shared monitoring core handles Turn starts and endings, and each product opts into wait detection, previews, navigation, read state, subagents, quota and answers. Next is adding further coding agents at the support level they earn, and raising Antigravity if its hooks ever observe a wait. See the [architecture plan](docs/technical-explorations/multi-product-provider-architecture/README.md).
 
 ## Comparison with Open Island
 
@@ -118,7 +118,7 @@ The shared monitoring core handles Turn starts and endings, and each product opt
 | Capability | Notchline | Open Island |
 | --- | --- | --- |
 | Shared features | Notch overlay, previews, supported request answers, Codex deep links and Recent | Same core features |
-| Supported products | Codex Desktop, Claude Code (Desktop + CLI) and Antigravity CLI (L3) | Also standalone Codex CLI, Cursor, Gemini CLI, OpenCode and more |
+| Supported products | Codex Desktop, Claude Code (Desktop + CLI) and Antigravity (Desktop + CLI, L3) | Also standalone Codex CLI, Cursor, Gemini CLI, OpenCode and more |
 | Completed rows | Cleared using per-Thread read evidence | Visibility follows activity and process state |
 | Codex Projects | Actual Desktop Project assignments and Chats | Working-directory names |
 | Codex automatic approvals | Distinguishes automatic review from requests needing a person | No equivalent filter found |

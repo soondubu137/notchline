@@ -771,7 +771,7 @@ The folding wake-up gained an edge to match: a changed Turn is a change even whe
 
 `UserPromptSubmit`'s `prompt` is enabled by `AgentHookVocabulary.carriesPromptText` — a switch previously called `carriesTurnText`, where one switch governed both the prompt and `Stop`'s `last_assistant_message`, so the correct judgement "this product's final answer comes only from `MessageDisplay`" incidentally switched the prompt off too. It is now two: `carriesPromptText` true for both products, and `carriesFinalAnswerText` true for Codex only. (Antigravity CLI, below, sets both, because its translator writes both fields.)
 
-### How text reaches this process (Antigravity CLI)
+### How text reaches this process (Antigravity)
 
 **Read, not received, at events the product already sends.** No payload carries text and nothing streams, so `AntigravityPayloadTranslator` reads the tail of the transcript the payload names — `AntigravityTranscriptFile`, the same bounded read that titles the row — at two events. A later `PreInvocation` of an open Turn, which used to be dropped, hands the newest non-empty `PLANNER_RESPONSE` `content` over as one whole message under the synthetic name `PlannerResponse`, the vocabulary's `messageDeltaEventName`, with `message_id` the step index and `prompt_id` the local Turn id; it then takes Claude Code's path into `HookSessionPreviewStore` and never reaches the reducer's mailbox. `Stop` puts the closing words under `last_assistant_message`.
 

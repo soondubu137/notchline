@@ -4,7 +4,7 @@ This file applies to the whole repository, including every subdirectory.
 
 ## 1. What this project is
 
-A macOS overlay at the top of the screen. It summarises, with minimal interruption, the Turns from Codex Desktop, Claude Code and Antigravity CLI that the user still needs to attend to, and offers a way back into the originating Thread. Collapsed, it hugs the notch or menu bar; on hover it expands into a list of live monitored Threads.
+A macOS overlay at the top of the screen. It summarises, with minimal interruption, the Turns from Codex Desktop, Claude Code and Antigravity (Desktop and CLI) that the user still needs to attend to, and offers a way back into the originating Thread. Collapsed, it hugs the notch or menu bar; on hover it expands into a list of live monitored Threads.
 
 **Terminology comes before code.** *Thread*, *Turn*, *monitoring lifecycle*, *current activity projection*, *unread terminal state*, *presence* and *integration availability* have precise definitions here. Read [`CONTEXT.md`](CONTEXT.md) before writing code, docs or a commit message, and honour its banned alternatives.
 
@@ -95,7 +95,7 @@ Read the existing implementation and its tests first. Nearly every simplificatio
 
 The full list lives in [`docs/system-architecture.md`](docs/system-architecture.md) §7 and is authoritative. These are the ones most easily violated without noticing:
 
-- **One orchestration centre per product.** Decisions spanning a product's data sources belong in that product's Provider: `HookProductProvider` for a product observed through its hooks alone, composed from the product's sources (Claude Code, Antigravity CLI), and `LiveCodexMonitorService` for Codex, whose App Server is a second lifecycle beside its hooks. A source supplies evidence and decides nothing across sources; UI, file adapters and transport do not assemble state from each other.
+- **One orchestration centre per product.** Decisions spanning a product's data sources belong in that product's Provider: `HookProductProvider` for a product observed through its hooks alone, composed from the product's sources (Claude Code, Antigravity), and `LiveCodexMonitorService` for Codex, whose App Server is a second lifecycle beside its hooks. A source supplies evidence and decides nothing across sources; UI, file adapters and transport do not assemble state from each other.
 - **One Turn reducer.** Hook events enter only `HookEventRepository`. A second source (a `TurnEvidenceSource`, an admission list) may *retire* a Turn, but never open, name or describe one, and only inside that actor with its ordering guards.
 - **One UI data contract.** Layers above consume `MonitorSnapshot` and nothing else.
 - **Private dependencies stop at the boundary.** The `.codex-global-state.json` schema exists only inside the two read-only repositories; the domain layer sees Project resolution and an unread set tagged with its authority.

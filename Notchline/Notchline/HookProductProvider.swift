@@ -248,9 +248,10 @@ struct WorkingDirectoryRowContent: RowContentSource {
 /// with the product's evidence handed in as sources.
 ///
 /// **This is `tiered-support.md` §5.4's runtime, and both hook-only products
-/// are compositions of it.** Antigravity CLI is the vocabulary, a scanner and
-/// the terminal's read evidence; Claude Code is the vocabulary and six sources
-/// of its own (``ClaudeCodeMonitorService``). What the runtime owns is what
+/// are compositions of it.** Antigravity is the vocabulary, its two surfaces'
+/// session reading, Desktop's Projects and a read evidence per surface; Claude
+/// Code is the vocabulary and six sources of its own
+/// (``ClaudeCodeMonitorService``). What the runtime owns is what
 /// neither may do differently:
 ///
 /// 1. the transport gate — helper, status, socket — and what a closed one

@@ -2,7 +2,7 @@
 
 ## Support boundaries
 
-[Product support](product-support.md) lists the six levels and the complete per-product coverage; the switches configure observation and do not upgrade a support level. `ProductDescriptor.declaredBoundary` supplies the concise limitation beneath a Settings row. Antigravity CLI is L3: Settings states that approvals and questions are not detected, an active Turn uses `Working...`, and usage quota is unsupported. A missing boundary sentence on Codex or Claude Code does not promise every request form or independent capability. Connection diagnostics, signed-out quota and temporary read failures remain separate from declared support.
+[Product support](product-support.md) lists the six levels and the complete per-product coverage; the switches configure observation and do not upgrade a support level. `ProductDescriptor.declaredBoundary` supplies the concise limitation beneath a Settings row. Antigravity is L3 on both of its surfaces. Its one switch, titled `Antigravity`, writes `~/.gemini/config/hooks.json`, which Antigravity Desktop and Antigravity CLI both load, so it turns observation of both on and off together; Settings states that approvals and questions are not detected, an active Turn uses `Working...` and may keep it after being stopped, and usage quota is unsupported. A missing boundary sentence on Codex or Claude Code does not promise every request form or independent capability. Connection diagnostics, signed-out quota and temporary read failures remain separate from declared support.
 
 ## 1. Turning the Codex switch on
 

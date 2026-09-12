@@ -174,11 +174,92 @@ struct AntigravityConformanceTests {
         }
     }
 
+    /// Whether Antigravity Desktop is running, as the test says.
+    final class DesktopStub: AntigravityDesktopLocating, @unchecked Sendable {
+        private let lock = NSLock()
+        private var running: HostApplication?
+
+        nonisolated init(running: Bool = false) {
+            if running { self.running = Self.application }
+        }
+
+        nonisolated static let application = HostApplication(
+            bundleIdentifier: AntigravityDesktopApplication.bundleIdentifier,
+            displayName: "Antigravity",
+            processIdentifier: 5150
+        )
+
+        nonisolated func set(running isRunning: Bool) {
+            lock.lock()
+            running = isRunning ? Self.application : nil
+            lock.unlock()
+        }
+
+        nonisolated func runningApplication() async -> HostApplication? {
+            lock.lock()
+            defer { lock.unlock() }
+            return running
+        }
+    }
+
+    /// Desktop's Project assignments, as the test says. Unlisted is
+    /// `unavailable`.
+    final class ProjectsStub: AntigravityDesktopProjectResolving, @unchecked Sendable {
+        private let lock = NSLock()
+        private var answers: [String: AntigravityDesktopProjectResolution] = [:]
+
+        nonisolated func file(_ conversation: String, _ resolution: AntigravityDesktopProjectResolution) {
+            lock.lock()
+            answers[conversation] = resolution
+            lock.unlock()
+        }
+
+        nonisolated func resolution(forConversation conversationID: String) -> AntigravityDesktopProjectResolution {
+            lock.lock()
+            defer { lock.unlock() }
+            return answers[conversationID] ?? .unavailable
+        }
+    }
+
+    /// Desktop's read records, as the test says — and who was asked, because
+    /// a CLI row must never be judged by one.
+    final class RecordsStub: AntigravityDesktopReadRecordReading, @unchecked Sendable {
+        private let lock = NSLock()
+        private var records: [String: AntigravityDesktopReadRecord] = [:]
+        private var askedAbout: [String] = []
+
+        nonisolated func set(_ conversation: String, _ record: AntigravityDesktopReadRecord?) {
+            lock.lock()
+            records[conversation] = record
+            lock.unlock()
+        }
+
+        nonisolated var asked: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return askedAbout
+        }
+
+        nonisolated func record(forConversation conversationID: String) -> AntigravityDesktopReadRecord? {
+            lock.lock()
+            defer { lock.unlock() }
+            askedAbout.append(conversationID)
+            return records[conversationID]
+        }
+    }
+
     /// The product over a root of its own, torn down with it.
     private struct Product {
         let root: URL
         let paths: HookIntegrationPaths
         let table = TableStub()
+        /// The one ledger the translator writes and every source reads, as the
+        /// registry composes it.
+        let surfaces = AntigravitySurfaceLedger()
+        let desktop = DesktopStub()
+        let projects = ProjectsStub()
+        let records = RecordsStub()
+        let sessions: AntigravitySessions
         /// The scanner's clock, and only the scanner's: a reading has to
         /// postdate the events it retires, so it starts after `t0`. The
         /// reducer keeps the real clock, against which `t0` is long past
@@ -215,16 +296,23 @@ struct AntigravityConformanceTests {
                 table: table,
                 clock: clock
             )
+            sessions = AntigravitySessions(cli: scanner, desktop: desktop, surfaces: surfaces)
             provider = HookProductProvider(
                 agent: .antigravity,
-                paths: paths,
-                vocabulary: AntigravityHookVocabulary(transcripts: transcripts),
-                presence: scanner,
-                admission: scanner,
-                readEvidence: TerminalReadEvidence(
-                    sessions: scanner,
-                    gestures: gestures,
-                    screen: screen
+                hooks: HookLifecycleSource(
+                    paths: paths,
+                    vocabulary: AntigravityHookVocabulary(transcripts: transcripts, surfaces: surfaces)
+                ),
+                sessions: sessions,
+                rowContent: AntigravityRowContent(surfaces: surfaces, projects: projects),
+                readEvidence: AntigravityReadEvidence(
+                    surfaces: surfaces,
+                    terminal: TerminalReadEvidence(
+                        sessions: sessions,
+                        gestures: gestures,
+                        screen: screen
+                    ),
+                    desktopRecords: records
                 )
             )
         }
@@ -264,15 +352,31 @@ struct AntigravityConformanceTests {
     private let conversation = "0f7d6a1c-4b7e-4e6b-9c2a-3d5f8e1a2b3c"
     private let workspace = "/Users/someone/Projects/demo"
 
-    /// The common fields every payload carries, as the TUI sends them.
-    private func common(_ conversation: String, workspaces: [String]) -> [String: Any] {
+    /// The common fields every payload carries, as the TUI sends them — or, with
+    /// `antigravity` for the state directory, as Desktop does: the same fields,
+    /// measured 2026-09-12 on 2.13.0, with only the directory different.
+    private func common(
+        _ conversation: String,
+        workspaces: [String],
+        stateDirectory: String = "antigravity-cli"
+    ) -> [String: Any] {
         [
             "conversationId": conversation,
             "workspacePaths": workspaces,
-            "transcriptPath": "/Users/someone/.gemini/antigravity-cli/brain/\(conversation)/.system_generated/logs/transcript_full.jsonl",
-            "artifactDirectoryPath": "/Users/someone/.gemini/antigravity-cli/brain/\(conversation)",
+            "transcriptPath": "/Users/someone/.gemini/\(stateDirectory)/brain/\(conversation)/.system_generated/logs/transcript_full.jsonl",
+            "artifactDirectoryPath": "/Users/someone/.gemini/\(stateDirectory)/brain/\(conversation)",
             "modelName": "gemini-3.8-flash-high"
         ]
+    }
+
+    private func desktopInvocation(_ number: Int, of conversation: String) -> [String: Any] {
+        common(conversation, workspaces: [workspace], stateDirectory: "antigravity")
+            .merging(["invocationNum": number, "initialNumSteps": 1 + 2 * number]) { $1 }
+    }
+
+    private func desktopStop(of conversation: String) -> [String: Any] {
+        common(conversation, workspaces: [workspace], stateDirectory: "antigravity")
+            .merging(["executionNum": 0, "fullyIdle": true, "terminationReason": "NO_TOOL_CALL", "error": ""]) { $1 }
     }
 
     private func invocation(_ number: Int, of conversation: String, workspaces: [String]? = nil) -> [String: Any] {
@@ -703,22 +807,269 @@ struct AntigravityConformanceTests {
         #expect(edges.count > before, "the words were collected and nothing asked for them to be drawn")
     }
 
-    /// A sibling surface's event through the shared file — a transcript under
-    /// `antigravity/` rather than `antigravity-cli/` — is nobody's row and
-    /// nobody's diagnostic.
+    /// The IDE's event through the shared file — a transcript under
+    /// `antigravity-ide/` — is nobody's row and nobody's diagnostic.
+    ///
+    /// Until 2026-09-12 this was pinned with a transcript under `antigravity/`,
+    /// which is now Antigravity Desktop's and this product's own
+    /// (``aDesktopTurnIsARowFiledUnderItsDesktopProject``).
     @Test
-    func aSiblingProductsEventIsDeclinedQuietly() async throws {
+    func theIDEsEventIsDeclinedQuietly() async throws {
         let product = try Product()
         defer { Task { await product.tearDown() } }
         try await product.provider.installIntegration()
         await product.run(conversation)
+        product.desktop.set(running: true)
 
         var ide = invocation(0, of: "ide-conversation")
-        ide["transcriptPath"] = "/Users/someone/.gemini/antigravity/brain/ide-conversation/.system_generated/logs/transcript_full.jsonl"
+        ide["transcriptPath"] = "/Users/someone/.gemini/antigravity-ide/brain/ide-conversation/.system_generated/logs/transcript_full.jsonl"
         try product.deliver("PreInvocation", ide, at: t0)
         let snapshot = await product.provider.fetchSnapshot()
         #expect(snapshot.sessions.isEmpty)
         #expect(snapshot.diagnostic == nil)
+    }
+
+    /// The surface is the directory under `.gemini` the transcript names, and
+    /// nothing else in the path.
+    @Test
+    func theSurfaceIsTheStateDirectoryTheTranscriptNames() {
+        let tail = "brain/c/.system_generated/logs/transcript_full.jsonl"
+        #expect(AntigravitySurface(transcriptPath: "/Users/a/.gemini/antigravity-cli/\(tail)") == .cli)
+        #expect(AntigravitySurface(transcriptPath: "/Users/a/.gemini/antigravity/\(tail)") == .desktop)
+        #expect(AntigravitySurface(transcriptPath: "/Users/a/.gemini/antigravity-ide/\(tail)") == nil)
+        #expect(AntigravitySurface(transcriptPath: "/Users/a/.gemini/jetski/\(tail)") == nil)
+        #expect(AntigravitySurface(transcriptPath: nil) == .cli, "a payload naming no transcript was always the CLI's")
+        // A workspace folder of the same name decides nothing.
+        #expect(AntigravitySurface(transcriptPath: "/Users/a/antigravity/.gemini/antigravity-cli/\(tail)") == .cli)
+        #expect(AntigravitySurface(transcriptPath: "/Users/a/antigravity-cli/.gemini/antigravity/\(tail)") == .desktop)
+    }
+
+    // MARK: - Antigravity Desktop
+
+    /// **A Desktop Turn is a row, through the registration the CLI already
+    /// has**, filed under Desktop's own Project rather than its folder.
+    ///
+    /// Desktop 2.13.0 loads the same `~/.gemini/config/hooks.json` and sends
+    /// the same payloads, so nothing is registered for it; what is its own is
+    /// that its application being open is the product being open — no `agy`
+    /// runs here at all — and that it files conversations under named Projects,
+    /// one of which a folder name must not stand in for (`product-support.md`
+    /// §2, L2). The title and line come from its transcript exactly as the
+    /// CLI's do.
+    @Test
+    func aDesktopTurnIsARowFiledUnderItsDesktopProject() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.stopEverything()
+        product.desktop.set(running: true)
+        product.projects.file(conversation, .project("Notchline app"))
+
+        try product.deliver("PreInvocation", desktopInvocation(0, of: conversation), at: t0)
+        let running = await product.provider.fetchSnapshot()
+        #expect(running.presence == .open, "Desktop running is the product open, with no agy anywhere")
+        let row = try #require(running.sessions.first)
+        #expect(row.status == .running)
+        #expect(row.projectName == "Notchline app", "Desktop's Project, not the folder `demo`")
+        #expect(row.title == "Rename the third product's row")
+        #expect(product.surfaces.surface(ofConversation: conversation) == .desktop)
+
+        product.transcripts.says("Done.", step: 1)
+        try product.deliver("Stop", desktopStop(of: conversation), at: t0.addingTimeInterval(4))
+        let done = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(done.status == .completed)
+        #expect(done.preview == "Done.")
+
+        // A conversation in no Project says so in Desktop's own word, and one
+        // whose assignment cannot be read says that instead.
+        product.projects.file(conversation, .standalone)
+        #expect(try #require(await product.provider.fetchSnapshot().sessions.first).projectName == "Standalone")
+        product.projects.file(conversation, .unavailable)
+        #expect(
+            try #require(await product.provider.fetchSnapshot().sessions.first).projectName
+                == DesktopProjectMetadataSnapshot.unavailableProjectName
+        )
+    }
+
+    /// Desktop vouches for its conversations while it runs, and for none once
+    /// it has quit — a Turn it was running is retired rather than left saying
+    /// `Working...` for an application that is gone.
+    @Test
+    func desktopVouchesForItsConversationsOnlyWhileItRuns() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.stopEverything()
+
+        let closed = await product.provider.fetchSnapshot()
+        #expect(closed.presence == .closed)
+
+        product.desktop.set(running: true)
+        await product.clock.advance(by: 1)
+        try product.deliver("PreInvocation", desktopInvocation(0, of: conversation), at: t0)
+        #expect(await product.provider.fetchSnapshot().sessions.count == 1)
+
+        product.desktop.set(running: false)
+        await product.clock.advance(by: AntigravityConversationScanner.readingLifetime + 0.01)
+        let quit = await product.provider.fetchSnapshot()
+        #expect(quit.presence == .closed)
+        #expect(quit.sessions.isEmpty)
+
+        product.desktop.set(running: true)
+        await product.clock.advance(by: AntigravityConversationScanner.readingLifetime + 0.01)
+        let back = await product.provider.fetchSnapshot()
+        #expect(back.presence == .open)
+        #expect(back.sessions.isEmpty, "retired, not merely hidden while the application was away")
+    }
+
+    /// A CLI conversation and a Desktop one side by side: each is open on its
+    /// own surface's evidence, and neither surface's quitting takes the other's
+    /// row with it.
+    @Test
+    func eachSurfaceVouchesOnlyForItsOwnConversations() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        let desktopConversation = "5b1e0c7a-2f44-4d8e-9a31-7c6d2e9f0a14"
+        product.desktop.set(running: true)
+        product.projects.file(desktopConversation, .project("Demo"))
+        await product.run(conversation, pid: 4242)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        try product.deliver("PreInvocation", desktopInvocation(0, of: desktopConversation), at: t0)
+        #expect(Set(await product.provider.fetchSnapshot().sessions.map(\.threadID)) == [conversation, desktopConversation])
+        #expect(await product.sessions.processIdentifier(forThreadID: conversation) == 4242)
+        #expect(await product.sessions.processIdentifier(forThreadID: desktopConversation) == nil)
+
+        // The CLI exits; Desktop's row stays.
+        await product.stopEverything()
+        #expect(await product.provider.fetchSnapshot().sessions.map(\.threadID) == [desktopConversation])
+
+        // Desktop quits; nothing is left, and the product is closed.
+        product.desktop.set(running: false)
+        let gone = await product.provider.fetchSnapshot()
+        #expect(gone.sessions.isEmpty)
+        #expect(gone.presence == .closed)
+    }
+
+    /// **A finished Desktop row is retired by Desktop's own record of the
+    /// conversation being viewed**, and its terminal is never asked.
+    ///
+    /// Desktop draws its own unread dot from `last_user_view_time` against
+    /// when the conversation last changed, and `marked_as_unread` overrides
+    /// both; this row follows the same rule with the Turn's end as the change.
+    /// A record written before the end — the one Desktop writes when the user
+    /// submits — is not a reading of the answer.
+    @Test
+    func aFinishedDesktopRowIsRetiredByDesktopsOwnViewRecord() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.stopEverything()
+        product.desktop.set(running: true)
+        product.projects.file(conversation, .project("Demo"))
+
+        try product.deliver("PreInvocation", desktopInvocation(0, of: conversation), at: t0)
+        #expect(await product.provider.fetchSnapshot().sessions.count == 1)
+        #expect(product.records.asked.isEmpty, "a running row pays for no reading")
+
+        try product.deliver("Stop", desktopStop(of: conversation), at: t0.addingTimeInterval(5))
+        product.records.set(conversation, AntigravityDesktopReadRecord(lastViewedAt: t0, markedAsUnread: false))
+        #expect(await product.provider.fetchSnapshot().sessions.count == 1)
+        #expect(await product.provider.nextRefreshDeadline() != nil, "a record can move, so it is asked again")
+
+        product.records.set(
+            conversation,
+            AntigravityDesktopReadRecord(lastViewedAt: t0.addingTimeInterval(9), markedAsUnread: true)
+        )
+        #expect(await product.provider.fetchSnapshot().sessions.count == 1, "marked unread in Desktop stays unread")
+
+        product.records.set(
+            conversation,
+            AntigravityDesktopReadRecord(lastViewedAt: t0.addingTimeInterval(9), markedAsUnread: false)
+        )
+        #expect(await product.provider.fetchSnapshot().sessions.isEmpty)
+        #expect(product.gestures.timesAsked == 0, "no terminal is asked about a Desktop row")
+    }
+
+    /// A Desktop conversation with no record to read keeps its row and books
+    /// nothing, and a CLI row beside it is judged by its terminal alone.
+    @Test
+    func aDesktopRowWithNoRecordKeepsItsRowAndBooksNothing() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        product.desktop.set(running: true)
+        await product.stopEverything()
+
+        try product.deliver("PreInvocation", desktopInvocation(0, of: conversation), at: t0)
+        try product.deliver("Stop", desktopStop(of: conversation), at: t0.addingTimeInterval(5))
+        #expect(await product.provider.fetchSnapshot().sessions.count == 1)
+        #expect(await product.provider.nextRefreshDeadline() == nil)
+        #expect(product.records.asked == [conversation])
+    }
+
+    // MARK: - Antigravity Desktop's navigation
+
+    @MainActor
+    private final class ActivatorSpy: HostApplicationActivating {
+        private(set) var raised: [HostApplication] = []
+        func activate(_ application: HostApplication) async -> Bool {
+            raised.append(application)
+            return true
+        }
+    }
+
+    @MainActor
+    private final class TerminalNavigatorSpy: AgentNavigating {
+        private(set) var opened: [String] = []
+        func open(_ session: MonitoredSession) async throws -> NavigationOutcome {
+            opened.append(session.threadID)
+            return .focusedTerminal(host: "Terminal")
+        }
+    }
+
+    /// A Desktop row raises Desktop and says the conversation itself was not
+    /// reached — its one deep link opens nothing else — and a CLI row goes to
+    /// its terminal as before.
+    @Test @MainActor
+    func aDesktopRowRaisesDesktopAndACLIRowGoesToItsTerminal() async throws {
+        let surfaces = AntigravitySurfaceLedger()
+        surfaces.record(.desktop, forConversation: "desktop-conversation")
+        let desktop = DesktopStub(running: true)
+        let activator = ActivatorSpy()
+        let terminal = TerminalNavigatorSpy()
+        let navigator = AntigravityNavigator(
+            surfaces: surfaces,
+            desktop: desktop,
+            terminal: terminal,
+            activator: activator
+        )
+
+        func row(_ threadID: String) -> MonitoredSession {
+            MonitoredSession(
+                agent: .antigravity,
+                threadID: threadID,
+                turnID: "local:1",
+                projectName: "Demo",
+                title: "Untitled",
+                preview: nil,
+                status: .completed,
+                startedAt: t0
+            )
+        }
+
+        #expect(try await navigator.open(row("desktop-conversation")) == .raisedApplication(host: "Antigravity"))
+        #expect(activator.raised == [DesktopStub.application])
+        #expect(terminal.opened.isEmpty)
+
+        #expect(try await navigator.open(row("cli-conversation")) == .focusedTerminal(host: "Terminal"))
+        #expect(terminal.opened == ["cli-conversation"])
+
+        desktop.set(running: false)
+        await #expect(throws: ProcessHostNavigationError.sessionGone) {
+            try await navigator.open(row("desktop-conversation"))
+        }
     }
 
     /// Presence and admission are one kernel reading: the product is open
@@ -1019,14 +1370,16 @@ struct AntigravityConformanceTests {
     @Test
     func theDescriptorSaysWhatTheProductIsAndIsNot() {
         let descriptor = ProductRegistry.descriptor(for: .antigravity)
-        #expect(descriptor.settingsTitle == "Antigravity CLI")
+        #expect(descriptor.settingsTitle == "Antigravity", "one switch, because Desktop and the CLI read one file")
         #expect(descriptor.displayName == "Antigravity")
         #expect(descriptor.setup.displayPath == "~/.gemini/config/hooks.json")
         #expect(descriptor.setup.definitionCount == 2)
         #expect(descriptor.setup.trustStep == nil)
         #expect(descriptor.setup.backupName == "hooks.json.notchline-backup")
         #expect(descriptor.setup.switchHelp.contains("2 lifecycle definitions in ~/.gemini/config/hooks.json"))
+        #expect(descriptor.declaredBoundary?.contains("Antigravity Desktop and Antigravity CLI") == true)
         #expect(descriptor.declaredBoundary?.contains("Approvals and questions are not detected") == true)
+        #expect(descriptor.declaredBoundary?.contains("stopped before it finished") == true)
         #expect(descriptor.declaredBoundary?.contains("Usage quota is not supported") == true)
         #expect(ProductRegistry.descriptor(for: .codex).declaredBoundary == nil)
         #expect(ProductRegistry.descriptor(for: .claudeCode).declaredBoundary == nil)

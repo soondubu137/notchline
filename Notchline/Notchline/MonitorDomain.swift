@@ -10,9 +10,11 @@ import Foundation
 enum AgentKind: String, CaseIterable, Codable, Sendable, Comparable {
     case codex
     case claudeCode
-    /// Antigravity CLI, `agy`. L3 (`docs/product-support.md` §5): progress monitoring,
-    /// without wait detection. The raw value names its folder under this app's
-    /// support directory, so it is short enough for a socket path.
+    /// Antigravity: its CLI, `agy`, and Antigravity Desktop, one engine behind
+    /// one hooks file (``AntigravitySurface``). L3 (`docs/product-support.md` §5):
+    /// progress monitoring, without wait detection. The raw value names its
+    /// folder under this app's support directory, so it is short enough for a
+    /// socket path.
     case antigravity
 
     var displayName: String {

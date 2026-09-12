@@ -1,10 +1,14 @@
 import Foundation
 
-/// How Antigravity CLI spells its lifecycle events, and what it does not spell.
+/// How Antigravity spells its lifecycle events, and what it does not spell.
 ///
+/// One vocabulary for both of the product's surfaces, the CLI and Desktop,
+/// because they are one engine reading one hooks file and sending one payload
+/// shape (``AntigravityPayloadTranslator``, `antigravity-desktop.md`).
 /// Measured 2026-09-11 against `agy` 1.2.2, in print mode and in the
 /// interactive TUI, through a hooks file of this app's own
-/// (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`):
+/// (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`),
+/// and re-measured for Desktop 2.13.0 on 2026-09-12:
 ///
 /// - Five events exist — `PreToolUse`, `PostToolUse`, `PreInvocation`,
 ///   `PostInvocation`, `Stop` — and every payload carries the same fields:
@@ -29,8 +33,8 @@ import Foundation
 ///   the same file, at the two events that already arrive once a model call's
 ///   words are on disk: the turn's next `PreInvocation` and its `Stop`. See
 ///   ``AntigravityPayloadTranslator``.
-/// - `workspacePaths` names the workspace in the TUI and is empty under `-p`,
-///   so a print-mode row is an `Untitled folder`.
+/// - `workspacePaths` names the workspace in the TUI and in Desktop and is
+///   empty under `-p`, so a print-mode row is an `Untitled folder`.
 /// - Nothing observes a wait. `PreToolUse` fires before a tool runs whether
 ///   or not a person is then asked, and a headless auto-denial fires nothing
 ///   at all; the product's permission decisions are the hook's *output*, a
@@ -59,8 +63,14 @@ nonisolated struct AntigravityHookVocabulary: AgentHookVocabulary {
     static let containerName = "notchline"
     /// The directory the CLI's own files live in, under the user's home.
     static let stateDirectoryRelativeToHome = ".gemini/antigravity-cli"
+    /// The directory Antigravity Desktop's own files live in, under the user's
+    /// home: its transcripts, its read records and its conversation summaries.
+    static let desktopStateDirectoryRelativeToHome = ".gemini/antigravity"
     /// The hooks file the CLI reads at launch, shared with its TUI's `/hooks`
-    /// command (its 1.2.x changelog names it as the one file both read).
+    /// command (its 1.2.x changelog names it as the one file both read), and
+    /// the global customization root's hooks file Desktop loads too (measured
+    /// 2026-09-12 on 2.13.0; its embedded guide names `~/.gemini/config/` as
+    /// that root). One registration therefore observes both surfaces.
     static let hooksFileRelativeToHome = ".gemini/config/hooks.json"
 
     nonisolated let agent: AgentKind = .antigravity
@@ -95,7 +105,7 @@ nonisolated struct AntigravityHookVocabulary: AgentHookVocabulary {
     nonisolated let wakesOnToolCallOpened = false
     nonisolated let settlesHeldTurnsFromRecord = false
     nonisolated let restoreDefinitionAdvice =
-        "Switch Antigravity CLI off and on in Notchline's settings to write the "
+        "Switch Antigravity off and on in Notchline's settings to write the "
             + "hooks back into ~/\(AntigravityHookVocabulary.hooksFileRelativeToHome)."
     /// No definition selects the helper's long wait — `answering` is nil and
     /// no argument is the word `wait` — so this only keeps that unreachable
@@ -114,9 +124,13 @@ nonisolated struct AntigravityHookVocabulary: AgentHookVocabulary {
     }
 
     /// The vocabulary with a transcript reader of the caller's choosing, for a
-    /// test that writes the file the prompt is read out of.
-    nonisolated init(transcripts: any AntigravityTranscriptReading) {
-        payloadTranslator = AntigravityPayloadTranslator(transcripts: transcripts)
+    /// test that writes the file the prompt is read out of, recording surfaces
+    /// in the ledger the test's other sources read.
+    nonisolated init(
+        transcripts: any AntigravityTranscriptReading,
+        surfaces: AntigravitySurfaceLedger = AntigravitySurfaceLedger()
+    ) {
+        payloadTranslator = AntigravityPayloadTranslator(transcripts: transcripts, surfaces: surfaces)
     }
 
     nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal? {
@@ -204,11 +218,23 @@ nonisolated struct AntigravityHookVocabulary: AgentHookVocabulary {
 /// reducer gives any product whose first event this app saw was not the first
 /// it sent.
 ///
-/// **Whose events.** The hooks file is shared with the product's other
-/// surfaces, which the documentation says write their transcripts under
-/// `antigravity/` and `antigravity-ide/` where the CLI writes under
-/// `antigravity-cli/`; a payload naming one of those is a sibling product's
+/// **Whose events.** The hooks file is shared by every surface of the
+/// product's engine, which the documentation says write their transcripts
+/// under `antigravity-cli/` (the CLI), `antigravity/` (Antigravity Desktop,
+/// which the guide calls 2.0) and `antigravity-ide/`. The first two are this
+/// product's and are told apart by that directory alone
+/// (``AntigravitySurface``), which is recorded in the ledger every source that
+/// has to treat the two differently reads; the IDE's is a sibling product's
 /// and is declined, so it is neither drawn nor counted as unreadable.
+///
+/// **Desktop's events are the CLI's, measured.** Antigravity Desktop 2.13.0
+/// runs the same engine in one long-lived `language_server` and loads the
+/// same `~/.gemini/config/hooks.json` — measured 2026-09-12 by the
+/// registration this app had already written for the CLI firing, unchanged,
+/// for Desktop turns: the same five common fields with `workspacePaths`
+/// filled, `invocationNum` 0 opening every turn, `Stop` closing it, and the
+/// user's step and the model's words in a transcript of the same shape. So
+/// nothing above branches on the surface.
 final class AntigravityPayloadTranslator: HookPayloadTranslating, @unchecked Sendable {
     private let lock = NSLock()
     /// The local Turn id open on each conversation this process has seen.
@@ -230,13 +256,17 @@ final class AntigravityPayloadTranslator: HookPayloadTranslating, @unchecked Sen
     private var lastRetiredAnswers: [String: String] = [:]
     private let mint: @Sendable () -> String
     private let transcripts: any AntigravityTranscriptReading
+    /// Which surface each accepted conversation's events came from.
+    let surfaces: AntigravitySurfaceLedger
 
     init(
         mint: @escaping @Sendable () -> String = { "local:" + UUID().uuidString.lowercased() },
-        transcripts: any AntigravityTranscriptReading = AntigravityTranscriptFile()
+        transcripts: any AntigravityTranscriptReading = AntigravityTranscriptFile(),
+        surfaces: AntigravitySurfaceLedger = AntigravitySurfaceLedger()
     ) {
         self.mint = mint
         self.transcripts = transcripts
+        self.surfaces = surfaces
     }
 
     func canonicalPayload(from body: Data, receivedAt: Date) -> Data? {
@@ -252,10 +282,10 @@ final class AntigravityPayloadTranslator: HookPayloadTranslating, @unchecked Sen
             return nil
         }
         let transcript = (object["transcriptPath"] as? String).flatMap { $0.isEmpty ? nil : $0 }
-        if let transcript,
-           !transcript.contains("/\(AntigravityHookVocabulary.stateDirectoryRelativeToHome.split(separator: "/").last!)/") {
+        guard let surface = AntigravitySurface(transcriptPath: transcript) else {
             return nil
         }
+        surfaces.record(surface, forConversation: conversation)
 
         var canonical: [String: Any] = [
             "hook_event_name": event,

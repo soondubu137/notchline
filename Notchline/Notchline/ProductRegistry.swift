@@ -171,34 +171,54 @@ enum ProductRegistry {
         ),
         ProductDescriptor(
             kind: .antigravity,
-            settingsTitle: "Antigravity CLI",
+            // Desktop and the CLI, which read the one hooks file this switch
+            // writes: a switch per surface could not be honest about it.
+            settingsTitle: "Antigravity",
             setup: SetupDescription(
                 configurationFileRelativeToHome: AntigravityHookVocabulary.hooksFileRelativeToHome,
                 definitionCount: AntigravityHookVocabulary().managedDefinitions.count,
                 trustStep: nil,
                 connectedDetail: "hooks installed"
             ),
-            declaredBoundary: "Approvals and questions are not detected for Antigravity CLI; "
-                + "an active Turn shows Working... until it ends. Usage quota is not supported.",
+            declaredBoundary: "Watches Antigravity Desktop and Antigravity CLI. Approvals and questions "
+                + "are not detected; an active Turn shows Working... until it ends, and a Turn stopped "
+                + "before it finished may keep showing it. Usage quota is not supported.",
             make: {
-                // One kernel reading answers presence, admission and which
-                // process a row's conversation is running in; the navigator
-                // raises that process's host, as it does for Claude Code.
+                // Which surface a conversation is on is what its events' transcript
+                // path says, recorded once by the translator and read by every
+                // source that treats the two differently.
+                let surfaces = AntigravitySurfaceLedger()
+                // One kernel reading answers the CLI's presence, admission and
+                // which process a row's conversation is running in; Desktop's are
+                // its application running.
                 let conversations = AntigravityConversationScanner()
+                let desktop = AntigravityDesktopApplication()
+                let sessions = AntigravitySessions(cli: conversations, desktop: desktop, surfaces: surfaces)
                 let service = HookProductProvider(
                     agent: .antigravity,
-                    paths: .live(for: .antigravity),
-                    vocabulary: AntigravityHookVocabulary(),
-                    sessions: conversations,
-                    // And the fourth question that one reading answers: the
-                    // terminal that process is attached to is what says whether
-                    // the user has read a finished row, so a read row is
-                    // retired instead of standing until the next turn.
-                    readEvidence: TerminalReadEvidence(sessions: conversations)
+                    hooks: HookLifecycleSource(
+                        paths: .live(for: .antigravity),
+                        vocabulary: AntigravityHookVocabulary(
+                            translator: AntigravityPayloadTranslator(surfaces: surfaces)
+                        )
+                    ),
+                    sessions: sessions,
+                    // Desktop files a conversation under a Project of its own.
+                    rowContent: AntigravityRowContent(surfaces: surfaces, projects: AntigravityDesktopProjects()),
+                    // A CLI row is read at its terminal; a Desktop row by
+                    // Desktop's own record of the conversation being viewed.
+                    readEvidence: AntigravityReadEvidence(
+                        surfaces: surfaces,
+                        terminal: TerminalReadEvidence(sessions: sessions)
+                    )
                 )
                 return ProductModule(
                     service: service,
-                    navigator: ProcessHostNavigator(sessions: conversations)
+                    navigator: AntigravityNavigator(
+                        surfaces: surfaces,
+                        desktop: desktop,
+                        terminal: ProcessHostNavigator(sessions: sessions)
+                    )
                 )
             }
         )
