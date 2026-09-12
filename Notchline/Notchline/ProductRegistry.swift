@@ -141,8 +141,8 @@ enum ProductRegistry {
                     service: service,
                     // Raises the host rather than reopening the session, which
                     // is the declared boundary rather than a fallback -- see
-                    // ADR 0004 and ``ClaudeCodeNavigator``.
-                    navigator: ClaudeCodeNavigator(sessions: service)
+                    // ADR 0004 and ``ProcessHostNavigator``.
+                    navigator: ProcessHostNavigator(sessions: service)
                 )
             }
         )

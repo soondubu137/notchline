@@ -21,7 +21,7 @@ import Foundation
 /// permission prompt when the app started was drawn as working, and telling a
 /// wait from work is precisely what the product is for.
 actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDelivering,
-    DiskFootprintReporting, ClaudeCodeSessionLocating {
+    DiskFootprintReporting, SessionProcessLocating {
     nonisolated let agent = AgentKind.claudeCode
     nonisolated let stateChangeEvents: AsyncStream<Void>
 

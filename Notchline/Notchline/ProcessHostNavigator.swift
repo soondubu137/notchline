@@ -3,15 +3,15 @@ import Darwin
 import Foundation
 import os
 
-/// Which process is running a Claude Code session right now.
+/// Which process is running a session right now.
 ///
 /// Navigation needs this and the row cannot carry it: ``MonitoredSession``
-/// names a thread and a turn, and a Claude Code session's host is a *process*.
+/// names a thread and a turn, and such a session's host is a *process*.
 /// It is asked at click time rather than stored on the row, which is also the
 /// re-confirmation the PRD requires before a click: a session that has ended is
 /// no longer listed, so the answer is `nil` and the click fails rather than
 /// raising a window that has nothing to do with the row.
-nonisolated protocol ClaudeCodeSessionLocating: Sendable {
+nonisolated protocol SessionProcessLocating: Sendable {
     func processIdentifier(forThreadID threadID: String) async -> Int32?
 }
 
@@ -31,7 +31,7 @@ struct HostApplication: Sendable, Equatable {
     let processIdentifier: Int32
 }
 
-/// What is showing a Claude Code session.
+/// What is showing a process-hosted session.
 enum ClaudeCodeHost: Sendable, Equatable {
     /// The session belongs to the Claude Code desktop app.
     case desktop(HostApplication)
@@ -39,7 +39,7 @@ enum ClaudeCodeHost: Sendable, Equatable {
     case terminal(HostApplication)
 }
 
-nonisolated protocol ClaudeCodeHostResolving: Sendable {
+nonisolated protocol SessionHostResolving: Sendable {
     func host(ofProcess pid: Int32) async -> ClaudeCodeHost?
 }
 
@@ -70,7 +70,7 @@ struct ApplicationBundle: Sendable, Equatable {
 /// app reaches the CLI through a helper of its own
 /// (`Claude.app/Contents/Helpers/disclaimer`, measured 2026-08-19) and a future
 /// version could put something else in between.
-struct ProcessAncestryHostResolver: ClaudeCodeHostResolving {
+struct ProcessAncestryHostResolver: SessionHostResolving {
     /// How far up to walk before giving up.
     ///
     /// A cycle cannot happen in a process tree, but a pid that is reused
@@ -788,7 +788,7 @@ final class AppKitHostApplicationActivator: HostApplicationActivating {
     }
 }
 
-enum ClaudeCodeNavigationError: LocalizedError, Equatable {
+enum ProcessHostNavigationError: LocalizedError, Equatable {
     case sessionGone
     case hostUnknown
     case activationFailed(String)
@@ -805,7 +805,7 @@ enum ClaudeCodeNavigationError: LocalizedError, Equatable {
     }
 }
 
-/// Takes a Claude Code row back to whatever is showing it.
+/// Takes a process-hosted row back to whatever is showing it.
 ///
 /// **It raises a host; it does not reopen a session.** No supported interface
 /// focuses a Claude Code session that already exists — the official deep links
@@ -819,18 +819,18 @@ enum ClaudeCodeNavigationError: LocalizedError, Equatable {
 /// selected where the terminal publishes enough to name it, and its application
 /// raised where it does not.
 @MainActor
-final class ClaudeCodeNavigator: AgentNavigating {
+final class ProcessHostNavigator: AgentNavigating {
     static let desktopDisplayName = "Claude Desktop"
 
-    private let sessions: any ClaudeCodeSessionLocating
-    private let hosts: any ClaudeCodeHostResolving
+    private let sessions: any SessionProcessLocating
+    private let hosts: any SessionHostResolving
     private let activator: any HostApplicationActivating
     private let tabs: any TerminalTabFocusing
     private let controllingTerminalPath: @Sendable (Int32) -> String?
 
     init(
-        sessions: any ClaudeCodeSessionLocating,
-        hosts: any ClaudeCodeHostResolving = ProcessAncestryHostResolver(),
+        sessions: any SessionProcessLocating,
+        hosts: any SessionHostResolving = ProcessAncestryHostResolver(),
         activator: (any HostApplicationActivating)? = nil,
         tabs: (any TerminalTabFocusing)? = nil,
         controllingTerminalPath: @escaping @Sendable (Int32) -> String? = {
@@ -850,20 +850,20 @@ final class ClaudeCodeNavigator: AgentNavigating {
         guard let pid = await sessions.processIdentifier(
             forThreadID: session.threadID
         ) else {
-            throw ClaudeCodeNavigationError.sessionGone
+            throw ProcessHostNavigationError.sessionGone
         }
         guard let host = await hosts.host(ofProcess: pid) else {
             // Either the process went away between the two questions, or it has
             // no application above it at all — a session started by a launch
             // agent or a script has nothing to raise. Neither is worth
             // guessing about.
-            throw ClaudeCodeNavigationError.hostUnknown
+            throw ProcessHostNavigationError.hostUnknown
         }
 
         switch host {
         case let .desktop(application):
             guard await activator.activate(application) else {
-                throw ClaudeCodeNavigationError.activationFailed(Self.desktopDisplayName)
+                throw ProcessHostNavigationError.activationFailed(Self.desktopDisplayName)
             }
             return .raisedApplication(host: Self.desktopDisplayName)
         case let .terminal(application):
@@ -872,7 +872,7 @@ final class ClaudeCodeNavigator: AgentNavigating {
                 return .focusedTerminal(host: application.displayName)
             }
             guard await activator.activate(application) else {
-                throw ClaudeCodeNavigationError.activationFailed(application.displayName)
+                throw ProcessHostNavigationError.activationFailed(application.displayName)
             }
             return .raisedApplication(host: application.displayName)
         }

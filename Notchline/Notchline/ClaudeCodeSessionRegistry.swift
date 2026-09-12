@@ -191,7 +191,7 @@ enum ClaudeExecutableLocator {
     /// The path inside one of those version directories.
     ///
     /// The bundle is `com.anthropic.claude-code`, which is the same fact
-    /// ``ClaudeCodeNavigator`` already depends on from the other end -- it
+    /// ``ProcessHostNavigator`` already depends on from the other end -- it
     /// walks a session's ancestors and has to start at the *parent*, because a
     /// desktop-hosted `claude` is itself inside this bundle and would otherwise
     /// be found hosting itself.

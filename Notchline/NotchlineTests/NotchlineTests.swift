@@ -32513,7 +32513,7 @@ for line in sys.stdin:
     @Test @MainActor
     func aDesktopHostedRowRaisesClaudeDesktopItself() async throws {
         let activator = HostActivatorSpy()
-        let navigator = ClaudeCodeNavigator(
+        let navigator = ProcessHostNavigator(
             sessions: ClaudeCodeSessionLocatorStub(["cc-desktop": 46_868]),
             hosts: Self.measuredDesktopTree(),
             activator: activator,
@@ -32544,7 +32544,7 @@ for line in sys.stdin:
     func aTerminalRowSelectsTheTabItsSessionIsAttachedTo() async throws {
         let activator = HostActivatorSpy()
         let focuser = TerminalTabFocuserSpy(answer: .focused)
-        let navigator = ClaudeCodeNavigator(
+        let navigator = ProcessHostNavigator(
             sessions: ClaudeCodeSessionLocatorStub(["cc-tty": 60_817]),
             hosts: Self.terminalTree(
                 bundleIdentifier: "com.apple.Terminal",
@@ -32576,7 +32576,7 @@ for line in sys.stdin:
     @Test @MainActor
     func aTerminalThatCannotNameATabHasItsApplicationRaised() async throws {
         let activator = HostActivatorSpy()
-        let navigator = ClaudeCodeNavigator(
+        let navigator = ProcessHostNavigator(
             sessions: ClaudeCodeSessionLocatorStub(["cc-ghostty": 60_817]),
             hosts: Self.terminalTree(
                 bundleIdentifier: "com.mitchellh.ghostty",
@@ -32606,7 +32606,7 @@ for line in sys.stdin:
     @Test @MainActor
     func aSessionWithNoControllingTerminalSkipsTheTabLookup() async throws {
         let focuser = TerminalTabFocuserSpy(answer: .focused)
-        let navigator = ClaudeCodeNavigator(
+        let navigator = ProcessHostNavigator(
             sessions: ClaudeCodeSessionLocatorStub(["cc-piped": 60_817]),
             hosts: Self.terminalTree(
                 bundleIdentifier: "com.apple.Terminal",
@@ -32635,7 +32635,7 @@ for line in sys.stdin:
     @Test @MainActor
     func aRowWhoseSessionHasEndedRaisesNothing() async {
         let activator = HostActivatorSpy()
-        let navigator = ClaudeCodeNavigator(
+        let navigator = ProcessHostNavigator(
             sessions: ClaudeCodeSessionLocatorStub([:]),
             hosts: Self.measuredDesktopTree(),
             activator: activator,
@@ -32643,7 +32643,7 @@ for line in sys.stdin:
             controllingTerminalPath: { _ in nil }
         )
 
-        await #expect(throws: ClaudeCodeNavigationError.sessionGone) {
+        await #expect(throws: ProcessHostNavigationError.sessionGone) {
             try await navigator.open(
                 makeSession(agent: .claudeCode, threadID: "gone")
             )
@@ -32659,7 +32659,7 @@ for line in sys.stdin:
     @Test @MainActor
     func aSessionWithNoApplicationAboveItFailsRatherThanGuessing() async {
         let activator = HostActivatorSpy()
-        let navigator = ClaudeCodeNavigator(
+        let navigator = ProcessHostNavigator(
             sessions: ClaudeCodeSessionLocatorStub(["headless": 4_242]),
             hosts: ProcessAncestryHostResolver(
                 parent: { [4_242: Int32(4_240), 4_240: Int32(1)][$0] },
@@ -32673,7 +32673,7 @@ for line in sys.stdin:
             controllingTerminalPath: { _ in "/dev/ttys009" }
         )
 
-        await #expect(throws: ClaudeCodeNavigationError.hostUnknown) {
+        await #expect(throws: ProcessHostNavigationError.hostUnknown) {
             try await navigator.open(
                 makeSession(agent: .claudeCode, threadID: "headless")
             )
@@ -32882,7 +32882,7 @@ for line in sys.stdin:
 
         // And the row still opens: the click raises the terminal and says so.
         let activator = HostActivatorSpy()
-        let navigator = ClaudeCodeNavigator(
+        let navigator = ProcessHostNavigator(
             sessions: ClaudeCodeSessionLocatorStub(["cc": 60_817]),
             hosts: Self.terminalTree(
                 bundleIdentifier: "com.apple.Terminal",
@@ -35818,7 +35818,7 @@ private actor HoldableMonitoringStub: AgentMonitoring, IntegrationConfiguring {
     func disconnect() async {}
 }
 
-private struct ClaudeCodeSessionLocatorStub: ClaudeCodeSessionLocating {
+private struct ClaudeCodeSessionLocatorStub: SessionProcessLocating {
     private let processIdentifiers: [String: Int32]
 
     init(_ processIdentifiers: [String: Int32]) {

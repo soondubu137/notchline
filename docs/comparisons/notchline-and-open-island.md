@@ -129,7 +129,7 @@ This change adds only a comparison document. It adds, modifies, migrates or remo
 [n-store]: ../../Notchline/Notchline/MonitorStore.swift
 [n-answer-code]: ../../Notchline/Notchline/RequestAnswering.swift
 [n-prd]: ../PRD.md
-[n-claude-jump]: ../../Notchline/Notchline/ClaudeCodeNavigator.swift
+[n-claude-jump]: ../../Notchline/Notchline/ProcessHostNavigator.swift
 [n-settings]: ../../Notchline/Notchline/SettingsWindow.swift
 [n-request]: ../../Notchline/Notchline/AgentRequest.swift
 [n-artifacts]: ../artifacts.md
