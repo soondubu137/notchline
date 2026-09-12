@@ -4,7 +4,7 @@ import Foundation
 /// click on the row can select it rather than merely raise the application.
 ///
 /// Every host is raised by process ancestry with no entry here (T0 in
-/// `tiered-support.md` §6.2). An entry lifts a host to T1, and the rule for
+/// `tiered-support.md` §6.2). An entry enables pane focus for a host, and the rule for
 /// earning one is the PRD's (§10): the pane is found **by identity** — the
 /// controlling terminal device the kernel already reports for the session —
 /// through the host's **own public interface**, never by a title, a working

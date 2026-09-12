@@ -207,7 +207,7 @@ protocol RowContentSource: Sendable {
     ) async -> [String: RowContent]
 }
 
-/// The Tier 0 row: the submission directory's last component for a project,
+/// The L2 context fallback: the submission directory's last component for a project,
 /// the prompt for a title, and the Turn's closing words or its newest message
 /// for a line.
 struct WorkingDirectoryRowContent: RowContentSource {
@@ -267,9 +267,11 @@ struct WorkingDirectoryRowContent: RowContentSource {
 ///    (``UsageReading``), and the deadlines of every timed source.
 ///
 /// What the row can say about waiting is decided by the vocabulary. A
-/// vocabulary that maps only a start and an end gives Tier 0; wait events give
-/// Tier 1; an `answering` encoding and a definition carrying the answering
-/// argument give Tier 2 — nothing here changes between them.
+/// vocabulary supplies L1 boundaries; row content adds L2 context and L3
+/// progress; wait events and request projection supply L4/L5 capabilities.
+/// An answer encoding and held connection supply L6 operations. The complete
+/// level depends on cumulative coverage, not vocabulary conformance alone
+/// (`docs/product-support.md`); nothing here branches on a level.
 ///
 /// **Codex is not a composition of this, and that is a boundary rather than a
 /// backlog.** Its hooks come through the same transport and its evidence

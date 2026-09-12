@@ -13,8 +13,8 @@ import Foundation
 ///
 /// The shape was always general — nothing in it names Codex — so a second
 /// product does not widen it, it just means there is more than one of them.
-/// This is the one contract every product implements (Tier 0 in
-/// `tiered-support.md` §2); the others below are optional.
+/// This is the one contract every product implements (L1 in
+/// `docs/product-support.md` §2); the others below are optional.
 protocol AgentMonitoring: Sendable {
     /// Which product this provider speaks for.
     nonisolated var agent: AgentKind { get }
@@ -78,7 +78,7 @@ struct AnswerHandle: Hashable, Sendable {
     let ticket: HookReplyRegistry.Ticket
 }
 
-/// A product whose requests can be answered from the notch (Tier 2).
+/// A product whose requests can be answered from the notch (L6 for its declared request forms).
 protocol AnswerDelivering: Sendable {
     /// Sends one answer back down the connection its request arrived on.
     ///

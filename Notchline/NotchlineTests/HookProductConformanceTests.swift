@@ -2,13 +2,12 @@ import Foundation
 import Testing
 @testable import Notchline
 
-/// The Tier 0 and Tier 1 fixtures of `tiered-support.md` §7, run against the
-/// Provider a hook-based product gets for free (``HookProductProvider``).
+/// Lifecycle/context and wait/request-reading fixtures (`docs/product-support.md`
+/// §6), run against the Provider a hook-based product gets for free (``HookProductProvider``).
 ///
 /// The product under test is synthetic: two vocabularies that map only what
-/// the tier requires, over a temporary root, with presence and admission
-/// stubbed. It borrows `AgentKind.claudeCode` because the enum has no third
-/// case yet — a real third product arrives with its own descriptor in P5 — and
+/// the capability requires, over a temporary root, with presence and admission
+/// stubbed. It borrows `AgentKind.claudeCode`;
 /// nothing here reads anything of Claude Code's: the paths are the fixture's,
 /// the vocabulary is the fixture's, and the socket is never bound to the
 /// user's.
@@ -17,7 +16,7 @@ struct HookProductConformanceTests {
     // MARK: - Fixtures
 
     /// A product whose hooks say only "a Turn started" and "it ended".
-    private struct ListedOnlyVocabulary: AgentHookVocabulary {
+    private struct LifecycleVocabulary: AgentHookVocabulary {
         let agent: AgentKind = .claudeCode
         let managedDefinitions = [
             ManagedHookDefinition(event: "UserPromptSubmit", matcher: nil),
@@ -53,10 +52,10 @@ struct HookProductConformanceTests {
         }
     }
 
-    /// The same product, one tier up: it also says when a tool call is open and
-    /// when it is waiting on a person, and shows the command — but has no way
-    /// to carry an answer back.
-    private struct AttendedVocabulary: AgentHookVocabulary {
+    /// Independent wait/request-reading capabilities: it names an open tool
+    /// call and a wait, and shows the command, but cannot carry an answer back.
+    /// It has no progress source, so this fixture does not prove cumulative L5.
+    private struct ReadingOnlyApprovalVocabulary: AgentHookVocabulary {
         let agent: AgentKind = .claudeCode
         let managedDefinitions = [
             ManagedHookDefinition(event: "UserPromptSubmit", matcher: nil),
@@ -206,13 +205,13 @@ struct HookProductConformanceTests {
         ["hook_event_name": "Stop", "session_id": thread, "prompt_id": turn]
     }
 
-    // MARK: - Tier 0: Listed
+    // MARK: - L1 lifecycle and L2 context
 
-    /// Setup, a row on submission, `Completed` on the end event, and the Tier 0
+    /// Setup, a row on submission, `Completed` on the end event, and L2
     /// row content: the directory's last component, the prompt, the start.
     @Test
     func aStartAndAnEndAreARowThatComesAndGoes() async throws {
-        let product = try Product(vocabulary: ListedOnlyVocabulary())
+        let product = try Product(vocabulary: LifecycleVocabulary())
         defer { Task { await product.tearDown() } }
 
         #expect(await product.provider.setupStatus() == .notInstalled)
@@ -253,8 +252,8 @@ struct HookProductConformanceTests {
         #expect(done.finishedAt == t0.addingTimeInterval(9))
         // This product supplies no read evidence, so the row stays until its
         // own exits apply -- and books nothing while it stands, because there
-        // is no reading a re-check could take (`tiered-support.md` §2, the
-        // Tier 0 lifecycle). A product that hands in
+        // is no reading a re-check could take (`docs/product-support.md` §4,
+        // read removal). A product that hands in
         // ``TerminalReadEvidence`` gets the other behaviour and pays for it;
         // see `AntigravityConformanceTests`.
         #expect(await product.provider.fetchSnapshot().sessions.count == 1)
@@ -270,7 +269,7 @@ struct HookProductConformanceTests {
     /// changes nothing.
     @Test
     func anOldTurnsEventCannotTouchTheTurnThatReplacedIt() async throws {
-        let product = try Product(vocabulary: ListedOnlyVocabulary())
+        let product = try Product(vocabulary: LifecycleVocabulary())
         defer { Task { await product.tearDown() } }
         try await product.provider.installIntegration()
 
@@ -292,7 +291,7 @@ struct HookProductConformanceTests {
     /// §9.2).
     @Test
     func aSubmissionDuringARunningTurnDoesNotReplaceIt() async throws {
-        let product = try Product(vocabulary: ListedOnlyVocabulary())
+        let product = try Product(vocabulary: LifecycleVocabulary())
         defer { Task { await product.tearDown() } }
         try await product.provider.installIntegration()
 
@@ -318,7 +317,7 @@ struct HookProductConformanceTests {
     /// unwatchable rather than quietly empty.
     @Test
     func presenceDecidesWhatIsListedAndNeverWhatIsKnown() async throws {
-        let product = try Product(vocabulary: ListedOnlyVocabulary())
+        let product = try Product(vocabulary: LifecycleVocabulary())
         defer { Task { await product.tearDown() } }
         try await product.provider.installIntegration()
         try product.deliver(submission("t1", turn: "p1"), at: t0)
@@ -346,7 +345,7 @@ struct HookProductConformanceTests {
     /// absence from a list never ends a live Turn (`tiered-support.md` §2).
     @Test
     func onlyAnAdmissionListThatPostdatesTheThreadRetiresIt() async throws {
-        let product = try Product(vocabulary: ListedOnlyVocabulary())
+        let product = try Product(vocabulary: LifecycleVocabulary())
         defer { Task { await product.tearDown() } }
         try await product.provider.installIntegration()
         try product.deliver(submission("t1", turn: "p1"), at: t0)
@@ -370,7 +369,7 @@ struct HookProductConformanceTests {
     /// installed and removed, with no product-named code in between.
     @Test @MainActor
     func theStoreRunsTheProductThroughItsContractsAlone() async throws {
-        let product = try Product(vocabulary: ListedOnlyVocabulary())
+        let product = try Product(vocabulary: LifecycleVocabulary())
         defer { Task { await product.tearDown() } }
         let store = MonitorStore(services: [product.provider])
         defer { store.stopMonitoring() }
@@ -386,7 +385,7 @@ struct HookProductConformanceTests {
         #expect(store.agentAvailability(for: .claudeCode) == .setupRequired)
     }
 
-    // MARK: - Tier 1: Attended
+    // MARK: - Wait detection and request reading (independent of L3 progress)
 
     /// A wait opens on the request event, shows what it is waiting for, and
     /// closes when the tool call it borrowed its identity from closes. With no
@@ -394,7 +393,7 @@ struct HookProductConformanceTests {
     /// back it does not have.
     @Test
     func aWaitIsShownButNotAnsweredWithoutAnEncoding() async throws {
-        let product = try Product(vocabulary: AttendedVocabulary())
+        let product = try Product(vocabulary: ReadingOnlyApprovalVocabulary())
         defer { Task { await product.tearDown() } }
         try await product.provider.installIntegration()
 
@@ -447,7 +446,7 @@ struct HookProductConformanceTests {
         )
         let deadline = t0.addingTimeInterval(1_800)
         let usage = UsageStub(quota: quota, deadline: deadline, diagnostic: "Sign the CLI in.")
-        let product = try Product(vocabulary: ListedOnlyVocabulary(), usage: usage)
+        let product = try Product(vocabulary: LifecycleVocabulary(), usage: usage)
         defer { Task { await product.tearDown() } }
 
         let unregistered = await product.provider.fetchSnapshot()
@@ -461,7 +460,7 @@ struct HookProductConformanceTests {
         #expect(await usage.readsAskedFor == 1)
         #expect(await product.provider.nextRefreshDeadline() == deadline)
 
-        let bare = try Product(vocabulary: ListedOnlyVocabulary())
+        let bare = try Product(vocabulary: LifecycleVocabulary())
         defer { Task { await bare.tearDown() } }
         try await bare.provider.installIntegration()
         #expect(await bare.provider.fetchSnapshot().quota == .noneReported)

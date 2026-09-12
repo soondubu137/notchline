@@ -7,6 +7,10 @@
 | Date | 2026-08-28 |
 | Scope | Replace the SwiftUI prototype's mock status, quota, today's tokens, session list and click navigation with real product data; processing time per §12 |
 
+## Support coverage
+
+The [six-level support contract](product-support.md) owns functional requirements and per-product/request/mode coverage. Levels are derived descriptions, not dispatch inputs: `AgentMonitoring`, row-content sources, request projection and `AnswerDelivering` supply evidence and operations independently. Read evidence, navigation and each quota/usage measure stay separate. The current code has no support-level field or general runtime capability matrix; temporary unavailability and an expired request connection must not be described as unsupported product functionality.
+
 ## 1. Conclusion
 
 V1 implements the expanded list as a live monitor of current Turns rather than a history list. The authoritative membership set is: root threads, across every Project and `Chats` under the current Desktop account, that have an active Turn or an unread terminal Turn and can still be navigated to exactly in Desktop under the same `threadId`.
@@ -198,7 +202,7 @@ The test is in the product's read evidence (`ClaudeCodeReadEvidence.verdicts(for
 
 The reverse direction is safe structurally rather than by luck: this can only hold for a session that genuinely has a controlling terminal, and Claude Desktop-hosted sessions do not — Desktop runs the CLI as `--output-format stream-json` over pipes with no terminal interface, which is also why those sessions have no `status` ([#41](https://github.com/soondubu137/notchline/issues/41)).
 
-**The reading is not Claude Code's, and since 2026-09-12 it is not written twice.** `TerminalReadEvidence` pairs the reader above with the one thing a product has to supply — `SessionProcessLocating`, which process a Thread runs in — and answers one of three verdicts per finished row: **read**, **unread**, or **cannot be asked** (no controlling terminal, or a host that can never hold the foreground). `HookProductProvider` judges its finished rows on it and hands the gate the same unread set, settling window, dismissal rule and 1-second re-check this service does; a product that supplies no evidence builds no gate entry and reports no deadline, which is the Tier 0 lifecycle in [`tiered-support.md`](technical-explorations/multi-product-provider-architecture/tiered-support.md) §2. Antigravity CLI is the first to use it.
+**The reading is not Claude Code's, and since 2026-09-12 it is not written twice.** `TerminalReadEvidence` pairs the reader above with the one thing a product has to supply — `SessionProcessLocating`, which process a Thread runs in — and answers one of three verdicts per finished row: **read**, **unread**, or **cannot be asked** (no controlling terminal, or a host that can never hold the foreground). `HookProductProvider` judges its finished rows on it and hands the gate the same unread set, settling window, dismissal rule and 1-second re-check this service does; a product that supplies no evidence builds no gate entry and reports no deadline, which is the default without read evidence in [product-support.md](product-support.md) §4. Antigravity CLI is the first to use it.
 
 **What the terminal sends is a property of the product, and is measured per product.** The degradation directions below were written for terminals; a product decides half of them by which modes it enables. Antigravity CLI's TUI enables neither focus reporting nor mouse reporting (measured on a pty, 2026-09-12), so on that product a returning glance retires nothing and the pointer cannot retire anything — the row waits for a keystroke or a paste. Its access time is untouched by the turn itself: submit, seven seconds of work, the answer and `Stop` moved it twice, both at the keyboard, and not once in the 75 seconds after.
 

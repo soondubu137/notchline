@@ -1,5 +1,9 @@
 # What the integration switches actually do
 
+## Support boundaries
+
+[Product support](product-support.md) lists the six levels and the complete per-product coverage; the switches configure observation and do not upgrade a support level. `ProductDescriptor.declaredBoundary` supplies the concise limitation beneath a Settings row. Antigravity CLI is L3: Settings states that approvals and questions are not detected, an active Turn uses `Working...`, and usage quota is unsupported. A missing boundary sentence on Codex or Claude Code does not promise every request form or independent capability. Connection diagnostics, signed-out quota and temporary read failures remain separate from declared support.
+
 ## 1. Turning the Codex switch on
 
 `ProductConnectionRows` draws one row per entry in `ProductRegistry.builtIn`, and every sentence it says about a product's file — the switch's tooltip, the install and remove messages, the footnotes' file names — is derived from that product's `SetupDescription` (its file, its definition count read off the vocabulary, its trust step). Nothing in this document's prose is the authority for those sentences any more; the descriptor is. The switch binds to `MonitorStore.setIntegrationEnabled(true, for: .codex)`. That call only records intent; each product's own convergence task applies it, re-reading the target state after every step, so rapid toggling coalesces and the last flip wins. Convergence calls `LiveCodexMonitorService.installHooks()` → `CodexHookRegistrar.install()`:

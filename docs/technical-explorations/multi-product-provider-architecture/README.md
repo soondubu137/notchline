@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Tiered-support direction agreed in discussion; the detailed baseline below is proposed, and no implementation or shipped contract has changed. **The concrete tier ladder, terminal tiers and refactor plan are in [`tiered-support.md`](tiered-support.md) (2026-09-11), which supersedes §1.1 where the two disagree** |
+| Status | Original architectural investigation, 2026-09-07. The [six-level product support contract](../../product-support.md) replaces the earlier support bands and three-tier proposal. [The migration record](tiered-support.md) tracks the subsequent implementation and measurements |
 | Investigated | 2026-09-07 |
 | Source baseline | Local `master`, `20ff4f1`; current implementation and selected invariant tests inspected |
 | External evidence | Official documentation fetched on the investigation date; additional products have not been exercised locally |
@@ -19,45 +19,11 @@ The scalable boundary is **product evidence into common monitoring semantics**. 
 
 Success means adding a Provider, its fixtures, its registration and any necessary product assets. It should not require adding product-name branches to the common reducer, scheduler, row renderer or answer controller. A newly encountered domain concept may still require an explicit contract extension; the interface must not hide that work in arbitrary flags.
 
-### 1.1 Tiered support: a baseline with independent extensions
+### 1.1 Adopted support contract
 
-The follow-up direction is to define **baseline support** around the minimum reliable lifecycle contract, then add product-specific capabilities above it. The detailed tier definitions here are proposals. They do not yet change the glossary or the shipped four-status presentation.
+The baseline-plus-extensions direction became the [six-level support contract](../../product-support.md) on 2026-09-12. It replaces this section's earlier non-cumulative bands and the subsequent three-tier proposal. L1–L6 distinguish lifecycle, context, progress, wait detection, request reading and request answering. Read removal, navigation, quota and usage, final answers, subagents, recovery and terminal reasons are declared independently.
 
-| Support band | Proposed promise | Not required by this band |
-| --- | --- | --- |
-| Baseline lifecycle | Identified live Turn starts and terminal boundaries; shared reduction, one row per eligible Thread, ordering protection, manual dismissal and explicit observation health | Wait classification, request content, automatic read retirement, quota, rich metadata or cold-start recovery |
-| Observation extensions | Independently supported wait detection, previews, metadata, stronger navigation, read state, runtime recovery, quota and subagent evidence | Answering requests or implementing every other observation extension |
-| Interaction extensions | Display and answer particular native request forms through currently valid handles | Quota, private Desktop metadata or every possible request form |
-
-These are bands of functionality, not a single cumulative integer. A product can support answering one request form without providing quota or automatic read retirement. Store a capability set and its runtime availability; use a tier label only as a convenient description of that set.
-
-**The kernel's vocabulary and a Provider's minimum obligations are different.** The shared kernel understands the full supported lifecycle and attention vocabulary. A baseline Provider is obliged to produce only the minimum reliable observations; an enhanced Provider supplies more facts to the same kernel. It does not replace the kernel with another product-specific state machine.
-
-There is one necessary refinement to the earlier four-status proposal: a Turn known to have started and not ended is **active**, but that fact alone does not establish whether it is working or waiting on a person. Proposed internal dimensions are:
-
-```text
-Lifecycle phase:       active | terminal
-Attention observation: no wait confirmed | approval | input | unavailable
-Terminal reason:       known native reason | unavailable
-```
-
-Here `active` is explanatory notation for an unfinished Turn, not a new shipped status name or a claim about the product's similarly named native fields. A known wait remains inside the active lifecycle. `unavailable` does not assert that no wait exists. On terminal evidence, attention is no longer applicable; it must not keep a terminal Turn active.
-
-This deliberately revises the earlier requirement that every normally supported Provider distinguish human waits from Running. A baseline Provider may offer useful start/end monitoring without that distinction, provided the presentation communicates its narrower knowledge. It must not silently map active-with-unavailable-attention to the current `Working...` status or animate it as proven work. The precise baseline row and aggregate presentation must be settled alongside the PRD and glossary before shipping; this research adds no fifth `SessionStatus` case.
-
-The proposed minimum contract is:
-
-1. **Stable correlation.** Every accepted boundary identifies its product, observation scope, Thread and Turn. Local correlation must satisfy §6.1. Root-Thread eligibility still needs evidence; baseline support is not permission to list arbitrary child Threads.
-2. **Positive boundaries.** Start and end are observed, including interruption/failure endings in the declared execution modes. An end need not distinguish success from failure if the native source does not, but silence cannot count as an end. An isolated completion notification without a correlated start is insufficient.
-3. **Explicit coverage.** Monitoring begins with boundaries observed in this epoch unless current-state recovery is supported. A broken connection or lost event reports unreliable coverage; it cannot manufacture a terminal event.
-4. **Common lifecycle policy.** The kernel owns duplicate/old-event handling, Turn replacement, terminal retention and dismissal. Without read evidence, terminal rows remain until the existing explicit exits apply. Duration is shown only when the necessary timestamps are available.
-5. **Independent extensions.** A failed quota, preview or read-state extension cannot disable otherwise trustworthy baseline observation. Losing wait detection changes the attention coverage; it must not turn a known wait into confirmed work.
-
-Navigation quality remains a separate admission and product-policy question. Baseline lifecycle does not promise an exact deep link, and an application-only target must report that outcome honestly. Whether a product with no usable return route may appear as a row is not decided by assigning it the baseline tier.
-
-For example, a start/end Provider and a Provider with approval boundaries share the same Turn reducer. The second additionally reports a particular wait opening and resolving. A read-state extension can later authorise removal of its terminal row; it cannot start another Turn. An answering extension can deliver a user answer; only subsequent native evidence changes the lifecycle. This is how customisation adds capability without taking ownership of the core.
-
-The first implementation milestone should therefore be a **baseline-only conformance fixture**, followed by enabling one extension at a time. Passing that fixture must not require fake quota, pretend read evidence or a no-op answer transport.
+The kernel still understands more than a minimum Provider supplies. Sources add evidence to the same reducer; read evidence retires a Turn but cannot open one, and answer delivery changes no lifecycle state without native evidence. Products without wait detection retain the current Running presentation with a declared Settings boundary; no fifth status was introduced. [The migration record](tiered-support.md) describes what was actually built and retains the measurements behind its boundaries.
 
 ## 2. What can be kept, and what needs to move
 

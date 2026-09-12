@@ -686,8 +686,8 @@ protocol AgentHookVocabulary: Sendable {
     /// two, and a type of its own so that reading an event and answering it stay
     /// separate kinds of knowledge. See ``RequestAnswering``.
     /// How an answer typed on the notch is encoded for this product, or nil for
-    /// a product whose requests cannot be answered from here (Tier 0 and 1 in
-    /// `tiered-support.md` §2): the reducer then holds no connection for its
+    /// a product whose requests cannot be answered from here (without L6 answering coverage in
+    /// `docs/product-support.md` §2): the reducer then holds no connection for its
     /// requests and the row offers no affirmative.
     nonisolated var answering: (any RequestAnswering)? { get }
     /// How this product's file arranges a registration, and how its helper
@@ -2036,7 +2036,7 @@ struct HookTurnState: Sendable {
     var heldTurnIDs: Set<String> = []
     /// The directory the product said the prompt was submitted from (`cwd`),
     /// for a product whose row names its work by that directory's last
-    /// component (Tier 0's permitted project name, `tiered-support.md` §2).
+    /// component (L2's working-directory Project source, `docs/product-support.md` §2).
     /// Codex ignores it — its Project comes from Desktop — and Claude Code
     /// takes the directory from its own session list. Carried across a Turn
     /// boundary like the subagent facts, because the directory is the

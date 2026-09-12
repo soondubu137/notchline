@@ -9,6 +9,10 @@
 | Scope | What happens between a request arriving and a person answering it: how the request reaches somebody who is not looking at the notch, every shape the two products ask in, what an opened row draws for each of them, what a click takes, which keys the panel answers to and which wait for the keyboard half, and what the row becomes once the answer has gone. The band, the quota footer and both collapsed forms are untouched, and nothing here reaches the collapsed surface. |
 | Supersedes | [`expanded-panel-v2.md`](expanded-panel-v2.md) §3 entire. Three of its clauses are corrected rather than extended, each marked below: §3.1's opening gesture (§3), §3.2's fade and its three-line cap (§4), §3.5's close-on-send (§8). A fourth — §3.4's forces on the affirmative — **is not corrected at all**: it is right for a surface answered with the pointer, the keys that would have made a correction necessary are declined (§6, §9.3), and so it stands as that document wrote it. §2 — the Recent queue — is untouched and independent. |
 
+## Support coverage
+
+[Product support](product-support.md) separates L4 wait detection, L5 request reading and L6 request answering, each scoped to native request forms. This document retains authority over the shapes and operations actually supported. Codex ordinary `PermissionRequest` has L6 answer coverage; its `request_permissions` and synchronous questions remain reading-only, and asynchronous questions preview-only. Rendering a request does not establish an answer path. The individual live connection, not the product's level, determines whether an opened request offers an answer action.
+
 ## 1. What this designs, what it waits on, and what it ships first
 
 [`expanded-panel-v2.md`](expanded-panel-v2.md) §3 established the idea: a row already draws a bright ground on exactly the two states with something to answer, so make that ground the control. It then drew one open approval row and stopped. Three things were left undone, and each of them turns out to decide the shape of the whole.

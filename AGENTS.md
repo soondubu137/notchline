@@ -4,11 +4,11 @@ This file applies to the whole repository, including every subdirectory.
 
 ## 1. What this project is
 
-A macOS overlay at the top of the screen. It summarises, with minimal interruption, the Turns from Codex Desktop and Claude Code that the user still needs to attend to, and offers a way back into the originating Thread. Collapsed, it hugs the notch or menu bar; on hover it expands into a list of live monitored Threads.
+A macOS overlay at the top of the screen. It summarises, with minimal interruption, the Turns from Codex Desktop, Claude Code and Antigravity CLI that the user still needs to attend to, and offers a way back into the originating Thread. Collapsed, it hugs the notch or menu bar; on hover it expands into a list of live monitored Threads.
 
 **Terminology comes before code.** *Thread*, *Turn*, *monitoring lifecycle*, *current activity projection*, *unread terminal state*, *presence* and *integration availability* have precise definitions here. Read [`CONTEXT.md`](CONTEXT.md) before writing code, docs or a commit message, and honour its banned alternatives.
 
-Language: every user-readable string — accessibility labels, diagnostics, Info.plist usage descriptions — is British English. `CONTEXT.md`, this file, the README, commit messages and every tracked document under `docs/` are English; the untracked `docs/development-guideline.md` is Chinese. Match whatever you are editing.
+Language: every user-readable string — accessibility labels, diagnostics, Info.plist usage descriptions — is British English. `CONTEXT.md`, this file, the README, commit messages and tracked documents under `docs/` are English, except for the user-requested Simplified Chinese translation `docs/product-support-zh.md`; the untracked `docs/development-guideline.md` is Chinese. Keep `docs/product-support.md` and its Chinese translation in sync. Match whatever you are editing.
 
 ## 2. Project and commands
 
@@ -38,6 +38,7 @@ Each document owns a scope. A change landing in one of these scopes updates that
 | Document | Authoritative for |
 | --- | --- |
 | [`CONTEXT.md`](CONTEXT.md) | Terminology; any naming disagreement is settled there |
+| [`docs/product-support.md`](docs/product-support.md) | Six cumulative support levels, request-form coverage and independent product capabilities |
 | [`docs/PRD.md`](docs/PRD.md) | Product contract: monitoring scope, state model, previews, navigation, release gates |
 | [`docs/dual-agent-design.md`](docs/dual-agent-design.md) | How the two products share one surface: attribution, quota, subagent counts |
 | [`docs/colour-v2.md`](docs/colour-v2.md) | Colour: there is one hue, the user picks it, and no product owns one. The badge that names a product, and what the band stopped decomposing |

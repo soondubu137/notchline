@@ -10,13 +10,17 @@
 
 ## 1. What the product is
 
-Notchline is a live summary of the Turns a user still needs to attend to, at the top of the screen: Turns that are running, waiting on a person, or finished but not yet read in the product that produced them. The monitored products are Codex Desktop and Claude Code.
+Notchline is a live summary of the Turns a user still needs to attend to, at the top of the screen: Turns that are running, waiting on a person, or finished but not yet read in the product that produced them. The monitored products are Codex Desktop, Claude Code and Antigravity CLI.
 
 It is not a history browser and it does not manage tasks. Each row is a root thread that can be returned to under the same identity, and the row's state is driven by that thread's current — or most recent still-monitored — Turn.
 
 Collapsed, it merges with the physical notch on a notched screen and uses a content-width black compact component on a notch-less one. Both forms share one expanded component on hover.
 
 **It does not appear in the Dock.** The app runs as `LSUIElement`: no Dock icon, no ⌘-Tab, and no menu bar even when frontmost. That follows directly from the product's shape — its only permanent interface is in the notch, and a Dock tile there would open no window and would not represent an app anyone switches to; it would only suggest there is a window to open. The cost is in §11: `⌘,` and `⌘Q` go with the menu bar, so settings are reachable only through the panel's gear and quitting only through `Quit` in the settings window.
+
+### 1.1 Product support coverage
+
+[Product support](product-support.md) is the authoritative L1–L6 contract and current capability matrix. Codex Desktop reaches L6 for ordinary `PermissionRequest`, with synchronous questions and `request_permissions` reading-only; Claude Code reaches L6 for its listed request forms; Antigravity CLI reaches L3 with declared mode and progress-update limits. Read removal, navigation quality, quota and usage, final answers, subagents, recovery and terminal reasons are independent capabilities. Goals and surface features below apply only where that matrix declares support; unsupported is not a failed read or zero usage. Read removal retires a monitoring row and never archives its Thread.
 
 ## 2. Goals
 

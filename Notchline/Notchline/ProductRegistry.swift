@@ -26,11 +26,12 @@ struct ProductDescriptor: Sendable {
     let make: @MainActor @Sendable () -> ProductModule
     /// What this product's rows will never say, stated where the switch is.
     ///
-    /// A Tier 0 product draws an active Turn as `Running` with the same mark
-    /// as every other — the row carries one mark and it is the timer — and
+    /// A product without wait detection draws an active Turn as `Running`,
+    /// with the same mark as every other — the row carries one mark and it is the timer — and
     /// says here, once, that a wait is not among the things it can show
-    /// (`tiered-support.md` §2, the presentation decision). Nil for a product
-    /// whose rows can say everything the notch draws.
+    /// (`docs/product-support.md` §2). Nil when no broad wait-detection
+    /// boundary is needed; this does not claim every request form or independent capability is supported.
+    /// `docs/product-support.md` holds the complete coverage matrix.
     let declaredBoundary: String?
 
     init(
@@ -178,7 +179,7 @@ enum ProductRegistry {
                 connectedDetail: "hooks installed"
             ),
             declaredBoundary: "Approvals and questions are not detected for Antigravity CLI; "
-                + "a row shows Running until its turn ends.",
+                + "an active Turn shows Working... until it ends. Usage quota is not supported.",
             make: {
                 // One kernel reading answers presence, admission and which
                 // process a row's conversation is running in; the navigator

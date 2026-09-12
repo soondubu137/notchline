@@ -20,7 +20,7 @@ import Foundation
 ///   proposes a local Turn identity there and retires it on `Stop`.
 /// - **The prompt is in no payload**, so it is read out of the transcript the
 ///   payload names — see ``AntigravityTranscriptFile``. It was `Untitled`
-///   until 2026-09-12, on the reading that a Tier 0 row is what the hooks
+///   until 2026-09-12, on the reading that a lifecycle-only row is what the hooks
 ///   alone can say; what overturned that is that the file is *named by the
 ///   payload*, so reading it needs no discovery, no watcher and no guess, and
 ///   an `Untitled` row is the one thing that made a list of three rows
@@ -34,8 +34,9 @@ import Foundation
 /// - Nothing observes a wait. `PreToolUse` fires before a tool runs whether
 ///   or not a person is then asked, and a headless auto-denial fires nothing
 ///   at all; the product's permission decisions are the hook's *output*, a
-///   write path this app does not take. So the product is **Tier 0**, and
-///   Settings says so (`tiered-support.md` §2).
+///   write path this app does not take. So waits and requests are unsupported; the context and progress
+///   sources give **L3** (`docs/product-support.md` §5). Settings declares
+///   the missing wait detection rather than claiming work is confirmed.
 ///
 /// Two of the five are registered, and the other three would buy nothing.
 /// `PostInvocation` fires only once the call's tools have returned — measured

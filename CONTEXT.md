@@ -1,20 +1,24 @@
 # Notchline — Terminology
 
-Notchline summarises, with minimal interruption, the Turns a user still needs to attend to, and offers a way back into the originating Thread. The monitored products are Codex Desktop and Claude Code.
+Notchline summarises, with minimal interruption, the Turns a user still needs to attend to, and offers a way back into the originating Thread. The monitored products are Codex Desktop, Claude Code and Antigravity CLI.
 
 Words are settled here. Any naming disagreement in code, docs or commit messages is resolved against this file, and each *Avoid* list is banned wording, not merely discouraged wording.
 
 ## Products and adapters
 
-**Product** — A monitored agent product; today Codex, Claude Code and Antigravity CLI, the last at Tier 0 (listed, not attended — [`docs/technical-explorations/multi-product-provider-architecture/tiered-support.md`](docs/technical-explorations/multi-product-provider-architecture/tiered-support.md) §2). A product is user-visible: row attribution and the footer's quota rules are per product. **A hue is not** — no product owns a colour anywhere in this app, and a product is named by a badge in the user's own theme ink ([`docs/colour-v2.md`](docs/colour-v2.md)). *Matrix hue* was on this list until that decision and is banned wording now, along with *product colour* and *product ink*.
+**Product** — A monitored agent product; today Codex, Claude Code and Antigravity CLI, the last at L3 with declared mode limits ([`docs/product-support.md`](docs/product-support.md) §5). A product is user-visible: row attribution and the footer's quota rules are per product. **A hue is not** — no product owns a colour anywhere in this app, and a product is named by a badge in the user's own theme ink ([`docs/colour-v2.md`](docs/colour-v2.md)). *Matrix hue* was on this list until that decision and is banned wording now, along with *product colour* and *product ink*.
 *Avoid:* backend, data source, integration, agent.
 
 **Provider** — The in-app adapter that translates one product's boundary signals into an `AgentSnapshot`, one per product. An implementation concept that never appears in user-visible copy. For a product observed through its hooks alone it is a composition: the shared runtime with the product's **sources** handed in — its session reading, its non-hook Turn evidence, its row content, its read evidence, its quota — each supplying evidence and none deciding across the others. Codex's Provider is its own, because its App Server is a second lifecycle beside its hooks.
 *Avoid:* service, client, monitor.
 
-**Tier** — The promise a product's rows keep, cumulative: **Tier 0** *Listed* (a row from submission to end, a clock, a way back), **Tier 1** *Attended* (says when it is waiting and on what, and stops once answered in the product), **Tier 2** *Answerable* (can be answered from the notch, and a stale click answers nothing). A product's tier is the highest whose every requirement it meets ([`tiered-support.md`](docs/technical-explorations/multi-product-provider-architecture/tiered-support.md) §2).
+**Support level** — The highest cumulative capability contract a product meets within its declared modes and request forms: L1 Lifecycle monitoring, L2 Context identification, L3 Progress monitoring, L4 Wait detection, L5 Request reading, L6 Request answering ([`docs/product-support.md`](docs/product-support.md)). It is derived from coverage, not a product rank or runtime status.
+*Avoid:* Tier 0/1/2, Listed/Attended/Answerable as product tiers, full support.
 
-**Capability** — Something a product does beyond its tier, declared rather than inferred: exact or host navigation, read state, a product-owned Project, a title, live progress, quota. `unsupported` is a value, never zero, `nil` or a failed read.
+**Capability** — A specific supported behaviour with a declared source, scope and conditions; read removal, navigation, quota and usage, final answers, subagents, recovery and terminal reasons are independent of support level. Coverage is supported, conditional, unsupported or unverified (not applicable only when the product has no such concept); runtime unavailability is a separate fact.
+
+**Read removal** — The retirement of an ended Turn's monitoring row on read evidence attributable to its Thread. It does not archive or delete the Thread in its product.
+*Avoid:* automatic archiving, read means archived.
 
 ## Threads and Turns
 
@@ -103,13 +107,13 @@ Only the rules already asking that second question read it: summary status, prod
 
 ## Content
 
-**Project** — The grouping a Thread belongs to, resolved per product. In Codex it is the Thread grouping the user creates and manages in Codex Desktop, which may span one or more repositories; **a Codex Thread's Project must never be inferred from `cwd`, the Git root or a path name**, as those do not map one-to-one onto a user-managed Desktop Project ([ADR 0003](docs/adr/0003-use-codex-desktop-project-identity.md)). In Claude Code it is simply the Thread's working directory (`cwd`): the hook payload states it directly and transcripts are filed by it, so it is a grouping that genuinely exists in that product rather than an approximation read off a path ([ADR 0009](docs/adr/0009-resolve-project-per-product.md)).
+**Project** — The grouping a Thread belongs to, resolved per product. In Codex it is the Thread grouping the user creates and manages in Codex Desktop, which may span one or more repositories; **a Codex Thread's Project must never be inferred from `cwd`, the Git root or a path name**, as those do not map one-to-one onto a user-managed Desktop Project ([ADR 0003](docs/adr/0003-use-codex-desktop-project-identity.md)). In Antigravity CLI it is the workspace path the product supplies, with an explicit missing-name fallback when absent. In Claude Code it is simply the Thread's working directory (`cwd`): the hook payload states it directly and transcripts are filed by it, so it is a grouping that genuinely exists in that product rather than an approximation read off a path ([ADR 0009](docs/adr/0009-resolve-project-per-product.md)).
 *Avoid:* repository, workspace, mock grouping.
 
 **Chats** — The set of Codex Desktop Threads belonging to no Project.
 *Avoid:* default Project, unknown Project.
 
-**Thread title** — The title Codex Desktop currently displays for the Thread; `Untitled` where there is none yet and a content fallback is not permitted.
+**Thread title** — The name displayed for a Thread, sourced from that product's title metadata or its explicitly permitted prompt-derived fallback. A missing title follows the product's declared fallback rule; a folder name is not a Thread title ([`docs/product-support.md`](docs/product-support.md) §5).
 *Avoid:* folder name, repository name, mock title.
 
 **Processing time** — Wall-clock elapsed time matching what Codex Desktop shows for the current Turn, including time spent waiting on a person and time the device spent asleep.

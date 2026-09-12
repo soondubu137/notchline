@@ -2,7 +2,8 @@ import Foundation
 import Testing
 @testable import Notchline
 
-/// Antigravity CLI through the Tier 0 fixtures of `tiered-support.md` §7,
+/// Antigravity CLI through L1–L3 and independent-capability fixtures
+/// (`docs/product-support.md` §6),
 /// with the product's own payloads as its helper delivers them.
 ///
 /// The payloads are the shapes measured on 2026-09-11 against `agy` 1.2.2
@@ -328,7 +329,7 @@ struct AntigravityConformanceTests {
         #expect(FileManager.default.fileExists(atPath: product.paths.hooksBackup.path))
     }
 
-    // MARK: - Tier 0: Listed
+    // MARK: - L1 lifecycle and L2 context
 
     /// A turn is its first invocation to its `Stop`: one row, `Running` from
     /// the first event with the workspace's last component for a project,
@@ -774,7 +775,7 @@ struct AntigravityConformanceTests {
     /// **A finished row is retired once the user has been at its terminal**,
     /// and not before.
     ///
-    /// The lifecycle in `tiered-support.md` §2 — a Tier 0 row leaves on the
+    /// The default without read evidence (`docs/product-support.md` §4) leaves on the
     /// next submission, when the Thread goes away, or on a right-click — is
     /// what a product with no read evidence gets, and it left a `Completed`
     /// row standing on the notch for as long as the TUI session it belonged to
@@ -1014,7 +1015,7 @@ struct AntigravityConformanceTests {
     }
 
     /// The product is one descriptor: its file, its two definitions, no trust
-    /// step, and the boundary Settings states for a Tier 0 product.
+    /// step, and the unsupported capabilities Settings declares for this L3 product.
     @Test
     func theDescriptorSaysWhatTheProductIsAndIsNot() {
         let descriptor = ProductRegistry.descriptor(for: .antigravity)
@@ -1026,6 +1027,7 @@ struct AntigravityConformanceTests {
         #expect(descriptor.setup.backupName == "hooks.json.notchline-backup")
         #expect(descriptor.setup.switchHelp.contains("2 lifecycle definitions in ~/.gemini/config/hooks.json"))
         #expect(descriptor.declaredBoundary?.contains("Approvals and questions are not detected") == true)
+        #expect(descriptor.declaredBoundary?.contains("Usage quota is not supported") == true)
         #expect(ProductRegistry.descriptor(for: .codex).declaredBoundary == nil)
         #expect(ProductRegistry.descriptor(for: .claudeCode).declaredBoundary == nil)
         #expect(ProductRegistry.spokenNames == "Codex, Claude Code and Antigravity")

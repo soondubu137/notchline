@@ -10,8 +10,8 @@ import Foundation
 enum AgentKind: String, CaseIterable, Codable, Sendable, Comparable {
     case codex
     case claudeCode
-    /// Antigravity CLI, `agy`. Tier 0 (`tiered-support.md` §2): listed,
-    /// not attended. The raw value names its folder under this app's
+    /// Antigravity CLI, `agy`. L3 (`docs/product-support.md` §5): progress monitoring,
+    /// without wait detection. The raw value names its folder under this app's
     /// support directory, so it is short enough for a socket path.
     case antigravity
 
