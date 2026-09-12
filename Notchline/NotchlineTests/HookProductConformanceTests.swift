@@ -115,6 +115,24 @@ struct HookProductConformanceTests {
         }
     }
 
+    /// Limits read on a clock of the product's own, answering what the test
+    /// says and recording whether a read was asked for.
+    private actor UsageStub: UsageReading {
+        let quota: QuotaSnapshot
+        let deadline: Date?
+        let diagnostic: String?
+        private(set) var readsAskedFor = 0
+        init(quota: QuotaSnapshot, deadline: Date?, diagnostic: String?) {
+            self.quota = quota
+            self.deadline = deadline
+            self.diagnostic = diagnostic
+        }
+        func currentQuota() -> QuotaSnapshot { quota }
+        func readIfStale() { readsAskedFor += 1 }
+        func nextReadDeadline() -> Date? { deadline }
+        func quotaDiagnostic() -> String? { diagnostic }
+    }
+
     private final class AdmissionStub: ThreadAdmitting, @unchecked Sendable {
         private let lock = NSLock()
         private var value: ThreadAdmission = .everyObservedThread
@@ -138,7 +156,7 @@ struct HookProductConformanceTests {
         let admission = AdmissionStub()
         let provider: HookProductProvider
 
-        init(vocabulary: any AgentHookVocabulary) throws {
+        init(vocabulary: any AgentHookVocabulary, usage: (any UsageReading)? = nil) throws {
             // Short on purpose: a Unix socket path may not exceed 104 bytes.
             root = URL(fileURLWithPath: "/tmp")
                 .appendingPathComponent("hpp-\(UUID().uuidString.prefix(8))")
@@ -153,7 +171,8 @@ struct HookProductConformanceTests {
                 paths: paths,
                 vocabulary: vocabulary,
                 presence: presence,
-                admission: admission
+                admission: admission,
+                usage: usage
             )
         }
 
@@ -414,5 +433,38 @@ struct HookProductConformanceTests {
         let resumed = await product.provider.fetchSnapshot()
         #expect(resumed.sessions.first?.status == .running)
         #expect(resumed.sessions.first?.request == nil)
+    }
+
+    // MARK: - Capabilities
+
+    /// A product that hands in a usage reader publishes its limits, books the
+    /// reader's deadline, and says its sentence last; the same Provider with
+    /// none publishes no windows and books nothing (`quota-footer-v2.md` §5).
+    @Test
+    func aUsageReaderIsPublishedAndBookedOnlyWhereOneIsHandedIn() async throws {
+        let quota = QuotaSnapshot(
+            windows: [QuotaWindow(label: "5h limit", remainingPercent: 62, resetsAt: nil)]
+        )
+        let deadline = t0.addingTimeInterval(1_800)
+        let usage = UsageStub(quota: quota, deadline: deadline, diagnostic: "Sign the CLI in.")
+        let product = try Product(vocabulary: ListedOnlyVocabulary(), usage: usage)
+        defer { Task { await product.tearDown() } }
+
+        let unregistered = await product.provider.fetchSnapshot()
+        #expect(unregistered.quota == .unavailable)
+        #expect(await usage.readsAskedFor == 0)
+
+        try await product.provider.installIntegration()
+        let registered = await product.provider.fetchSnapshot()
+        #expect(registered.quota == quota)
+        #expect(registered.diagnostic == "Sign the CLI in.")
+        #expect(await usage.readsAskedFor == 1)
+        #expect(await product.provider.nextRefreshDeadline() == deadline)
+
+        let bare = try Product(vocabulary: ListedOnlyVocabulary())
+        defer { Task { await bare.tearDown() } }
+        try await bare.provider.installIntegration()
+        #expect(await bare.provider.fetchSnapshot().quota == .noneReported)
+        #expect(await bare.provider.nextRefreshDeadline() == nil)
     }
 }

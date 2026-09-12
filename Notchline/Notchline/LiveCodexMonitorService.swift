@@ -127,8 +127,11 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``.
     /// And the account and quota reads, whose figures are drawn only in a
     /// footer the user reaches by hovering the notch -- see
-    /// ``scheduleQuotaRefreshIfNeeded()``.
+    /// ``CodexUsageReader/readIfStale()``.
     nonisolated private let screenAvailability: any ScreenAvailabilityReporting
+    /// The account and its quota, read over the App Server on a clock of their
+    /// own (``UsageReading``).
+    private let usage: CodexUsageReader
     nonisolated let stateChangeEvents: AsyncStream<Void>
     nonisolated private let snapshotInvalidations: AsyncStream<Void>.Continuation
     /// Whether Codex Desktop is running, and as which process.
@@ -137,10 +140,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// the process that vouched for it and the presence drawn beside it must
     /// describe the same instant (``RunningApplicationPresence``).
     private let presence: RunningApplicationPresence
-    private var cachedQuota = QuotaSnapshot.unavailable
-    private var quotaReadAt: Date?
-    private var cachedAccountFingerprint: String?
-    private var accountReadAt: Date?
     private var threadRecords: [String: ThreadRecord] = [:]
     /// The threads the per-thread metadata read actually revisits.
     ///
@@ -247,8 +246,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// the two cases apart by their message text.
     private var threadsWithoutItemsRead: Set<String> = []
     private var observedDesktopProcessIdentifier: pid_t?
-    private var quotaRefreshTask: Task<Void, Never>?
-    private var quotaRetryAfter: Date?
     /// Cool-off after a connect that never reached a working transport.
     ///
     /// The one backoff here that guards a subprocess rather than a request. See
@@ -325,6 +322,13 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             bufferingPolicy: .bufferingNewest(1)
         )
         self.snapshotInvalidations = invalidationContinuation
+        self.usage = CodexUsageReader(
+            client: client,
+            clock: clock,
+            timing: timing,
+            screenAvailability: screenAvailability,
+            onUpdate: { invalidationContinuation.yield(()) }
+        )
         self.stateChangeEvents = DirectoryChangeWatcher.merged([
             // The store signals only when what a row draws has changed, so a
             // 17-event turn is one wake-up rather than seventeen. There is no
@@ -569,12 +573,12 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 // dropped; anything still in there is there because this pass
                 // put it there.
                 didEvaluateRows = true
-                scheduleQuotaRefreshIfNeeded()
+                await usage.readIfStale()
                 return remember(
                     AgentSnapshot(
                         availability: .ready,
                         sessions: sessions.sorted(by: MonitorAggregation.rowOrder),
-                        quota: cachedQuota,
+                        quota: await usage.currentQuota(),
                         diagnostic: MonitorDiagnostics.combined(
                             hookDiagnostic,
                             unreadSnapshot.diagnostic,
@@ -621,12 +625,12 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             try await confirmAppServerAnswersReads(
                 timeoutNanoseconds: nanoseconds(timing.coreRequestTimeout)
             )
-            scheduleQuotaRefreshIfNeeded()
+            await usage.readIfStale()
             return remember(
                 AgentSnapshot(
                     availability: .ready,
                     sessions: [],
-                    quota: cachedQuota,
+                    quota: await usage.currentQuota(),
                     diagnostic: nil,
                     setupStatus: setupStatus,
                     presence: presence
@@ -655,7 +659,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                         presence: presence
                     )
                 }
-                return snapshotPreservingTrustedState(
+                return await snapshotPreservingTrustedState(
                     after: error,
                     setupStatus: setupStatus,
                     presence: presence
@@ -739,7 +743,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// deadline where it was, the same wake-up fires again immediately and the
     /// monitor spins. So each entry mirrors the exact condition its scheduler
     /// tests, and a source with no pending work reports nothing at all.
-    func nextRefreshDeadline() -> Date? {
+    func nextRefreshDeadline() async -> Date? {
         var deadlines: [Date] = []
         // Asked once. Two entries below consult it, and a deadline that
         // disagreed with the guard its scheduler tests is the busy-wait this
@@ -792,32 +796,10 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             )
         }
 
-        // Quota and account. A nil read date means the read is already due, and
-        // the next refresh schedules it without needing a wake-up of its own.
-        //
-        // Both are skipped while there is no screen, mirroring the guard in
-        // `scheduleQuotaRefreshIfNeeded()`. Left standing they would be
-        // deadlines no refresh could clear -- the store wakes, the scheduler
-        // refuses the read, the deadline is still in the past -- which is the
-        // busy-wait shape this whole comment is about, and the screen coming
-        // back is already an edge `stateChangeEvents` carries.
-        if screenIsAvailable {
-            if let quotaReadAt {
-                deadlines.append(
-                    deferred(
-                        quotaReadAt.addingTimeInterval(timing.quotaRefreshInterval),
-                        by: quotaRetryAfter
-                    )
-                )
-            }
-            if let accountReadAt {
-                deadlines.append(
-                    deferred(
-                        accountReadAt.addingTimeInterval(timing.accountRefreshInterval),
-                        by: quotaRetryAfter
-                    )
-                )
-            }
+        // Quota and account, mirroring the reader's own scheduler -- see
+        // ``CodexUsageReader/nextReadDeadline()``.
+        if let quota = await usage.nextReadDeadline() {
+            deadlines.append(quota)
         }
 
         // Work a backoff parked. Reported only while backing off: a pending
@@ -869,8 +851,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         // And so does the confirmation that it answers reads at all: the next
         // connection is a different process, and may be a different build.
         threadListAnsweredAt = nil
-        quotaRefreshTask?.cancel()
-        quotaRefreshTask = nil
+        await usage.cancel()
         terminalUnreadMembershipGate.reset()
         connectRetryAfter = nil
         lastConnectFailure = nil
@@ -1048,119 +1029,12 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         UInt64(max(0, seconds) * 1_000_000_000)
     }
 
-    /// Starts the account and quota reads if either has gone stale, and there
-    /// is a screen the answer could be drawn on.
-    ///
-    /// **Nothing is read while there is no screen.** Both figures exist to be
-    /// drawn in the panel's footer, which a user reaches by hovering the notch,
-    /// so a display that is asleep or a screen that is locked means they cannot
-    /// be looked at -- not merely that they are unlikely to be. Left ungated,
-    /// an idle machine spent the night issuing three App Server requests a
-    /// minute for a footer nobody could open, and unlike Codex Desktop being
-    /// shut this cost was paid whenever the transport was alive at all: the
-    /// branch of `fetchSnapshot(dismissedRowIDs:)` that finds no Hook
-    /// observation schedules this too.
-    ///
-    /// The same rule ``ClaudeCodeUsageReader/startReadIfStale()`` applies to
-    /// the other product's copy of this reading, and for the same reason. The
-    /// wake is an edge ``stateChangeEvents`` already carries -- the screen
-    /// coming back is one of the streams merged into it -- so the first refresh
-    /// after an unlock takes the reading, rather than the figures waiting out
-    /// the interval at the moment the user is most likely to be looking.
-    private func scheduleQuotaRefreshIfNeeded() {
-        let now = clock.now()
-        guard quotaRefreshTask == nil,
-              screenAvailability.isAvailable(),
-              quotaRetryAfter.map({ now >= $0 }) ?? true else {
-            return
-        }
-
-        let accountNeedsRefresh = accountReadAt == nil
-            || now.timeIntervalSince(accountReadAt ?? .distantPast)
-                >= timing.accountRefreshInterval
-        // The same window `nextRefreshDeadline` publishes for quota. A literal
-        // here would let the wake-up and the work it wakes for disagree.
-        let quotaNeedsRefresh = quotaReadAt == nil
-            || now.timeIntervalSince(quotaReadAt ?? .distantPast)
-                >= timing.quotaRefreshInterval
-        guard accountNeedsRefresh || quotaNeedsRefresh else { return }
-
-        quotaRefreshTask = Task { [weak self] in
-            await self?.refreshQuotaInBackground()
-        }
-    }
-
     /// Tells the store that background work changed what a snapshot would say.
     ///
     /// Every background read must end in this, or its result sits in the actor
     /// until some unrelated deadline happens to fire.
     nonisolated private func invalidatePublishedSnapshot() {
         snapshotInvalidations.yield(())
-    }
-
-    private func refreshQuotaInBackground() async {
-        defer {
-            quotaRefreshTask = nil
-            invalidatePublishedSnapshot()
-        }
-        do {
-            _ = try await readAccountUsageIfNeeded()
-            quotaRetryAfter = nil
-        } catch {
-            cachedQuota = .unavailable
-            quotaReadAt = nil
-            quotaRetryAfter = clock.now().addingTimeInterval(timing.requestRetryInterval)
-        }
-    }
-
-    private func readAccountUsageIfNeeded() async throws -> QuotaSnapshot {
-        let now = clock.now()
-        if accountReadAt == nil
-            || now.timeIntervalSince(accountReadAt ?? .distantPast)
-                >= timing.accountRefreshInterval {
-            let account = try await client.request(
-                method: "account/read",
-                params: .object(["refreshToken": .bool(false)])
-            )
-            let fingerprint = CodexSnapshotParser.accountFingerprint(from: account)
-            accountReadAt = now
-            if cachedAccountFingerprint != fingerprint {
-                cachedAccountFingerprint = fingerprint
-                cachedQuota = .unavailable
-                quotaReadAt = nil
-            }
-        }
-
-        if let quotaReadAt,
-           now.timeIntervalSince(quotaReadAt) < timing.quotaRefreshInterval {
-            return cachedQuota
-        }
-
-        async let rateLimitsResponse = try? await client.request(
-            method: "account/rateLimits/read",
-            params: .object([:])
-        )
-        async let tokenUsageResponse = try? await client.request(
-            method: "account/usage/read",
-            params: nil
-        )
-        let responses = await (rateLimitsResponse, tokenUsageResponse)
-        let rateLimitQuota = responses.0.map {
-            CodexSnapshotParser.quota(from: $0)
-        }
-            ?? .unavailable
-        // Every window the read produced, not just the first: rebuilding this
-        // through the single-window initialiser is what used to throw the
-        // second one away before the footer could draw it.
-        let quota = QuotaSnapshot(
-            windows: rateLimitQuota.windows,
-            todayTokens: responses.1.flatMap {
-                CodexSnapshotParser.todayTokenCount(from: $0, now: clock.now())
-            }
-        )
-        cachedQuota = quota
-        quotaReadAt = now
-        return quota
     }
 
     private func sessions(
@@ -1833,7 +1707,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         after error: CodexAppServerError,
         setupStatus: IntegrationSetupStatus,
         presence: AgentPresence
-    ) -> AgentSnapshot {
+    ) async -> AgentSnapshot {
+        let cachedQuota = await usage.currentQuota()
         let diagnostic = "An App Server request failed for the moment; the most recent state has been kept: \(error.localizedDescription)"
         guard let lastTrustedSnapshot else {
             return AgentSnapshot(

@@ -94,6 +94,31 @@ protocol AnswerDelivering: Sendable {
     func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool
 }
 
+/// A product that reports how much of its limits is left, read on a clock of
+/// its own rather than on an edge.
+///
+/// A capability, not a contract the store reads: the Provider that composes a
+/// reader publishes what it holds on the product's snapshot, books the
+/// reader's deadline among its own, and says the reader's sentence in its
+/// diagnostic. Claude Code reads its windows off `/usage` and its tokens off
+/// the transcripts (``ClaudeCodeUsageReader``); Codex reads both over the App
+/// Server (``CodexUsageReader``). A product with none publishes
+/// ``QuotaSnapshot/noneReported`` — no windows at all, rather than one it
+/// could not read (`quota-footer-v2.md` §5).
+protocol UsageReading: Sendable {
+    /// What is known now. Never waits for a read.
+    func currentQuota() async -> QuotaSnapshot
+    /// Starts a read behind the held figures if they have gone stale and
+    /// there is a screen they could be drawn on. A read that lands announces
+    /// itself on the edge its composer handed the reader.
+    func readIfStale() async
+    /// When the figures want reading again; nil while nothing is due that a
+    /// refresh could start.
+    func nextReadDeadline() async -> Date?
+    /// A sentence the user can act on while there are no figures to draw.
+    func quotaDiagnostic() async -> String?
+}
+
 /// A product whose monitoring leaves files on disk that the user may want to
 /// find. Reporting only: nothing in this app deletes them — the folder they go
 /// to can hold a user's own sessions as well, so the decision is theirs. A

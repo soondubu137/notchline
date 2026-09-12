@@ -109,9 +109,11 @@ struct AdmitsEveryObservedThread: ThreadAdmitting {
 /// carrying the answering argument gives Tier 2 — nothing here changes between
 /// them.
 ///
-/// **What this deliberately does not do.** No quota, no interruption evidence
-/// beyond what the hooks say, no title beyond the prompt. Each of those is a
-/// capability a product adds beside this, not a flag on it.
+/// **What this deliberately does not do.** No interruption evidence beyond
+/// what the hooks say, no title beyond the prompt. Each of those is a
+/// capability a product adds beside this, not a flag on it. A quota is one a
+/// product hands in (``UsageReading``); with none, the footer draws the
+/// product's name and no lines.
 ///
 /// **Read state is the one of those capabilities this now composes**, because
 /// for a terminal product it costs the product nothing: hand in
@@ -130,6 +132,9 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     /// What the terminal a Thread runs in says about the user having read its
     /// finished answer, or nil for a product that supplies no such evidence.
     private let readEvidence: TerminalReadEvidence?
+    /// How much of the product's limits is left, or nil for a product that
+    /// reports none (``UsageReading``).
+    private let usage: (any UsageReading)?
     /// Keeps a finished row listed until it has been read, and retires it the
     /// moment it has been.
     ///
@@ -151,6 +156,9 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         /// next submission, its departure from the admission list or a
         /// right-click.
         readEvidence: TerminalReadEvidence? = nil,
+        /// The product's quota, for one that reports limits. Its reads land on
+        /// an edge the composer merges into `changeEvents`.
+        usage: (any UsageReading)? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard,
         fileManager: FileManager = .default,
@@ -170,6 +178,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         self.presence = presence
         self.admission = admission
         self.readEvidence = readEvidence
+        self.usage = usage
         self.readGate = TerminalUnreadRowFilter(timing: timing)
         self.clock = clock
         self.stateChangeEvents = DirectoryChangeWatcher.merged(
@@ -208,6 +217,9 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
                 sessions: [],
                 setupStatus: closedStatus,
                 diagnostic: diagnostic,
+                // A product with limits has them whether or not its hooks are
+                // registered; they are simply not being read.
+                quota: usage == nil ? .noneReported : .unavailable,
                 presence: .unknown
             )
         }
@@ -244,11 +256,21 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         hooks.repository.retainPreviews(
             forSessions: presence.isOpen ? Set(state.turns.map(\.threadID)) : []
         )
+        // Whatever is known right now, with a read started behind it. Awaiting
+        // the read here would make a hook event's row wait on it.
+        await usage?.readIfStale()
         return snapshot(
             availability: unwatchable == nil ? .ready : .disconnected,
             sessions: rows,
             setupStatus: status,
-            diagnostic: MonitorDiagnostics.combined(unwatchable, state.diagnostic),
+            diagnostic: MonitorDiagnostics.combined(
+                unwatchable,
+                state.diagnostic,
+                // Last, because it is the least urgent: the rows are all there
+                // and what is missing is the footer's lines.
+                await usage?.quotaDiagnostic()
+            ),
+            quota: await usage?.currentQuota() ?? .noneReported,
             presence: presence
         )
     }
@@ -331,9 +353,9 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         )
     }
 
-    /// Nothing timed but a finished row waiting to be read: the reducer's edges
-    /// and the store's heartbeat are the only other reasons to ask again, and a
-    /// product with a timed source of its own composes it beside this Provider.
+    /// Two timed sources and nothing else: the usage reader's next read, and a
+    /// finished row waiting to be read. The reducer's edges and the store's
+    /// heartbeat are the only other reasons to ask again.
     ///
     /// That row waits on the user rather than on time, so its deadline is a
     /// floor under the edges — and the access time it is waiting for moves in
@@ -341,11 +363,14 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     /// re-check. It costs nothing while no such row is listed, and nothing at
     /// all while the screen is one nobody could read it on.
     func nextRefreshDeadline() async -> Date? {
-        guard let readEvidence else { return nil }
-        return readGate.nextDeadline(
-            now: clock.now(),
-            screenIsAvailable: readEvidence.screen.isAvailable()
-        )
+        [
+            await usage?.nextReadDeadline(),
+            readEvidence.flatMap {
+                readGate.nextDeadline(now: clock.now(), screenIsAvailable: $0.screen.isAvailable())
+            }
+        ]
+        .compactMap { $0 }
+        .min()
     }
 
     func disconnect() async {
@@ -403,18 +428,17 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         sessions: [MonitoredSession],
         setupStatus: IntegrationSetupStatus,
         diagnostic: String?,
+        quota: QuotaSnapshot,
         presence: AgentPresence
     ) -> AgentSnapshot {
         AgentSnapshot(
             agent: agent,
             availability: availability,
             sessions: sessions,
-            // No quota, rather than a quota that could not be read: this
-            // Provider reads none and no product built on it has claimed one,
-            // so its footer group is a name and a spend with no lines under
-            // it (`quota-footer-v2.md` §5). A product that adds a quota
-            // reading beside this composes it and publishes its own windows.
-            quota: .noneReported,
+            // For a product with no usage reader, no quota rather than a quota
+            // that could not be read: its footer group is a name and a spend
+            // with no lines under it (`quota-footer-v2.md` §5).
+            quota: quota,
             diagnostic: diagnostic,
             setupStatus: setupStatus,
             presence: presence

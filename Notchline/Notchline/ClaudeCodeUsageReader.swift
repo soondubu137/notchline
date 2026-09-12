@@ -26,7 +26,7 @@ import os
 ///
 /// The one thing still read out of the answer is that shape, and only to say
 /// so. No figure comes off prose any more.
-actor ClaudeCodeUsageReader {
+actor ClaudeCodeUsageReader: UsageReading {
     private static let log = Logger(
         subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCodeUsageReader"
@@ -227,6 +227,13 @@ actor ClaudeCodeUsageReader {
     func currentQuota() -> QuotaSnapshot {
         if inFlight == nil { _ = startReadIfStale() }
         return cached
+    }
+
+    /// Starts a reading if one has gone stale, and returns without waiting for
+    /// it. ``currentQuota()`` does the same, so a Provider that asks for both
+    /// starts one reading, not two.
+    func readIfStale() {
+        if inFlight == nil { _ = startReadIfStale() }
     }
 
     /// The same reading, waited on. Kept for callers that want the answer
