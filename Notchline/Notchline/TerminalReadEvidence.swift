@@ -141,22 +141,3 @@ struct TerminalReadEvidence: ReadEvidenceSource {
         return .read
     }
 }
-
-/// The process each Thread ran as, in the list one refresh read.
-///
-/// For a Provider whose read evidence must be asked about the list that proved
-/// its rows exist, and not about a list looked up again: Claude Code's session
-/// list is a `claude` launch when it has gone stale, and a second reading in
-/// the middle of the verdicts could buy one, and describe a different instant
-/// from the rows it is judging.
-actor ListedSessionProcesses: SessionProcessLocating {
-    private var processIdentifierByThreadID: [String: Int32] = [:]
-
-    func hold(_ processIdentifiers: [String: Int32]) {
-        processIdentifierByThreadID = processIdentifiers
-    }
-
-    func processIdentifier(forThreadID threadID: String) -> Int32? {
-        processIdentifierByThreadID[threadID]
-    }
-}

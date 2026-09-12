@@ -161,7 +161,7 @@ struct AntigravityLiveConversation: Sendable, Equatable {
 /// another name is invisible. A conversation's process is found by the lock
 /// it holds, never by title, cwd or age. `unknown` is answered only when the
 /// kernel lists no process at all, which it cannot while this one runs.
-final class AntigravityConversationScanner: ProductPresenceReporting, ThreadAdmitting,
+final class AntigravityConversationScanner: ProductPresenceReporting, ThreadAdmitting, ProductSessionReading,
     SessionProcessLocating, @unchecked Sendable {
     static let executableName = "agy"
 
@@ -244,6 +244,21 @@ final class AntigravityConversationScanner: ProductPresenceReporting, ThreadAdmi
         cached = reading
         return reading
     }
+
+    /// Presence and admission from one kernel reading, which is what they are.
+    func read(observing state: HookStateSnapshot) async -> SessionReading {
+        let reading = read()
+        guard reading.listedAnything else {
+            return SessionReading(presence: .unknown, admission: .unknown)
+        }
+        return SessionReading(
+            presence: reading.conversations.isEmpty ? .closed : .open,
+            admission: .exactly(Set(reading.conversations.map(\.conversationID)), readAt: reading.readAt)
+        )
+    }
+
+    /// Nothing is watched: the locks are read from the kernel when asked.
+    func stopWatching() async {}
 
     func presence() async -> AgentPresence {
         let reading = read()

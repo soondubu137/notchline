@@ -98,8 +98,71 @@ struct AdmitsEveryObservedThread: ThreadAdmitting {
     func admission() async -> ThreadAdmission { .everyObservedThread }
 }
 
+/// What one reading of a product's own list says: whether the product is open,
+/// which Threads it vouches for, and why it cannot be watched when that is the
+/// answer.
+nonisolated struct SessionReading: Sendable, Equatable {
+    let presence: AgentPresence
+    let admission: ThreadAdmission
+    /// A sentence the user can act on while presence is `unknown`; nil to have
+    /// the Provider say the generic one.
+    let unwatchableReason: String?
+
+    init(presence: AgentPresence, admission: ThreadAdmission, unwatchableReason: String? = nil) {
+        self.presence = presence
+        self.admission = admission
+        self.unwatchableReason = unwatchableReason
+    }
+}
+
+/// A product's presence and admission, read together once per refresh.
+///
+/// **Together, because a product that has a list answers both from it** and
+/// two askings could land either side of a change: Claude Code's presence is
+/// its session list being non-empty, Antigravity CLI's is a process holding a
+/// presence lock, and each also names the Threads it vouches for. A product
+/// whose two answers really are separate hands them in apart
+/// (``SeparateSessionReading``).
+protocol ProductSessionReading: Sendable {
+    /// One reading for this refresh.
+    ///
+    /// - Parameter state: The Turns the reducer holds after the refresh's
+    ///   drain, for a product whose list can be shown to be behind them — a
+    ///   Turn it does not name that moved after it was read.
+    func read(observing state: HookStateSnapshot) async -> SessionReading
+    /// Nothing is being monitored: stop any watcher the readings pointed at
+    /// the product's own records.
+    func stopWatching() async
+}
+
+/// Presence and admission answered by two sources that need not agree on an
+/// instant — a running-application list and "every observed Thread", say.
+struct SeparateSessionReading: ProductSessionReading {
+    let presence: any ProductPresenceReporting
+    let admission: any ThreadAdmitting
+
+    func read(observing state: HookStateSnapshot) async -> SessionReading {
+        SessionReading(presence: await presence.presence(), admission: await admission.admission())
+    }
+
+    func stopWatching() async {}
+}
+
+extension HookEventRepository {
+    /// Holds the Turns to the Threads a product vouches for (ADR 0017).
+    ///
+    /// Only an exact list retires anything, and only a Turn whose last event
+    /// predates the reading: a list that could not be read, or a product with
+    /// no list, retires nothing on a failure to ask.
+    func applying(_ admission: ThreadAdmission, to state: HookStateSnapshot) -> HookStateSnapshot {
+        guard case let .exactly(threadIDs, readAt) = admission else { return state }
+        return removeThreads(notIn: threadIDs, snapshotStartedAt: readAt)
+    }
+}
+
 /// One hook-based product's Provider: setup, transport, the shared reducer and
-/// a row per Turn, with presence and admission supplied by the product.
+/// a row per Turn, with presence and admission supplied by the product
+/// (``ProductSessionReading``).
 ///
 /// What the row can say is decided by the vocabulary handed in. A vocabulary
 /// that maps only a start and an end gives Tier 0: rows appear on submission,
@@ -127,8 +190,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     nonisolated let stateChangeEvents: AsyncStream<Void>
 
     private let hooks: HookLifecycleSource
-    private let presence: any ProductPresenceReporting
-    private let admission: any ThreadAdmitting
+    private let sessions: any ProductSessionReading
     /// What the terminal a Thread runs in says about the user having read its
     /// finished answer, or nil for a product that supplies no such evidence.
     private let readEvidence: (any ReadEvidenceSource)?
@@ -144,12 +206,41 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     private var readGate: TerminalUnreadRowFilter
     private let clock: any MonitorClock
 
+    /// A product whose presence and admission are two separate answers.
     init(
         agent: AgentKind,
         paths: HookIntegrationPaths,
         vocabulary: any AgentHookVocabulary,
         presence: any ProductPresenceReporting,
         admission: any ThreadAdmitting = AdmitsEveryObservedThread(),
+        readEvidence: (any ReadEvidenceSource)? = nil,
+        usage: (any UsageReading)? = nil,
+        clock: any MonitorClock = SystemMonitorClock(),
+        timing: MonitorTiming = .standard,
+        fileManager: FileManager = .default,
+        changeEvents: [AsyncStream<Void>] = []
+    ) {
+        self.init(
+            agent: agent,
+            paths: paths,
+            vocabulary: vocabulary,
+            sessions: SeparateSessionReading(presence: presence, admission: admission),
+            readEvidence: readEvidence,
+            usage: usage,
+            clock: clock,
+            timing: timing,
+            fileManager: fileManager,
+            changeEvents: changeEvents
+        )
+    }
+
+    init(
+        agent: AgentKind,
+        paths: HookIntegrationPaths,
+        vocabulary: any AgentHookVocabulary,
+        /// Whether the product is open and which Threads it vouches for, read
+        /// together once per refresh.
+        sessions: any ProductSessionReading,
         /// What retires a finished row once it has been read. A terminal
         /// product supplies it by naming the process each Thread runs in; a
         /// product that supplies none keeps a finished row until the Thread's
@@ -175,8 +266,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
             fileManager: fileManager
         )
         self.hooks = hooks
-        self.presence = presence
-        self.admission = admission
+        self.sessions = sessions
         self.readEvidence = readEvidence
         self.usage = usage
         self.readGate = TerminalUnreadRowFilter(timing: timing)
@@ -213,6 +303,7 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
             // second for rows nobody can see.
             readGate.reset()
             await readEvidence?.forget()
+            await sessions.stopWatching()
             return snapshot(
                 availability: availability,
                 sessions: [],
@@ -226,19 +317,16 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         }
 
         var state = await hooks.repository.drainDeliveredEvents()
-        let presence = await presence.presence()
-        switch await admission.admission() {
-        case let .exactly(threadIDs, readAt):
-            state = await hooks.repository.removeThreads(notIn: threadIDs, snapshotStartedAt: readAt)
-        case .everyObservedThread, .unknown:
-            break
-        }
+        let reading = await sessions.read(observing: state)
+        let presence = reading.presence
+        state = await hooks.repository.applying(reading.admission, to: state)
 
         // Presence unknown is the one state this skeleton reports as
         // unwatchable: the product may be open and busy, and drawing nothing
         // while claiming Connected would be the guess PRD §12 forbids.
         let unwatchable: String? = presence == .unknown
-            ? "\(agent.displayName) is registered, but this app cannot tell whether it is open."
+            ? reading.unwatchableReason
+                ?? "\(agent.displayName) is registered, but this app cannot tell whether it is open."
             : nil
         var rows: [MonitoredSession] = []
         var readDiagnostic: String?

@@ -188,8 +188,7 @@ enum ProductRegistry {
                     agent: .antigravity,
                     paths: .live(for: .antigravity),
                     vocabulary: AntigravityHookVocabulary(),
-                    presence: conversations,
-                    admission: conversations,
+                    sessions: conversations,
                     // And the fourth question that one reading answers: the
                     // terminal that process is attached to is what says whether
                     // the user has read a finished row, so a read row is

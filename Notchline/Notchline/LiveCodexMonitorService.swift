@@ -523,12 +523,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 startThreadListRefreshIfPossible()
                 startThreadMetadataRefreshIfPossible()
 
-                if let threadListReadAt {
-                    hookState = await hookEvents.removeThreads(
-                        notIn: listedThreadIDs,
-                        snapshotStartedAt: threadListReadAt
-                    )
-                }
+                hookState = await hookEvents.applying(threadAdmission, to: hookState)
                 // The one thing that ends a Codex Turn without a hook event,
                 // and the reason it has to exist: pressing stop in Desktop
                 // sends nothing at all -- no `Stop`, and not even the
@@ -1165,6 +1160,13 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             dismissedRowIDs: dismissedRowIDs,
             now: clock.now()
         ) { _ in .judged(by: unreadState) }
+    }
+
+    /// Which threads Codex vouches for (ADR 0017): the membership sweep's set,
+    /// as of the moment that sweep started, once one has answered.
+    private var threadAdmission: ThreadAdmission {
+        guard let threadListReadAt else { return .unknown }
+        return .exactly(listedThreadIDs, readAt: threadListReadAt)
     }
 
     private var threadListRefreshIsDue: Bool {
