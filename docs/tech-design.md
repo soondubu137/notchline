@@ -765,7 +765,21 @@ The Turn stamp is `prompt_id` rather than `HookPayload.turnID`: `MessageDisplay`
 
 The folding wake-up gained an edge to match: a changed Turn is a change even when two pieces of text are identical character for character. Before this Turn speaks, the row draws the prompt, so this Turn's first delta replaces "the prompt" rather than "the previous text".
 
-`UserPromptSubmit`'s `prompt` is enabled by `AgentHookVocabulary.carriesPromptText` — a switch previously called `carriesTurnText`, where one switch governed both the prompt and `Stop`'s `last_assistant_message`, so the correct judgement "this product's final answer comes only from `MessageDisplay`" incidentally switched the prompt off too. It is now two: `carriesPromptText` true for both products, and `carriesFinalAnswerText` true for Codex only.
+`UserPromptSubmit`'s `prompt` is enabled by `AgentHookVocabulary.carriesPromptText` — a switch previously called `carriesTurnText`, where one switch governed both the prompt and `Stop`'s `last_assistant_message`, so the correct judgement "this product's final answer comes only from `MessageDisplay`" incidentally switched the prompt off too. It is now two: `carriesPromptText` true for both products, and `carriesFinalAnswerText` true for Codex only. (Antigravity CLI, below, sets both, because its translator writes both fields.)
+
+### How text reaches this process (Antigravity CLI)
+
+**Read, not received, at events the product already sends.** No payload carries text and nothing streams, so `AntigravityPayloadTranslator` reads the tail of the transcript the payload names — `AntigravityTranscriptFile`, the same bounded read that titles the row — at two events. A later `PreInvocation` of an open Turn, which used to be dropped, hands the newest non-empty `PLANNER_RESPONSE` `content` over as one whole message under the synthetic name `PlannerResponse`, the vocabulary's `messageDeltaEventName`, with `message_id` the step index and `prompt_id` the local Turn id; it then takes Claude Code's path into `HookSessionPreviewStore` and never reaches the reducer's mailbox. `Stop` puts the closing words under `last_assistant_message`.
+
+Three rules keep that path correct for text that arrives whole rather than as deltas:
+
+1. **A message is handed over once.** The store appends a delivery that repeats a `message_id` to the text it holds, which is right for incremental deltas and draws a whole message twice. The translator remembers the step it last handed over per conversation, so a model call that only called a tool hands over nothing.
+2. **A repeated `Stop` repeats what the original carried**, without reading. The reducer applies a same-Turn `Stop` that is not older, and one with no `last_assistant_message` would blank the row.
+3. **`HookProductProvider` prunes the store to the Turns it holds on every refresh**, which is also the listed set that arms the fold's wake above. Its row draws `assistantPreview`, then this Turn's text from the store; a product whose vocabulary names no message event gets nothing from the store.
+
+**Why these two events** (measured 2026-09-12 on 1.2.2, `antigravity-cli.md` §2.2): the step is written whole when the model call finishes, `PostInvocation` fires only after that call's tools return and the next `PreInvocation` 30 ms after it, and the closing step is on disk by `Stop`. Registering `PostInvocation` would buy nothing, and `PreToolUse`, the one earlier edge, is a write path: a handler printing `{}` had every tool call of a turn refused.
+
+Cost: one read of at most 256 KB per model call on the listener's read queue, for an event whose helper process already runs, and at most one wake per new message.
 
 ## 12. Processing time
 

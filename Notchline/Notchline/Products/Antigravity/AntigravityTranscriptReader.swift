@@ -1,16 +1,40 @@
 import Foundation
 
-/// The prompt Antigravity CLI writes down but never sends.
+/// The prompt and the model's words, which Antigravity CLI writes down but
+/// never sends.
 ///
 /// A seam so the translator can be tested against a transcript the test wrote,
 /// and so the one file read on the hook path has a name.
 nonisolated protocol AntigravityTranscriptReading: Sendable {
-    /// The most recent thing the user asked in this conversation, or nil where
-    /// the file is absent, unreadable, or holds no request in the window read.
-    func latestUserRequest(inTranscriptAt path: String) -> String?
+    /// What the end of the file says, from one read of it. Every field is nil
+    /// where the file is absent, unreadable, or holds no such step in the
+    /// window read.
+    func tail(ofTranscriptAt path: String) -> AntigravityTranscriptTail
 }
 
-/// Reads the prompt out of the transcript the payload already names.
+/// What one read of a transcript's tail found.
+nonisolated struct AntigravityTranscriptTail: Sendable, Equatable {
+    /// The most recent thing the user asked in this conversation.
+    var latestUserRequest: String?
+    /// The newest thing the model has said since the user last asked.
+    var latestModelText: AntigravityModelText?
+
+    nonisolated init(latestUserRequest: String? = nil, latestModelText: AntigravityModelText? = nil) {
+        self.latestUserRequest = latestUserRequest
+        self.latestModelText = latestModelText
+    }
+}
+
+/// One model response's words, and the step they were written in.
+nonisolated struct AntigravityModelText: Sendable, Equatable {
+    /// The step's `step_index`. Which response this is, so that the same words
+    /// read at two events are one message rather than two.
+    let step: Int
+    let text: String
+}
+
+/// Reads the prompt, and what the model has said since, out of the transcript
+/// the payload already names.
 ///
 /// **Why a file is read at all.** No Antigravity hook payload carries the
 /// prompt — measured across all five events
@@ -39,6 +63,22 @@ nonisolated protocol AntigravityTranscriptReading: Sendable {
 /// following is a `<SYSTEM_MESSAGE>` not actually sent by the user"*, and that
 /// is exactly what it would be if the type were not checked.
 ///
+/// **What a model step looks like**, measured 2026-09-12 on the same build:
+///
+/// ```json
+/// {"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE",
+///  "content":"I will execute the command for you right away.",
+///  "thinking":"…","tool_calls":[…]}
+/// ```
+///
+/// One per model call, **written whole once the call has finished** — polled
+/// at 30 ms, a step never appeared half-written or `RUNNING` — with the words
+/// the user sees in `content`. A call that only calls a tool has an empty
+/// `content` and is passed over, so the row keeps the last thing actually said.
+/// `thinking` is the model's reasoning and is never read (`CONTEXT.md`,
+/// *Current content preview*). The walk back stops at the user's step: past it
+/// every word belongs to an earlier turn.
+///
 /// **Three ceilings, stated.**
 ///
 /// - **Only the tail is read** — ``tailBytes`` — because this runs on the hook
@@ -46,7 +86,9 @@ nonisolated protocol AntigravityTranscriptReading: Sendable {
 ///   turn's first invocation the user's step is the last line in the file, so
 ///   the window is enormously generous; on the late re-read (see
 ///   ``AntigravityPayloadTranslator``) a turn that produced more than the
-///   window keeps `Untitled` rather than costing a full read.
+///   window keeps `Untitled` rather than costing a full read. The model's words
+///   are nearly always the last step or two, but a tool that returned more than
+///   the window after them hides them, and the row keeps the words it had.
 /// - **It answers for the conversation, not for the Turn.** The last request
 ///   in the file is this Turn's prompt whenever the user started the Turn,
 ///   which is every Turn measured. A Turn the product started for itself —
@@ -66,14 +108,15 @@ struct AntigravityTranscriptFile: AntigravityTranscriptReading {
 
     nonisolated init() {}
 
-    nonisolated func latestUserRequest(inTranscriptAt path: String) -> String? {
-        guard let handle = FileHandle(forReadingAtPath: path) else { return nil }
+    nonisolated func tail(ofTranscriptAt path: String) -> AntigravityTranscriptTail {
+        var found = AntigravityTranscriptTail()
+        guard let handle = FileHandle(forReadingAtPath: path) else { return found }
         defer { try? handle.close() }
-        guard let size = try? handle.seekToEnd(), size > 0 else { return nil }
+        guard let size = try? handle.seekToEnd(), size > 0 else { return found }
         let offset = size > UInt64(Self.tailBytes) ? size - UInt64(Self.tailBytes) : 0
         guard (try? handle.seek(toOffset: offset)) != nil,
               let tail = try? handle.readToEnd(), !tail.isEmpty else {
-            return nil
+            return found
         }
 
         var lines = tail.split(separator: UInt8(ascii: "\n"), omittingEmptySubsequences: true)
@@ -83,17 +126,33 @@ struct AntigravityTranscriptFile: AntigravityTranscriptReading {
         if offset > 0, !lines.isEmpty {
             lines.removeFirst()
         }
+        var passedAUserStep = false
         for line in lines.reversed() {
-            guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                  object["source"] as? String == "USER_EXPLICIT",
-                  object["type"] as? String == "USER_INPUT",
-                  let content = object["content"] as? String,
-                  let request = Self.request(in: content) else {
+            guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else {
                 continue
             }
-            return request
+            switch object["type"] as? String {
+            case "PLANNER_RESPONSE" where !passedAUserStep && found.latestModelText == nil:
+                guard let step = (object["step_index"] as? NSNumber)?.intValue,
+                      let content = object["content"] as? String,
+                      !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    continue
+                }
+                found.latestModelText = AntigravityModelText(step: step, text: content)
+            case "USER_INPUT":
+                passedAUserStep = true
+                guard object["source"] as? String == "USER_EXPLICIT",
+                      let content = object["content"] as? String,
+                      let request = Self.request(in: content) else {
+                    continue
+                }
+                found.latestUserRequest = request
+                return found
+            default:
+                continue
+            }
         }
-        return nil
+        return found
     }
 
     /// What the user actually asked, out of the envelope the product wraps it

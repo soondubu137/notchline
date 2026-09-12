@@ -211,6 +211,14 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         } else {
             readGate.reset()
         }
+        // Live text for a Thread this refresh does not list is pruned, and the
+        // listed set is also what lets a message arriving later wake the panel
+        // (``HookSessionPreviewStore/fold``). Held to the Turns the reducer
+        // holds rather than to the rows drawn, so a row the read gate withheld
+        // keeps its words for the next refresh that asks.
+        hooks.repository.retainPreviews(
+            forSessions: presence.isOpen ? Set(state.turns.map(\.threadID)) : []
+        )
         return snapshot(
             availability: unwatchable == nil ? .ready : .disconnected,
             sessions: rows,
@@ -367,7 +375,12 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
             turnID: turn.turnID,
             projectName: Self.projectName(forWorkingDirectory: turn.workingDirectory),
             title: turn.promptPreview ?? "Untitled",
-            preview: turn.assistantPreview,
+            // The closing words once the Turn has ended with some, and until
+            // then the newest message this Turn has said, for a product whose
+            // vocabulary names a message event. The prompt is not the fallback
+            // here, as it is on Claude Code's row: it is already the title.
+            preview: turn.assistantPreview
+                ?? hooks.repository.preview(forSession: turn.threadID, inTurn: turn.turnID),
             status: turn.status,
             startedAt: turn.startedAt,
             runningSubagentCount: turn.runningSubagentIDs.count,

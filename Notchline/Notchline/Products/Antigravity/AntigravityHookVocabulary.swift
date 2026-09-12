@@ -25,6 +25,10 @@ import Foundation
 ///   payload*, so reading it needs no discovery, no watcher and no guess, and
 ///   an `Untitled` row is the one thing that made a list of three rows
 ///   unusable.
+/// - **Nor is anything the model says**, so a row's live line is read out of
+///   the same file, at the two events that already arrive once a model call's
+///   words are on disk: the turn's next `PreInvocation` and its `Stop`. See
+///   ``AntigravityPayloadTranslator``.
 /// - `workspacePaths` names the workspace in the TUI and is empty under `-p`,
 ///   so a print-mode row is an `Untitled folder`.
 /// - Nothing observes a wait. `PreToolUse` fires before a tool runs whether
@@ -33,11 +37,22 @@ import Foundation
 ///   write path this app does not take. So the product is **Tier 0**, and
 ///   Settings says so (`tiered-support.md` §2).
 ///
-/// Two of the five are registered. `PostInvocation` and the tool events would
-/// cost a process each with nothing a Tier 0 row could draw from them.
+/// Two of the five are registered, and the other three would buy nothing.
+/// `PostInvocation` fires only once the call's tools have returned — measured
+/// 2026-09-12, 10.3 s after the words it follows reached the transcript, around
+/// a `sleep` awaiting approval — and the next `PreInvocation` fires 30 ms after
+/// it, so it is no earlier an edge than one already registered. `PreToolUse`
+/// would be earlier, and it is a write path: a handler answering `{}` had every
+/// tool call of the turn refused (`antigravity-cli.md` §2.2). `PostToolUse`
+/// never fired.
 nonisolated struct AntigravityHookVocabulary: AgentHookVocabulary {
     static let invocationEvent = "PreInvocation"
     static let stopEvent = "Stop"
+    /// The name the translator gives a model response it read, which the
+    /// product never sends and nothing registers: it exists so the words reach
+    /// the reducer's preview store the way a streamed message does, and never
+    /// the reducer itself. Named for the transcript step it is read from.
+    static let modelResponseEvent = "PlannerResponse"
     /// The name this app's definitions sit under at the root of the shared
     /// hooks file, beside whatever named hooks the user keeps there.
     static let containerName = "notchline"
@@ -69,8 +84,13 @@ nonisolated struct AntigravityHookVocabulary: AgentHookVocabulary {
     /// puts one on the canonical payload, and this is the reducer's switch for
     /// reading it.
     nonisolated let carriesPromptText = true
-    nonisolated let carriesFinalAnswerText = false
-    nonisolated let messageDeltaEventName: String? = nil
+    /// True for the same reason: the translator reads the turn's closing words
+    /// at its `Stop` and puts them where Codex's `Stop` carries its own.
+    nonisolated let carriesFinalAnswerText = true
+    /// Every model response the translator read mid-turn arrives as one whole
+    /// message under this name, which the reducer folds into the row's live
+    /// line without reducing anything.
+    nonisolated let messageDeltaEventName: String? = AntigravityHookVocabulary.modelResponseEvent
     nonisolated let wakesOnToolCallOpened = false
     nonisolated let settlesHeldTurnsFromRecord = false
     nonisolated let restoreDefinitionAdvice =
@@ -133,7 +153,7 @@ nonisolated struct AntigravityHookVocabulary: AgentHookVocabulary {
 /// conversation. Association is the conversation's one open Turn: a
 /// conversation runs one execution at a time, and every later event of it
 /// belongs to that Turn until its `Stop`. A later invocation of an open Turn
-/// is not a boundary and is dropped here rather than reduced; a `Stop` for a
+/// is not a boundary and never reaches the reducer; a `Stop` for a
 /// conversation with no open Turn reuses the id it last retired, so a repeated
 /// `Stop` is the late duplicate the reducer already ignores; and a first
 /// invocation while a Turn is still open — a `Stop` this app never received —
@@ -151,10 +171,29 @@ nonisolated struct AntigravityHookVocabulary: AgentHookVocabulary {
 /// appended before the first model call in every turn measured, but that is a
 /// race this app does not control and could not measure through the product's
 /// own hooks. So a Turn whose first read came back empty is remembered, and
-/// its `Stop` — where the step is on disk beyond any doubt — reads again and
-/// carries the prompt then. The reducer fills a blank title from a late
-/// prompt and never overwrites one, so the second read costs nothing when the
-/// first succeeded, and it is skipped entirely in that case.
+/// its `Stop` — where the step is on disk beyond any doubt — carries the
+/// prompt its own read finds. The reducer fills a blank title from a late
+/// prompt and never overwrites one, and a Turn that was named at its boundary
+/// is handed no prompt at its end at all.
+///
+/// **The row's live line, read at the same two edges.** A later invocation of
+/// an open Turn is not a boundary, and it is the first moment the previous
+/// model call's words are certainly on disk: measured 2026-09-12 against 1.2.2,
+/// the step is written whole when the call finishes, the call's tools run, and
+/// only then does `PostInvocation` fire, with the next `PreInvocation` 30 ms
+/// behind it — the transcript held the step at all seven later invocations and
+/// both `Stop`s of the two turns measured.
+/// So that invocation reads the file and, when the newest words are a step it
+/// has not handed over yet, hands them over as one whole message under
+/// ``AntigravityHookVocabulary/modelResponseEvent``, scoped to the open Turn;
+/// otherwise it is dropped exactly as before. `Stop` puts the turn's closing
+/// words under `last_assistant_message` in the same single read that settles a
+/// late prompt, and a repeated `Stop` carries the words its original carried
+/// rather than reading again, so it cannot blank a finished row.
+///
+/// The ceiling is the product's: words written before a tool call reach the row
+/// once that tool has returned, which is late for a long command and, above
+/// all, for one waiting on the user's approval.
 ///
 /// **What it is not.** It is not a guess about state: it opens nothing on
 /// silence and ends nothing on silence. The one file it reads is read only
@@ -177,9 +216,17 @@ final class AntigravityPayloadTranslator: HookPayloadTranslating, @unchecked Sen
     /// arrives after it.
     private var lastRetiredTurnIDs: [String: String] = [:]
     /// The conversations whose open Turn was opened without a prompt, because
-    /// the transcript had not been written that far yet. Their `Stop` reads
-    /// again; every other conversation's does not.
+    /// the transcript had not been written that far yet. Their `Stop` takes
+    /// the prompt from its read; every other conversation's leaves it.
     private var conversationsAwaitingAPrompt: Set<String> = []
+    /// The step whose words were last handed over for each conversation's open
+    /// Turn, so a later invocation that finds no newer words hands over none.
+    /// The preview store joins two deliveries of one message onto each other,
+    /// so this is correctness and not only thrift.
+    private var lastHandedOverSteps: [String: Int] = [:]
+    /// The closing words each conversation's last `Stop` carried, for the
+    /// duplicate that arrives after it.
+    private var lastRetiredAnswers: [String: String] = [:]
     private let mint: @Sendable () -> String
     private let transcripts: any AntigravityTranscriptReading
 
@@ -218,18 +265,30 @@ final class AntigravityPayloadTranslator: HookPayloadTranslating, @unchecked Sen
             let invocation = (object["invocationNum"] as? NSNumber)?.intValue ?? 0
             lock.lock()
             defer { lock.unlock() }
-            if invocation != 0, openTurnIDs[conversation] != nil {
-                // The Turn is open and this is a later model call of it.
-                return nil
+            if invocation != 0, let openTurnID = openTurnIDs[conversation] {
+                // The Turn is open and this is a later model call of it: no
+                // boundary, and the previous call's words are on disk.
+                guard let said = transcript.flatMap({ transcripts.tail(ofTranscriptAt: $0).latestModelText }),
+                      lastHandedOverSteps[conversation] != said.step else {
+                    return nil
+                }
+                lastHandedOverSteps[conversation] = said.step
+                return try? JSONSerialization.data(withJSONObject: [
+                    "hook_event_name": AntigravityHookVocabulary.modelResponseEvent,
+                    "session_id": conversation,
+                    // The preview store's name for the Turn that is speaking.
+                    "prompt_id": openTurnID,
+                    "message_id": String(said.step),
+                    "delta": said.text
+                ])
             }
             let turnID = mint()
             openTurnIDs[conversation] = turnID
+            lastHandedOverSteps.removeValue(forKey: conversation)
             canonical["turn_id"] = turnID
-            // Read under the lock, and only here. A turn's later model calls
-            // reach the line above and stop there, so a seven-tool turn reads
-            // the transcript once and not eight times -- which is the whole
-            // reason this is inside the branch rather than ahead of it.
-            if let prompt = transcript.flatMap(transcripts.latestUserRequest(inTranscriptAt:)) {
+            // Read under the lock, and only for the prompt here: the words
+            // after it belong to a model call that has not happened yet.
+            if let prompt = transcript.flatMap({ transcripts.tail(ofTranscriptAt: $0).latestUserRequest }) {
                 canonical["prompt"] = prompt
                 conversationsAwaitingAPrompt.remove(conversation)
             } else {
@@ -242,16 +301,31 @@ final class AntigravityPayloadTranslator: HookPayloadTranslating, @unchecked Sen
                 ?? lastRetiredTurnIDs[conversation]
                 ?? mint()
             lastRetiredTurnIDs[conversation] = turnID
-            // The second read is owed only to a Turn that opened without a
-            // prompt. A `Stop` that reuses a retired id is a late duplicate of
-            // a Turn already named, so it is owed nothing.
-            let readsAgain = hadAnOpenTurn
+            lastHandedOverSteps.removeValue(forKey: conversation)
+            // The second read for a prompt is owed only to a Turn that opened
+            // without one.
+            let wantsThePrompt = hadAnOpenTurn
                 && conversationsAwaitingAPrompt.remove(conversation) != nil
+            // A `Stop` that reuses a retired id is a late duplicate of a Turn
+            // already named and already answered, so it reads nothing and
+            // repeats what the original carried.
+            let repeatedAnswer = hadAnOpenTurn ? nil : lastRetiredAnswers[conversation]
             lock.unlock()
             canonical["turn_id"] = turnID
-            if readsAgain,
-               let prompt = transcript.flatMap(transcripts.latestUserRequest(inTranscriptAt:)) {
-                canonical["prompt"] = prompt
+            if hadAnOpenTurn {
+                let tail = transcript.map(transcripts.tail(ofTranscriptAt:)) ?? AntigravityTranscriptTail()
+                if wantsThePrompt, let prompt = tail.latestUserRequest {
+                    canonical["prompt"] = prompt
+                }
+                let answer = tail.latestModelText?.text
+                if let answer {
+                    canonical["last_assistant_message"] = answer
+                }
+                lock.lock()
+                lastRetiredAnswers[conversation] = answer
+                lock.unlock()
+            } else if let repeatedAnswer {
+                canonical["last_assistant_message"] = repeatedAnswer
             }
         default:
             // Not registered by this app; handed on under the open Turn, if

@@ -6,12 +6,13 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ## Unreleased
 
-**A third product is a row: Antigravity CLI is listed.** Its switch in Settings writes two lifecycle definitions into `~/.gemini/config/hooks.json`, and a conversation's turns then appear as Running from the first model call until the turn ends. Rows are titled with what was asked, read out of the product's own transcript because no payload carries it. It is the first product to arrive as a folder and a registry entry rather than a rewrite, and the first with a declared boundary stated under its switch.
+**A third product is a row: Antigravity CLI is listed.** Its switch in Settings writes two lifecycle definitions into `~/.gemini/config/hooks.json`, and a conversation's turns then appear as Running from the first model call until the turn ends. Rows are titled with what was asked and say what the model last said, both read out of the product's own transcript because no payload carries either. It is the first product to arrive as a folder and a registry entry rather than a rewrite, and the first with a declared boundary stated under its switch.
 
 ### Added
 
 - **Antigravity CLI, listed only.** A row per conversation shows Running from a turn's first model call to its end and Completed after, named by the workspace folder, and clears once you type in its terminal or when the `agy` process exits. Approvals and questions are not detected, which the Settings row says under its switch. (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`.)
-- **An Antigravity row is titled with what was asked.** No hook payload carries the prompt, so rows said `Untitled`. The transcript the payload already names carries it, and carries it before the first model call, so the title is there while the turn still runs — read from the tail of that file, once per turn, and again at the turn's end only if the first read was too early.
+- **An Antigravity row is titled with what was asked.** No hook payload carries the prompt, so rows said `Untitled`. The transcript the payload already names carries it, and carries it before the first model call, so the title is there while the turn still runs — read from the tail of that file at the turn's first model call, and taken again at its end only if that was too early.
+- **An Antigravity row says what the model is doing.** A row had a title and a clock and nothing under them, because no hook carries anything the model says. The newest thing it said is now read from the same transcript after each model call, and a finished row shows the closing words. No new hook is registered. (`antigravity-cli.md` §2.2.)
 - **An Antigravity row leaves once you type in its terminal.** A finished row used to stand on the notch until the conversation's next turn — in an open TUI session, for as long as you left it there. It now retires when the terminal that conversation runs in has been typed at since the turn ended, with that terminal in front of you. A conversation under `tmux`, `ssh` or a pipe keeps the old lifecycle.
 
 ### Changed
@@ -25,6 +26,7 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ### Known limitations
 
+- **An Antigravity row's line trails a running tool.** The product fires nothing between writing a sentence and running the tool after it, so words written before a long command, or before one awaiting your approval, appear once that command returns. The one earlier hook decides whether the tool may run, so it is not used.
 - **Reading an Antigravity answer without typing keeps its row, in every terminal.** The CLI turns on no focus reporting, so coming back to its tab reaches nothing this app can see. Asking the terminal which tab it shows was built and measured instead, then declined: it cost Notchline about 0.6 s of CPU a minute while a row waited, and Ghostty could only answer by working directory. (`antigravity-cli.md` §3.2.)
 
 Everything listed under `0.2.7` and earlier still stands, unchanged.

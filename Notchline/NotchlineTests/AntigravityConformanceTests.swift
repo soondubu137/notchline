@@ -16,11 +16,12 @@ struct AntigravityConformanceTests {
     // MARK: - Fixtures
 
     /// The transcript the payload names, as the test says it reads — and a
-    /// count of how many times it was asked, because reading it twice for one
-    /// Turn is a cost this app promises not to pay when the first read worked.
+    /// count of how many times it was asked, because the file is read on the
+    /// hook delivery path and only at the events that can find something new.
     final class TranscriptStub: AntigravityTranscriptReading, @unchecked Sendable {
         private let lock = NSLock()
         private var answer: String?
+        private var modelText: AntigravityModelText?
         private var paths: [String] = []
 
         nonisolated init(_ answer: String? = "Rename the third product's row") {
@@ -33,6 +34,19 @@ struct AntigravityConformanceTests {
             lock.unlock()
         }
 
+        /// The model's newest words since the request, written in `step`.
+        nonisolated func says(_ text: String, step: Int) {
+            lock.lock()
+            modelText = AntigravityModelText(step: step, text: text)
+            lock.unlock()
+        }
+
+        nonisolated func saysNothing() {
+            lock.lock()
+            modelText = nil
+            lock.unlock()
+        }
+
         /// Every path asked about, in order.
         nonisolated var asked: [String] {
             lock.lock()
@@ -40,11 +54,30 @@ struct AntigravityConformanceTests {
             return paths
         }
 
-        nonisolated func latestUserRequest(inTranscriptAt path: String) -> String? {
+        nonisolated func tail(ofTranscriptAt path: String) -> AntigravityTranscriptTail {
             lock.lock()
             defer { lock.unlock() }
             paths.append(path)
-            return answer
+            return AntigravityTranscriptTail(latestUserRequest: answer, latestModelText: modelText)
+        }
+    }
+
+    /// Edges seen on a change stream, counted rather than awaited once: the
+    /// stream buffers, so an edge from starting up can already be on it.
+    final class EdgeCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var stored = 0
+
+        nonisolated func record() {
+            lock.lock()
+            stored += 1
+            lock.unlock()
+        }
+
+        nonisolated var count: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return stored
         }
     }
 
@@ -457,7 +490,9 @@ struct AntigravityConformanceTests {
             "the file the payload named, once, and nothing searched for"
         )
 
-        // The invocations between say nothing new and cost no second reading.
+        // The invocations between and the end are read for the model's words,
+        // and a Turn already named keeps its name through all of them.
+        product.transcripts.holds("Something the user typed later")
         for number in 1...3 {
             try product.deliver(
                 "PreInvocation",
@@ -468,7 +503,10 @@ struct AntigravityConformanceTests {
         try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(8))
         let done = try #require(await product.provider.fetchSnapshot().sessions.first)
         #expect(done.title == "Take the third product end to end")
-        #expect(product.transcripts.asked.count == 1, "a Turn already named is not read for again")
+        #expect(
+            product.transcripts.asked.count == 5,
+            "one read per event that can find something new: the boundary, three model calls, the end"
+        )
     }
 
     /// A transcript this app reached before the product had written the user's
@@ -519,7 +557,7 @@ struct AntigravityConformanceTests {
     }
 
     /// A transcript that never says what was asked leaves the row `Untitled`,
-    /// which is the honest answer, and is read at most twice for one Turn.
+    /// which is the honest answer, and a repeated `Stop` reads nothing.
     @Test
     func aTranscriptThatSaysNothingLeavesTheRowUntitled() async throws {
         let product = try Product(transcripts: TranscriptStub(nil))
@@ -536,7 +574,132 @@ struct AntigravityConformanceTests {
 
         let row = try #require(await product.provider.fetchSnapshot().sessions.first)
         #expect(row.title == "Untitled")
-        #expect(product.transcripts.asked.count == 2, "the boundary and the end, and nothing else")
+        #expect(row.preview == nil, "and a transcript with no words in it draws no line")
+        #expect(
+            product.transcripts.asked.count == 3,
+            "the boundary, the one model call and the end, and nothing for the duplicate"
+        )
+    }
+
+    // MARK: - The live line, read out of the same transcript
+
+    /// **A running row says what the model last said**, and a finished one its
+    /// closing words.
+    ///
+    /// No payload carries anything the model says, so until 2026-09-12 an
+    /// Antigravity row had a title and a clock and no line under them for the
+    /// whole of its Turn. The words are in the transcript, written whole when a
+    /// model call finishes and on disk by the next `PreInvocation`; that
+    /// invocation hands them over, and `Stop` carries the last of them.
+    ///
+    /// Three things are pinned beside the happy path. A turn that has said
+    /// nothing draws no line rather than the prompt a second time. A model call
+    /// that only called a tool leaves the transcript's newest words where they
+    /// were, and the invocation after it must not hand the same message over
+    /// again — the preview store joins two deliveries of one message into one
+    /// line, which drew the sentence twice. And a repeated `Stop`, which reads
+    /// nothing, must not blank the closing words the first one carried.
+    @Test
+    func aRunningRowSaysWhatTheModelLastSaidAndAFinishedOneItsClosingWords() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        let started = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(started.preview == nil, "nothing said yet, and the prompt is already the title")
+
+        product.transcripts.says("I will list the files in this directory first.", step: 1)
+        try product.deliver("PreInvocation", invocation(1, of: conversation), at: t0.addingTimeInterval(2))
+        let first = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(first.turnID == started.turnID)
+        #expect(first.status == .running)
+        #expect(first.preview == "I will list the files in this directory first.")
+
+        // The next call only called a tool, so the newest words are still step 1's.
+        try product.deliver("PreInvocation", invocation(2, of: conversation), at: t0.addingTimeInterval(4))
+        let quiet = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(quiet.preview == "I will list the files in this directory first.", "one message, not the same one twice")
+
+        product.transcripts.says("Now reading notes.txt.\n\nIt is short.", step: 5)
+        try product.deliver("PreInvocation", invocation(3, of: conversation), at: t0.addingTimeInterval(6))
+        let second = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(second.preview == "Now reading notes.txt. It is short.", "a newer message replaces the last, on one line")
+
+        product.transcripts.says("notes.txt holds three Greek letters, one per line.", step: 7)
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(9))
+        let done = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(done.status == .completed)
+        #expect(done.preview == "notes.txt holds three Greek letters, one per line.")
+
+        let asked = product.transcripts.asked.count
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(10))
+        let repeated = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(repeated.preview == "notes.txt holds three Greek letters, one per line.")
+        #expect(product.transcripts.asked.count == asked)
+
+        // The next Turn does not open on the last one's words.
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0.addingTimeInterval(20))
+        let next = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(next.turnID != done.turnID)
+        #expect(next.preview == nil)
+    }
+
+    /// A Turn that ends without closing words of its own keeps the last thing
+    /// it said, rather than going blank at the moment it finishes.
+    @Test
+    func aTurnThatEndsWithoutClosingWordsKeepsItsLastLine() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        product.transcripts.says("Running the test suite now.", step: 1)
+        try product.deliver("PreInvocation", invocation(1, of: conversation), at: t0.addingTimeInterval(2))
+        _ = await product.provider.fetchSnapshot()
+
+        // The window the `Stop` reads no longer reaches the words: a tool
+        // returned more than the window after them.
+        product.transcripts.saysNothing()
+        try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(5))
+        let done = try #require(await product.provider.fetchSnapshot().sessions.first)
+        #expect(done.status == .completed)
+        #expect(done.preview == "Running the test suite now.")
+    }
+
+    /// Words handed over for a listed row wake the panel, because nothing else
+    /// would: an invocation between two status changes changes nothing the
+    /// reducer holds, so without the edge the row keeps its old line until the
+    /// turn ends.
+    @Test
+    func wordsHandedOverForAListedRowWakeThePanel() async throws {
+        let product = try Product()
+        defer { Task { await product.tearDown() } }
+        try await product.provider.installIntegration()
+        await product.run(conversation)
+
+        try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
+        // Lists the row, which is what arms the edge.
+        #expect(await product.provider.fetchSnapshot().sessions.count == 1)
+
+        let edges = EdgeCounter()
+        let observer = Task {
+            for await _ in product.provider.stateChangeEvents {
+                edges.record()
+            }
+        }
+        defer { observer.cancel() }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let before = edges.count
+
+        product.transcripts.says("Reading the settings window.", step: 1)
+        try product.deliver("PreInvocation", invocation(1, of: conversation), at: t0.addingTimeInterval(2))
+        for _ in 0 ..< 150 where edges.count == before {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        #expect(edges.count > before, "the words were collected and nothing asked for them to be drawn")
     }
 
     /// A sibling surface's event through the shared file — a transcript under
@@ -912,7 +1075,7 @@ struct AntigravityTranscriptFileTests {
         let path = try write([userStep(0, request: "List the files in the current directory, then say done.")])
         defer { try? FileManager.default.removeItem(atPath: path) }
         #expect(
-            reader.latestUserRequest(inTranscriptAt: path)
+            reader.tail(ofTranscriptAt: path).latestUserRequest
                 == "List the files in the current directory, then say done."
         )
     }
@@ -931,7 +1094,73 @@ struct AntigravityTranscriptFileTests {
             userStep(2, request: "Reply with exactly the word two.")
         ])
         defer { try? FileManager.default.removeItem(atPath: path) }
-        #expect(reader.latestUserRequest(inTranscriptAt: path) == "Reply with exactly the word two.")
+        #expect(reader.tail(ofTranscriptAt: path).latestUserRequest == "Reply with exactly the word two.")
+    }
+
+    /// One model response as the product appends it: the words the user sees
+    /// in `content`, reasoning beside them, and the tool it went on to call.
+    private func modelStep(_ index: Int, says content: String, calls tool: String? = nil) -> [String: Any] {
+        var step: [String: Any] = [
+            "step_index": index,
+            "source": "MODEL",
+            "type": "PLANNER_RESPONSE",
+            "status": "DONE",
+            "created_at": "2026-09-12T19:48:52Z",
+            "content": content,
+            "thinking": "**Planning the listing**\n\nThe reasoning, which a row never shows."
+        ]
+        if let tool {
+            step["tool_calls"] = [["name": tool, "args": ["toolAction": "Running \(tool)"]]]
+        }
+        return step
+    }
+
+    /// The newest words since the request are read, a call that only called a
+    /// tool is passed over, and neither the tool's output, the product's own
+    /// message nor the model's reasoning is taken for them.
+    @Test
+    func theModelsNewestWordsAreItsLastResponseThatSaidAnything() throws {
+        let path = try write([
+            userStep(0, request: "Run sleep 12, then tell me it finished."),
+            modelStep(1, says: "I will execute the command for you right away.", calls: "run_command"),
+            [
+                "step_index": 2, "source": "MODEL", "type": "GENERIC", "status": "DONE",
+                "content": "Created At: 2026-09-12T12:48:55-07:00\nfinished"
+            ],
+            modelStep(3, says: "", calls: "command_status"),
+            [
+                "step_index": 4, "source": "SYSTEM", "type": "SYSTEM_MESSAGE", "status": "DONE",
+                "content": "The following is a <SYSTEM_MESSAGE> not actually sent by the user."
+            ]
+        ])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let tail = reader.tail(ofTranscriptAt: path)
+        #expect(tail.latestModelText == AntigravityModelText(step: 1, text: "I will execute the command for you right away."))
+        #expect(tail.latestUserRequest == "Run sleep 12, then tell me it finished.", "and one read answers both")
+    }
+
+    /// The walk back stops at the user's step: what the model said before it
+    /// was said to an earlier turn, and a turn that has just been asked has
+    /// said nothing yet.
+    @Test
+    func wordsFromBeforeTheLatestRequestAreNotThisTurns() throws {
+        let path = try write([
+            userStep(0, request: "Reply with exactly the word one."),
+            modelStep(1, says: "one"),
+            userStep(2, request: "Reply with exactly the word two.")
+        ])
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        let tail = reader.tail(ofTranscriptAt: path)
+        #expect(tail.latestModelText == nil)
+        #expect(tail.latestUserRequest == "Reply with exactly the word two.")
+
+        // And a step with no index cannot be told from the next one, so it is
+        // not handed over as a message at all.
+        var unnumbered = modelStep(3, says: "two")
+        unnumbered.removeValue(forKey: "step_index")
+        let withoutIndex = try write([userStep(0, request: "Reply with exactly the word two."), unnumbered])
+        defer { try? FileManager.default.removeItem(atPath: withoutIndex) }
+        #expect(reader.tail(ofTranscriptAt: withoutIndex).latestModelText == nil)
     }
 
     /// The product's own message to its model is not a request, however much
@@ -948,24 +1177,24 @@ struct AntigravityTranscriptFileTests {
             ]
         ])
         defer { try? FileManager.default.removeItem(atPath: path) }
-        #expect(reader.latestUserRequest(inTranscriptAt: path) == "Wait ten seconds, then fetch a page.")
+        #expect(reader.tail(ofTranscriptAt: path).latestUserRequest == "Wait ten seconds, then fetch a page.")
     }
 
     /// A file that is not there, is empty, or holds no request at all is
     /// nothing to draw — never an empty title and never a crash.
     @Test
     func nothingReadableIsNoRequest() throws {
-        #expect(reader.latestUserRequest(inTranscriptAt: "/nonexistent/transcript_full.jsonl") == nil)
+        #expect(reader.tail(ofTranscriptAt: "/nonexistent/transcript_full.jsonl").latestUserRequest == nil)
 
         let empty = try write([])
         defer { try? FileManager.default.removeItem(atPath: empty) }
-        #expect(reader.latestUserRequest(inTranscriptAt: empty) == nil)
+        #expect(reader.tail(ofTranscriptAt: empty).latestUserRequest == nil)
 
         let modelOnly = try write([
             ["step_index": 0, "source": "MODEL", "type": "PLANNER_RESPONSE", "status": "DONE", "content": "hello"]
         ])
         defer { try? FileManager.default.removeItem(atPath: modelOnly) }
-        #expect(reader.latestUserRequest(inTranscriptAt: modelOnly) == nil)
+        #expect(reader.tail(ofTranscriptAt: modelOnly).latestUserRequest == nil)
 
         // A step whose content carries no envelope is skipped rather than
         // drawn whole: the envelope is what says which part is the user's.
@@ -976,7 +1205,7 @@ struct AntigravityTranscriptFileTests {
             ]
         ])
         defer { try? FileManager.default.removeItem(atPath: unwrapped) }
-        #expect(reader.latestUserRequest(inTranscriptAt: unwrapped) == nil)
+        #expect(reader.tail(ofTranscriptAt: unwrapped).latestUserRequest == nil)
     }
 
     /// Only the tail is read, and the half-line the window opens on is not
@@ -996,13 +1225,13 @@ struct AntigravityTranscriptFileTests {
         defer { try? FileManager.default.removeItem(atPath: farBack) }
         let size = try FileManager.default.attributesOfItem(atPath: farBack)[.size] as? Int
         #expect((size ?? 0) > AntigravityTranscriptFile.tailBytes, "the fixture has to exceed the window")
-        #expect(reader.latestUserRequest(inTranscriptAt: farBack) == nil)
+        #expect(reader.tail(ofTranscriptAt: farBack).latestUserRequest == nil)
 
         // The same file with a request inside the window is found, so the nil
         // above is the bound and not a parse failure.
         steps.append(userStep(101, request: "The thing asked just now"))
         let inWindow = try write(steps)
         defer { try? FileManager.default.removeItem(atPath: inWindow) }
-        #expect(reader.latestUserRequest(inTranscriptAt: inWindow) == "The thing asked just now")
+        #expect(reader.tail(ofTranscriptAt: inWindow).latestUserRequest == "The thing asked just now")
     }
 }

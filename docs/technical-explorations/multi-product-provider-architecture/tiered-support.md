@@ -106,7 +106,7 @@ Adds:
 
 Both are **Tier 2**. Codex is Tier 2 with every capability except a version-independent presence read and `isPausedForBackgroundWork`. Claude Code is Tier 2 with `navigation: host`, `project: workingDirectory`, no final-answer text, no version gate, and two read-state sources instead of one. That sentence is the whole of what the user's remark about degraded navigation means, and today no type in the app can state it.
 
-**And the third product sits at Tier 0 with two capabilities above it**, which is what declaring them independently of tier is for: `title: prompt` (out of the product's own transcript) and `read state: authoritative` for a conversation whose terminal has a host that can hold the front, `unsupported` for one under `tmux`, `screen`, `ssh` or a pipe. Navigation is `host`, project is `workingDirectory`, and everything else is `unsupported`.
+**And the third product sits at Tier 0 with four capabilities above it**, which is what declaring them independently of tier is for: `title: prompt`, `live progress: pulled` and `final answer text: yes` (all three out of the product's own transcript, read at events it already sends — [`antigravity-cli.md`](antigravity-cli.md) §2.1 and §2.2) and `read state: authoritative` for a conversation whose terminal has a host that can hold the front, `unsupported` for one under `tmux`, `screen`, `ssh` or a pipe. Navigation is `host`, project is `workingDirectory`, and everything else is `unsupported`.
 
 ## 3. What a new product costs, before and after
 
