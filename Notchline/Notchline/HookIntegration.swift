@@ -602,7 +602,11 @@ protocol AgentHookVocabulary: Sendable {
     /// Named from here so the reducer needs one injection point rather than
     /// two, and a type of its own so that reading an event and answering it stay
     /// separate kinds of knowledge. See ``RequestAnswering``.
-    nonisolated var answering: any RequestAnswering { get }
+    /// How an answer typed on the notch is encoded for this product, or nil for
+    /// a product whose requests cannot be answered from here (Tier 0 and 1 in
+    /// `tiered-support.md` §2): the reducer then holds no connection for its
+    /// requests and the row offers no affirmative.
+    nonisolated var answering: (any RequestAnswering)? { get }
     /// `nil` means "not recognised": drop it and say so.
     nonisolated func signal(forEvent name: String, toolName: String?) -> HookSignal?
 
@@ -700,7 +704,7 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     /// name it without an instance.
     nonisolated static let answeringTimeout = 60 * 60
     nonisolated let answeringTimeoutSeconds = CodexHookVocabulary.answeringTimeout
-    nonisolated let answering: any RequestAnswering = CodexRequestAnswering()
+    nonisolated let answering: (any RequestAnswering)? = CodexRequestAnswering()
     nonisolated let agent: AgentKind = .codex
     /// The Python helper the first builds registered.
     nonisolated static let legacyHelperMarker = "codex_in_notch_hook.py"
@@ -915,7 +919,7 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     /// to be wrong is one settings write away from being right (ADR 0016).
     nonisolated static let answeringTimeout = 24 * 60 * 60
     nonisolated let answeringTimeoutSeconds = ClaudeCodeHookVocabulary.answeringTimeout
-    nonisolated let answering: any RequestAnswering = ClaudeCodeRequestAnswering()
+    nonisolated let answering: (any RequestAnswering)? = ClaudeCodeRequestAnswering()
     nonisolated let agent: AgentKind = .claudeCode
     /// The path the pre-ADR-0013 `http` handlers posted to. Still recognised so
     /// an install strips the dead handler and a removal can prove it gone.
@@ -1896,6 +1900,14 @@ struct HookTurnState: Sendable {
     /// A turn proven to be another agent's does not become this thread's
     /// because this thread started a new one.
     var heldTurnIDs: Set<String> = []
+    /// The directory the product said the prompt was submitted from (`cwd`),
+    /// for a product whose row names its work by that directory's last
+    /// component (Tier 0's permitted project name, `tiered-support.md` §2).
+    /// Codex ignores it — its Project comes from Desktop — and Claude Code
+    /// takes the directory from its own session list. Carried across a Turn
+    /// boundary like the subagent facts, because the directory is the
+    /// Thread's, not the Turn's.
+    var workingDirectory: String? = nil
 
     /// A turn start waiting for this thread's own record to name it.
     nonisolated struct HeldTurnStart: Sendable, Equatable {
@@ -3588,7 +3600,7 @@ actor HookEventRepository {
     /// closed either way, so leaving `canBeAnswered` true would offer a second
     /// affirmative the app could not deliver.
     func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) -> Bool {
-        guard let body = vocabulary.answering.hookOutput(
+        guard let body = vocabulary.answering?.hookOutput(
             for: answer,
             updating: replies.input(for: ticket)
         ) else {
@@ -3831,7 +3843,8 @@ actor HookEventRepository {
                 lastSubagentBoundaryAt: current.lastSubagentBoundaryAt,
                 subagentSlots: current.subagentSlots,
                 threadHasNoTranscript: current.threadHasNoTranscript,
-                heldTurnIDs: heldTurnIDs
+                heldTurnIDs: heldTurnIDs,
+                workingDirectory: current.workingDirectory
             )
         }
         signalIfProjectionChanged()
@@ -4295,7 +4308,8 @@ actor HookEventRepository {
                 lastSubagentBoundaryAt: lastSubagentBoundaryAt,
                 subagentSlots: subagentSlots,
                 threadHasNoTranscript: threadHasNoTranscript,
-                heldTurnIDs: heldTurnIDs
+                heldTurnIDs: heldTurnIDs,
+                workingDirectory: event.workingDirectory
             )
         case .approvalWaitInferred:
             mutateExactTurn(
@@ -4894,7 +4908,8 @@ actor HookEventRepository {
                     lastSubagentBoundaryAt: current.lastSubagentBoundaryAt,
                     subagentSlots: current.subagentSlots,
                     threadHasNoTranscript: current.threadHasNoTranscript,
-                    heldTurnIDs: heldTurnIDs
+                    heldTurnIDs: heldTurnIDs,
+                    workingDirectory: current.workingDirectory
                 )
             }
         } else {
