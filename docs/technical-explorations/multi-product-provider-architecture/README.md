@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Tiered-support direction agreed in discussion; the detailed baseline below is proposed, and no implementation or shipped contract has changed |
+| Status | Tiered-support direction agreed in discussion; the detailed baseline below is proposed, and no implementation or shipped contract has changed. **The concrete tier ladder, terminal tiers and refactor plan are in [`tiered-support.md`](tiered-support.md) (2026-09-11), which supersedes §1.1 where the two disagree** |
 | Investigated | 2026-09-07 |
 | Source baseline | Local `master`, `20ff4f1`; current implementation and selected invariant tests inspected |
 | External evidence | Official documentation fetched on the investigation date; additional products have not been exercised locally |
