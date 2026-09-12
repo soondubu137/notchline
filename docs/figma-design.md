@@ -499,7 +499,7 @@ Both signals already existed in the code and neither was written for this — on
 
 | Product | What "open" means | Source | Implementation |
 | --- | --- | --- | --- |
-| Codex Desktop | The app is running | `NSRunningApplication.runningApplications(withBundleIdentifier:)`, fetched once per refresh and already fetched, to bind live hooks to one Desktop process lifetime | `LiveCodexMonitorService.desktopProcessIdentifier()` |
+| Codex Desktop | The app is running | `NSRunningApplication.runningApplications(withBundleIdentifier:)`, fetched once per refresh and already fetched, to bind live hooks to one Desktop process lifetime | `RunningApplicationPresence.runningProcessIdentifier(bundleIdentifiers:)`, read by `LiveCodexMonitorService` |
 | Claude Code | At least one active session | `claude agents --json` through `ClaudeCodeSessionListing.liveSessions()`. With no app to ask, the session list is the presence signal | `ClaudeCodeSessionRegistry.swift` |
 
 `ClaudeCodeSessionRegistry`'s own contract is exactly the line needed here: its output is byte-identical whether a session is working or idle — it answers which sessions exist, and the Turn reducer answers what they are doing. **Presence draws the matrix and the reducer lights it**, and the two must not be recombined.

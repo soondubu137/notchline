@@ -2,88 +2,62 @@ import Foundation
 
 /// Watches Claude Code, and is one of the products the notch summarises.
 ///
-/// Deliberately smaller than the Codex service. The biggest of that one's jobs
-/// is simply absent here: there is no app-server subprocess to run and keep
-/// alive, because session identity comes from a documented command.
+/// **A composition, not an orchestrator of its own.** Until 2026-09-12 this was
+/// an actor of some eighteen hundred lines running its own refresh; it is now
+/// the place Claude Code's sources are made and handed to the runtime every
+/// hook-based product shares (``HookProductProvider``, `tiered-support.md`
+/// §5.4). Each source carries its measurements with it:
 ///
-/// Hook registration is no longer a difference between the two. It once was —
-/// ADR 0010 left `~/.claude/settings.json` to the user — and ADR 0016 took that
-/// back: both products install and remove their own definitions, through the
-/// same strict editor, and this one keeps a copy of the user's file beside it
-/// before each change.
+/// - ``ClaudeCodeSessionSource`` — the session list, read once per refresh, and
+///   the two edges that keep it honest;
+/// - ``ClaudeCodeTurnEvidence`` — interrupts and answered dialogs no hook
+///   reports;
+/// - ``ClaudeCodeRowContent`` — the working directory, the transcript's title,
+///   and what the Turn has said;
+/// - ``ClaudeCodeReadEvidence`` — the five routes to "read";
+/// - ``ClaudeCodeUsageReader`` — the quota, and the transcripts its readings
+///   leave.
 ///
-/// The startup boundary, though, is the same on both sides: nothing that
-/// happened before this app launched is ever shown. Claude Code's transcript
-/// can name a turn already in flight and this service used to read it, which
-/// was the one place the two products genuinely differed in what they could
-/// know. It was removed. A turn waiting on the user writes nothing at all, so
-/// the reconstruction could only ever say Running -- a session parked on a
-/// permission prompt when the app started was drawn as working, and telling a
-/// wait from work is precisely what the product is for.
-actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDelivering,
-    DiskFootprintReporting, SessionProcessLocating {
-    nonisolated let agent = AgentKind.claudeCode
-    nonisolated let stateChangeEvents: AsyncStream<Void>
+/// The row itself is the runtime's, unchanged: a Turn can reach `Stop` with a
+/// subagent still in flight (measured 2026-08-23 against CLI 2.1.241, the
+/// parent's `Stop` naming it in `background_tasks` and its `SubagentStop`
+/// arriving afterwards), and there is no reviewer to subtract on this side --
+/// Claude Code has nothing like Codex's `auto_review` on the path a hook can
+/// see, so a wait the reducer holds is a person being asked, full stop.
+///
+/// The startup boundary is the same as every product's: nothing that happened
+/// before this app launched is ever shown. Claude Code's transcript can name a
+/// turn already in flight and this product used to read it; that was removed,
+/// because a turn waiting on the user writes nothing at all, so the
+/// reconstruction could only ever say Running.
+nonisolated struct ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring,
+    AnswerDelivering, DiskFootprintReporting, SessionProcessLocating {
+    let agent = AgentKind.claudeCode
 
     /// Claude Desktop's bundle identifier, used only to recognise the
     /// application in the workspace's activation notification. It is not
     /// promised by any official contract -- see the registry.
-    nonisolated static let desktopBundleIdentifier = "com.anthropic.claudefordesktop"
+    static let desktopBundleIdentifier = "com.anthropic.claudefordesktop"
 
-    /// The hook transport, wired once (``HookLifecycleSource``); the reducer
-    /// below is its member, kept under its own name because the rest of this
-    /// actor reads it constantly.
-    private let hooks: HookLifecycleSource
-    private let hookEvents: HookEventRepository
-    /// Which sessions exist, read once per refresh, and the list every other
-    /// Claude Code source answers about (``ClaudeCodeSessionSource``).
+    private let runtime: HookProductProvider
     private let sessionSource: ClaudeCodeSessionSource
-    private let transcripts: ClaudeCodeTranscriptReader
-    private let usage: ClaudeCodeUsageReader
+    private let turnEvidence: ClaudeCodeTurnEvidence
+
+    var stateChangeEvents: AsyncStream<Void> { runtime.stateChangeEvents }
+
     /// The records of the listed sessions, watched by the session source.
     ///
-    /// Not private, so a test can read how many records are being watched --
-    /// see ``ClaudeCodeSessionSource/recordWatcher``.
-    nonisolated var recordWatcher: ClaudeCodeSessionRecordWatcher {
-        sessionSource.recordWatcher
-    }
-    /// Interrupts and answered dialogs Claude Code writes down where no hook
-    /// reaches, and the two watchers on those files
-    /// (``ClaudeCodeTurnEvidence``).
-    private let turnEvidence: ClaudeCodeTurnEvidence
+    /// Exposed so a test can read how many records are being watched -- see
+    /// ``ClaudeCodeSessionSource/recordWatcher``.
+    var recordWatcher: ClaudeCodeSessionRecordWatcher { sessionSource.recordWatcher }
+
     /// The transcripts of the turns still going in a session that reports no
-    /// status of its own.
-    ///
-    /// Not private, so a test can state what is watched and for how long --
-    /// see ``ClaudeCodeTurnEvidence/transcriptWatcher``.
-    nonisolated var transcriptWatcher: PathSetChangeWatcher {
-        turnEvidence.transcriptWatcher
-    }
+    /// status of its own -- see ``ClaudeCodeTurnEvidence/transcriptWatcher``.
+    var transcriptWatcher: PathSetChangeWatcher { turnEvidence.transcriptWatcher }
+
     /// Claude Desktop's own log, while a dialog it raised is still open -- see
     /// ``ClaudeCodeTurnEvidence/permissionLogWatcher``.
-    nonisolated var permissionLogWatcher: PathSetChangeWatcher {
-        turnEvidence.permissionLogWatcher
-    }
-    /// Whether a finished row has been read: the five routes, and the
-    /// on-screen membership they keep across refreshes
-    /// (``ClaudeCodeReadEvidence``).
-    private let readEvidence: ClaudeCodeReadEvidence
-    /// Keeps a finished row listed until it has been read, and retires it the
-    /// moment it has been.
-    ///
-    /// The same filter the Codex side uses, given the same shape of answer:
-    /// this product's evidence is a focus instant rather than a blue dot, so
-    /// the verdicts handed over are computed per refresh from those instants
-    /// and each Turn's own last moment -- see
-    /// ``ClaudeCodeReadStateSnapshot/readState(forSession:terminalBoundaryAt:)``.
-    private var terminalReadMembershipGate: TerminalUnreadRowFilter
-    /// Whether there is a screen the user could read a finished answer on.
-    ///
-    /// Read where the gate books its re-check, not inside the verdicts -- those
-    /// already make the same reading for themselves. See
-    /// ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``.
-    nonisolated private let screenAvailability: any ScreenAvailabilityReporting
-    private let clock: any MonitorClock
+    var permissionLogWatcher: PathSetChangeWatcher { turnEvidence.permissionLogWatcher }
 
     init(
         paths: HookIntegrationPaths = .liveClaudeCode(),
@@ -104,7 +78,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         sessionsDirectory: URL? = nil,
         /// Which entries of that directory belong to a `claude` this app
         /// launched. Injected only so the rule can be tested without launching
-        /// one — see ``sessionsChanged(_:invalidating:in:ownedBy:)``.
+        /// one — see ``ClaudeCodeSessionSource``.
         ownsSessionRecord: (@Sendable (String) -> Bool)? = nil,
         /// Whether a `claude` executable can be found at all. Injected for the
         /// reason the readers above are: left with the default, a test would
@@ -118,17 +92,12 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         // from a session the user started. It reaches the app by two routes and
         // both of them need it: the reading is listed by `claude agents --json`
         // like any other session, and it is a session that could fire hooks.
-        // Before this the directory was only ever spelled out where the reading
-        // was pinned to it -- the store was handed nothing, and the registry
-        // had no notion that such a session existed.
         let quotaDirectory = paths.quotaWorkingDirectory
-        // Resolved before the two readers below rather than beside the gate
-        // that reads it, because both of them now take it: a `claude` launched
-        // for a figure nobody can look at is the same waste as a re-check
-        // booked for a row nobody can read.
-        let resolvedScreenAvailability = screenAvailability
-            ?? ScreenAvailabilityWatcher()
-        self.screenAvailability = resolvedScreenAvailability
+        // Resolved first, because the session list and the quota reading take
+        // it as well as the read gate: a `claude` launched for a figure nobody
+        // can look at is the same waste as a re-check booked for a row nobody
+        // can read.
+        let screen = screenAvailability ?? ScreenAvailabilityWatcher()
         let hooks = HookLifecycleSource(
             paths: paths,
             vocabulary: ClaudeCodeHookVocabulary(),
@@ -139,33 +108,22 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
             repository: hookEvents,
             listener: listener
         )
-        self.hooks = hooks
-        let repository = hooks.repository
-        self.hookEvents = repository
-        let resolvedSessions = sessions ?? ClaudeCodeSessionRegistry(
-            clock: clock,
-            ignoringWorkingDirectory: quotaDirectory,
-            screenIsAvailable: resolvedScreenAvailability.isAvailable
-        )
         let sessionSource = ClaudeCodeSessionSource(
-            listing: resolvedSessions,
+            listing: sessions ?? ClaudeCodeSessionRegistry(
+                clock: clock,
+                ignoringWorkingDirectory: quotaDirectory,
+                screenIsAvailable: screen.isAvailable
+            ),
             sessionsDirectory: sessionsDirectory,
             ownsSessionRecord: ownsSessionRecord,
             commandIsInstalled: commandIsInstalled,
             timing: timing
         )
         self.sessionSource = sessionSource
-        // A row's third line arriving where there was none used to need a
-        // stream of its own. It does not any more: the store signals when what
-        // a row draws has changed, and "this session has text where it had
-        // none" is part of that projection -- while the deltas themselves stay
-        // off it, because three a second is not a redraw rate.
-        let resolvedTranscripts = transcripts ?? ClaudeCodeTranscriptReader()
-        self.transcripts = resolvedTranscripts
-        // The quota's own edge. Nothing waits for the reading any more, so the
-        // reading has to say when it landed -- otherwise a figure read at
-        // second five would not be drawn until whatever happened to refresh
-        // next, which is the wait this stopped blocking to avoid.
+        let transcripts = transcripts ?? ClaudeCodeTranscriptReader()
+        // The quota's own edge. Nothing waits for the reading, so the reading
+        // has to say when it landed -- otherwise a figure read at second five
+        // would not be drawn until whatever happened to refresh next.
         let (quotaUpdates, quotaLanded) = AsyncStream<Void>.makeStream(
             bufferingPolicy: .bufferingNewest(1)
         )
@@ -178,435 +136,126 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
         // The listener's filter is therefore belt to the registry's braces
         // today, and is wired anyway: "fires no hooks" is a property of
         // somebody else's command, not a promise to this app.
-        self.usage = usage ?? ClaudeCodeUsageReader(
+        let usage = usage ?? ClaudeCodeUsageReader(
             clock: clock,
             workingDirectory: quotaDirectory,
-            screenIsAvailable: resolvedScreenAvailability.isAvailable,
+            screenIsAvailable: screen.isAvailable,
             tokens: ClaudeCodeTokenCounter(clock: clock),
             transcripts: ClaudeCodeUsageTranscripts(clock: clock),
             onUpdate: { quotaLanded.yield() }
         )
-        self.clock = clock
-        let resolvedReadState = readState ?? ClaudeCodeDesktopReadStateRepository(
+        let readState = readState ?? ClaudeCodeDesktopReadStateRepository(
             changeDebounceInterval: timing.unreadStateDebounceInterval
         )
-        let resolvedActivations = activations ?? DesktopActivationWatcher(
+        let activations = activations ?? DesktopActivationWatcher(
             bundleIdentifier: Self.desktopBundleIdentifier,
             clock: clock
         )
-        // No change stream of its own: the front, the lock and the display are
-        // three states that have to agree, so a notification for any one of
-        // them says nothing on its own, and the reading is sampled at the
-        // re-check a row waiting on the user books every
-        // ``MonitorTiming/terminalUnreadRecheckInterval``.
-        //
-        // It used to say the notifications were not needed at all. They are:
-        // the re-check is now deferred while the display is asleep or the
-        // screen locked, because every route out of that state needs a screen
-        // the user can see, and a sample taken through a locked screen is not
-        // a sample of anything (CR-Fable-018). ``ScreenAvailabilityWatcher``
-        // carries those edges -- one stream for the moment the answer could
-        // have become yes, rather than three states this reading would have to
-        // re-derive.
-        let resolvedReading = reading ?? DesktopReadingWatcher(
-            bundleIdentifier: Self.desktopBundleIdentifier
-        )
-        // No change stream of its own either, and for its own reason: the
-        // transition only this reader can see -- a session leaving the screen
-        // for a composer -- can only ever *keep* a row, and a listed row books
-        // a re-check every second anyway. Every transition that can retire one
-        // arrives on an edge that already exists, because Desktop writes the
-        // record of whatever it put on screen instead. See
-        // ``ClaudeDesktopFocusLogReader``.
-        let resolvedDisplayed = displayed ?? ClaudeDesktopFocusLogReader()
-        // No change stream of its own either, and for a sharper reason than
-        // the reading above: a device's access time moves in the kernel and
-        // leaves nothing a file-system watcher can attach to. It is sampled at
-        // the same re-check a row waiting on the user already books, so the
-        // bound on how late such a row leaves is
-        // ``MonitorTiming/terminalUnreadRecheckInterval`` -- one `sysctl` and
-        // one `stat` per listed terminal row per second, and nothing at all
-        // when no such row is listed.
-        self.readEvidence = ClaudeCodeReadEvidence(
-            sessions: sessionSource.listedProcesses,
-            readState: resolvedReadState,
-            activations: resolvedActivations,
-            reading: resolvedReading,
-            displayed: resolvedDisplayed,
-            terminalGestures: terminalGestures ?? ControllingTerminalGestureReader(),
-            screen: resolvedScreenAvailability
-        )
-        self.terminalReadMembershipGate = TerminalUnreadRowFilter(timing: timing)
-
         let turnEvidence = ClaudeCodeTurnEvidence(
             sessions: sessionSource,
-            transcripts: resolvedTranscripts,
+            transcripts: transcripts,
             permissions: permissions
                 ?? ClaudeDesktopPermissionLogReader(logURL: permissionLogURL),
             permissionLogURL: permissionLogURL,
-            readState: resolvedReadState,
+            readState: readState,
             timing: timing
         )
         self.turnEvidence = turnEvidence
-        self.stateChangeEvents = DirectoryChangeWatcher.merged([
-            repository.changeEvents(),
-        ] + sessionSource.changeEvents + turnEvidence.changeEvents + [
-            // Claude Desktop writing a session's record. It is the low-latency
-            // half of retiring a finished row: the write that stamps a focus is
-            // an atomic replace inside the account folder, so this edge lands
-            // on the same gesture that reads the answer. Nothing here
-            // invalidates the session list -- that file says who has read what,
-            // not which sessions exist.
-            resolvedReadState.changeEvents(),
-            // Claude Desktop coming to the front. It is an edge rather than a
-            // deadline for the same reason the record write is: a row waiting
-            // to be read should leave on the gesture that reads it, not on the
-            // next re-check after it.
-            resolvedActivations.changeEvents(),
-            // The display waking or the screen unlocking. A row waiting on the
-            // user books no re-check while neither is true, because every route
-            // that could retire it needs a screen somebody can see; this is the
-            // edge that starts the re-checks again. Without it such a row would
-            // sit until the heartbeat, at the one moment the user is most
-            // likely to be looking.
-            resolvedScreenAvailability.changeEvents(),
-            quotaUpdates
-        ])
+        let readEvidence = ClaudeCodeReadEvidence(
+            sessions: sessionSource.listedProcesses,
+            readState: readState,
+            activations: activations,
+            // No change stream of its own: the front, the lock and the display
+            // are three states that have to agree, so a notification for any
+            // one of them says nothing on its own, and the reading is sampled
+            // at the re-check a row waiting on the user books every
+            // ``MonitorTiming/terminalUnreadRecheckInterval``. The screen coming
+            // back is the one edge that matters, and the runtime merges it
+            // (CR-Fable-018).
+            reading: reading ?? DesktopReadingWatcher(
+                bundleIdentifier: Self.desktopBundleIdentifier
+            ),
+            // No change stream of its own either: the transition only this
+            // reader can see -- a session leaving the screen for a composer --
+            // can only ever *keep* a row, and a listed row books a re-check
+            // every second anyway. Every transition that can retire one arrives
+            // on an edge that already exists, because Desktop writes the record
+            // of whatever it put on screen instead.
+            displayed: displayed ?? ClaudeDesktopFocusLogReader(),
+            // No change stream of its own either, and for a sharper reason: a
+            // device's access time moves in the kernel and leaves nothing a
+            // file-system watcher can attach to. It is sampled at the same
+            // re-check, so the bound on how late such a row leaves is
+            // ``MonitorTiming/terminalUnreadRecheckInterval`` -- one `sysctl`
+            // and one `stat` per listed terminal row per second, and nothing at
+            // all when no such row is listed.
+            terminalGestures: terminalGestures ?? ControllingTerminalGestureReader(),
+            screen: screen
+        )
+        runtime = HookProductProvider(
+            agent: .claudeCode,
+            hooks: hooks,
+            sessions: sessionSource,
+            turnEvidence: [turnEvidence],
+            rowContent: ClaudeCodeRowContent(sessions: sessionSource, transcripts: transcripts),
+            readEvidence: readEvidence,
+            usage: usage,
+            footprint: ClaudeCodeTranscriptFootprint(usage: usage),
+            clock: clock,
+            timing: timing,
+            changeEvents: sessionSource.changeEvents + turnEvidence.changeEvents + [
+                // Claude Desktop writing a session's record. It is the
+                // low-latency half of retiring a finished row: the write that
+                // stamps a focus is an atomic replace inside the account folder,
+                // so this edge lands on the same gesture that reads the answer.
+                // Nothing here invalidates the session list -- that file says
+                // who has read what, not which sessions exist.
+                readState.changeEvents(),
+                // Claude Desktop coming to the front. It is an edge rather than
+                // a deadline for the same reason the record write is: a row
+                // waiting to be read should leave on the gesture that reads it,
+                // not on the next re-check after it.
+                activations.changeEvents(),
+                quotaUpdates
+            ]
+        )
     }
-
-    // MARK: - AgentMonitoring
 
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
-        // The registration checked and the socket bound, in the order every
-        // hook product refreshes in (``HookLifecycleSource/gate(productName:)``).
-        // Both are this app's own files in this app's own directory, so unlike
-        // the port they replaced there is nothing to lose a race for and
-        // nothing in the user's file to follow.
-        let status: IntegrationSetupStatus
-        switch await hooks.gate(productName: agent.displayName) {
-        case let .open(openStatus):
-            status = openStatus
-        case let .closed(availability, closedStatus, diagnostic):
-            // Nothing is being monitored, so nothing is worth an edge. Left
-            // alone, an integration switched off would keep a descriptor open
-            // on the record of whatever turn happened to be running when it
-            // was.
-            await sessionSource.stopWatching()
-            await turnEvidence.stopWatching()
-            // Nothing is listed, so nothing is waiting to be read. Left alone,
-            // the gate would go on reporting a re-check deadline for rows this
-            // branch is not going to publish, and a session that was on screen
-            // when the integration was switched off would still be holding a
-            // claim to have been seen there when it comes back.
-            terminalReadMembershipGate.reset()
-            await readEvidence.forget()
-            return snapshot(
-                availability: availability,
-                sessions: [],
-                setupStatus: closedStatus,
-                diagnostic: diagnostic
-            )
-        }
-
-        let consumed = await hookEvents.drainDeliveredEvents()
-        // The list, read once for this refresh -- again on the spot if a Turn
-        // it does not name has moved since it was read
-        // (``ClaudeCodeSessionSource/read(observing:)``).
-        let sessionReading = await sessionSource.read(observing: consumed)
-        let listed = await sessionSource.currentReading()
-        let presence = sessionReading.presence
-        let liveByID = listed.sessionsByID
-
-        // What Claude Code writes down about these Turns where no hook reaches
-        // -- an interrupt, a dialog answered in its own window -- applied
-        // through the reducer (``ClaudeCodeTurnEvidence``). The events are
-        // drained first and this is applied to what they left, so an event that
-        // arrived after the list was read still wins.
-        var hookState = await turnEvidence.settle(consumed, in: hookEvents)
-        // The reducer's own account of its health. It stands for the run
-        // rather than for one drain, so every snapshot the calls above return
-        // carries the whole of it; joining the drain's copy to a later one
-        // said the same sentence twice.
-        let hookDiagnostic = hookState.diagnostic
-
-        // What this refresh's reading of the list says exists. Three things
-        // are held to it below, and "the same set" is meant literally.
-        let listedSessionIDs = Set(liveByID.keys)
-        await transcripts.retain(sessionIDs: listedSessionIDs)
-        // Text belonging to a session that has ended does not outlive the row
-        // that showed it. Pruned against the same set as the titles.
-        hookEvents.retainPreviews(forSessions: listedSessionIDs)
-        // And the turns behind both of them, against that same set -- where
-        // the list is knowledge (``ClaudeCodeSessionSource/read(observing:)``).
-        hookState = await hookEvents.applying(sessionReading.admission, to: hookState)
-
-        func title(for session: ClaudeCodeSession) async -> String? {
-            await transcripts.title(
-                forSession: session.sessionID,
-                workingDirectory: session.workingDirectory
-            )
-        }
-
-        /// What this turn has said, from `MessageDisplay`, and the prompt it
-        /// started from until it has said anything.
-        ///
-        /// Both halves are scoped to the turn. The text is asked for by turn
-        /// because the store outlives one, and the prompt is the turn's own --
-        /// so a row that has just been given a new prompt shows that prompt
-        /// rather than the answer to the last one.
-        func preview(for turn: HookTurnState, in session: ClaudeCodeSession) -> String? {
-            hookEvents.preview(forSession: session.sessionID, inTurn: turn.turnID)
-                ?? turn.promptPreview
-        }
-
-        var rows: [MonitoredSession] = []
-        // Each row's last moment, keyed the way the rows are. Only a finished
-        // row uses it, and for that row it is the instant the Turn ended -- the
-        // event that ended it, or the reading that found the session no longer
-        // working. That is the left-hand side of "has this been read": a focus
-        // recorded before it cannot have shown the user this answer.
-        var boundaryByRowID: [String: Date] = [:]
-        /// Each row's Turn ending on its own, with no subagent folded in.
-        ///
-        /// **This is the left-hand side of every "has this been read" test**,
-        /// and the map beside it is only the settling window's origin. Reading
-        /// is something a person does to a Turn's answer, and the answer landed
-        /// here -- so a focus stamp, a return to the foreground or a terminal
-        /// gesture is evidence if it came after *this*, whatever a subagent
-        /// went on doing afterwards. The two are the same instant for every row
-        /// without a subagent, which is nearly all of them.
-        var turnEndByRowID: [String: Date] = [:]
-        for turn in hookState.turns {
-            // A turn whose session is gone is gone. This is the whole reason
-            // the session list is load-bearing rather than a convenience.
-            guard let session = liveByID[turn.threadID] else { continue }
-            let built = row(
-                for: turn,
-                in: session,
-                title: await title(for: session),
-                preview: preview(for: turn, in: session)
-            )
-            // The later of the turn's own last event and the last subagent
-            // boundary. For every row without a subagent they are the same
-            // instant; for one with a subagent still working, the turn's `Stop`
-            // may be minutes old by the time the thread actually stops working,
-            // and a settling window measured from it would be long spent -- the
-            // row would go the moment it stopped saying anything was running.
-            boundaryByRowID[built.id] = turn.terminalBoundaryAt
-            turnEndByRowID[built.id] = turn.turnEndedAt
-            rows.append(built)
-        }
-
-        // A session the reducer has never heard of contributes no row --
-        // whether it was already running when this app started, or its hooks
-        // were registered after it began. The transcript can name the turn such
-        // a session is part-way through, and for a while the product read it;
-        // that reconstruction was removed rather than extended.
-        //
-        // Nothing is written to the transcript while a turn waits on the user,
-        // so a reconstructed row could only ever be Running -- and a session
-        // that was in fact sitting on a permission prompt when this app
-        // launched was therefore shown as working, which is the one answer the
-        // product exists to get right. The alternative was to guess between
-        // waiting and working, which §6.2 forbids outright. So "anything from
-        // before launch is invisible" is now one sentence covering both
-        // products, rather than a capability one of them happens to have.
-
-        rows.sort(by: MonitorAggregation.rowOrder)
-        let read = await rowsStillWorthShowing(
-            rows,
-            boundaryByRowID: boundaryByRowID,
-            turnEndByRowID: turnEndByRowID,
-            // And which of them the user has already taken off the list, so
-            // none of the reading below is spent on one.
-            dismissedRowIDs: dismissedRowIDs
-        )
-        let visibleRows = read.rows
-
-        // The transcripts and Claude Desktop's log, watched only while a Turn
-        // they could end or a dialog they could close is open.
-        await turnEvidence.watch(openTurnsIn: hookState)
-
-        let watchFailure = sessionReading.unwatchableReason
-
-        return snapshot(
-            availability: watchFailure == nil ? .ready : .disconnected,
-            // A product that is not connected contributes no rows.
-            //
-            // The registry is written against exactly this: it goes on handing
-            // back its last list when a read fails, because a failed read is
-            // not evidence a session ended, and it says so on the understanding
-            // that "the surface retires them by going Disconnected". The
-            // surface did not. ``MonitorAggregation/status(agents:sessions:)``
-            // reads the rows before it reads presence, so a product whose mark
-            // had already gone -- presence `unknown`, no matrix drawn -- still
-            // had its row on screen saying `Running`. That is the state the
-            // user sees as Claude Code vanishing while it carries on working,
-            // and it is the surface's half of the contract, not the registry's.
-            sessions: presence.isOpen ? visibleRows : [],
-            setupStatus: status,
-            diagnostic: MonitorDiagnostics.combined(
-                watchFailure,
-                hookDiagnostic,
-                read.diagnostic,
-                // Last, because it is the least urgent of the four: the rows
-                // are all still there and working, and what is missing is the
-                // footer's two rules. It is here at all because nothing else
-                // reports it -- a signed-out CLI draws `--` and says nothing.
-                await usage.quotaDiagnostic()
-            ),
-            // Whatever is known right now. Awaiting the reading here is what
-            // made a hook event's row wait on a `claude` launch.
-            quota: await usage.currentQuota(),
-            // Not `rows.isEmpty`: a session with no turn in flight is still an
-            // open Claude Code. The list answers which sessions exist and the
-            // reducer answers what they are doing — presence draws the matrix,
-            // the reducer lights it, and merging the two would put the mark
-            // back to reporting turns instead of openness.
-            presence: presence
-        )
+        await runtime.fetchSnapshot(dismissedRowIDs: dismissedRowIDs)
     }
 
-    /// Drops the finished rows the user has already read.
-    ///
-    /// Which rows are judged, and how the gate is booked, is
-    /// ``TerminalUnreadRowFilter``'s; whether each has been read is
-    /// ``ClaudeCodeReadEvidence``'s five routes. Nothing is read unless a
-    /// finished row the user has not removed is listed (CR-Fable-041,
-    /// CR-Fable-003), and the membership that evidence keeps across refreshes
-    /// goes with such a list.
-    private func rowsStillWorthShowing(
-        _ rows: [MonitoredSession],
-        boundaryByRowID: [String: Date],
-        turnEndByRowID: [String: Date],
-        dismissedRowIDs: Set<String>
-    ) async -> (rows: [MonitoredSession], diagnostic: String?) {
-        let candidates = rows.map { row in
-            // Every row carries one: rows come only from the reducer, and
-            // the reducer stamps every turn with its last event. The fallback
-            // is a fail-closed default rather than a case -- an unknown
-            // boundary is read as "ended just now", so nothing can be judged
-            // already read on a boundary nobody supplied.
-            let boundary = boundaryByRowID[row.id] ?? clock.now()
-            return ReadGateCandidate(
-                row: row,
-                // What every read test below is dated against. The same
-                // fail-closed default as `boundary`, and the same instant as
-                // it on every row with no subagent that outlived its Turn.
-                turnEndedAt: turnEndByRowID[row.id] ?? boundary,
-                terminalBoundaryAt: boundary
-            )
-        }
-        let now = clock.now()
-        guard TerminalUnreadRowFilter.needsReadEvidence(
-            rows,
-            dismissedRowIDs: dismissedRowIDs
-        ) else {
-            await readEvidence.forget()
-            return (
-                terminalReadMembershipGate.rows(
-                    candidates,
-                    dismissedRowIDs: dismissedRowIDs,
-                    now: now,
-                    verdict: { _ in .cannotBeAsked }
-                ),
-                nil
-            )
-        }
-        let judgement = await readEvidence.verdicts(
-            for: candidates.filter { !dismissedRowIDs.contains($0.row.id) },
-            now: now
-        )
-        let shown = terminalReadMembershipGate.rows(
-            candidates,
-            dismissedRowIDs: dismissedRowIDs,
-            now: now
-        ) { judgement.verdicts[$0.row.id] ?? .cannotBeAsked }
-        return (shown, judgement.diagnostic)
-    }
-
-    /// No cadence for the rows: turn changes and session changes both arrive as
-    /// edges on ``stateChangeEvents``, and reporting a deadline this refresh
-    /// could not advance would be a busy-wait wearing a deadline's clothes.
-    ///
-    /// The quota is the one thing here that changes on the clock rather than on
-    /// an edge, so it reports when it wants reading again -- a cache going
-    /// stale is exactly what a deadline is for, and each refresh moves it. Left
-    /// at nil, the reading was paced by unrelated hook traffic and the
-    /// 60-second heartbeat: a failed attempt, which happens whenever something
-    /// else logs onto the command's stdout, went uncorrected for up to two
-    /// minutes.
-    ///
-    /// The second one is a finished, Desktop-hosted row waiting to be read. It
-    /// waits on the user rather than on time, so its deadline is a floor under
-    /// the account-folder watcher and not a sampling cadence -- the same
-    /// reasoning, and the same numbers, as
-    /// ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``
-    /// on the Codex side. A row nothing can ever clear never reaches the gate,
-    /// so it never books one of these -- and neither does one waiting on a user
-    /// who has no screen to read it on.
-    ///
-    /// Two of the routes to "read" do turn that floor into a sampling cadence,
-    /// and only for as long as a row is standing. `isInFrontOfThem` reads three
-    /// states that have to agree, so it can only be asked at a re-check; a
-    /// terminal session's last gesture is a device timestamp the kernel moves
-    /// with nothing to watch it, so it can only be asked at one either. Both
-    /// still cost nothing when nothing is listed, and both are bounded by the
-    /// same second.
     func nextRefreshDeadline() async -> Date? {
-        [
-            await usage.nextReadDeadline(),
-            terminalReadMembershipGate.nextDeadline(
-                now: clock.now(),
-                screenIsAvailable: screenAvailability.isAvailable()
-            )
-        ]
-        .compactMap { $0 }
-        .min()
-    }
-
-    /// The transcripts the quota readings leave in Claude Code's own project
-    /// folder. Reported so the user can see them grow and clear them if they
-    /// want to; never cleared here.
-    ///
-    /// Answers from the first refresh, before there is anything to count: this
-    /// product always leaves transcripts, so the row is never in doubt even
-    /// while the figure in it is.
-    func diskFootprint() async -> AgentDiskFootprintReport {
-        await usage.transcriptFootprint()
-    }
-
-    /// One answer, on the connection its request is still being held on.
-    ///
-    /// A pass-through, and deliberately nothing more: which bytes a product
-    /// will act on is its vocabulary's business (``RequestAnswering``), and
-    /// which connection they go down is the registry's. This is the boundary
-    /// the store reaches both through.
-    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
-        await hooks.answer(answer, on: handle)
-    }
-
-    func setupStatus() async -> IntegrationSetupStatus {
-        await hooks.setupStatus()
-    }
-
-
-    /// Writes this build's definitions into `~/.claude/settings.json`.
-    ///
-    /// A copy of that file as it was goes beside it first — see
-    /// ``ManagedHooksFileEditor`` and ADR 0016. Nothing here is Claude Code
-    /// specific: the switch in Settings is the same switch Codex has, and it
-    /// converges through the same path in ``MonitorStore``.
-    func installIntegration() async throws {
-        try await hooks.install()
-    }
-
-    func removeIntegration() async throws {
-        try await hooks.remove()
+        await runtime.nextRefreshDeadline()
     }
 
     func disconnect() async {
-        hooks.disconnect()
+        await runtime.disconnect()
+    }
+
+    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
+        await runtime.answer(answer, on: handle)
+    }
+
+    func setupStatus() async -> IntegrationSetupStatus {
+        await runtime.setupStatus()
+    }
+
+    /// Writes this build's definitions into `~/.claude/settings.json`, with a
+    /// copy of that file as it was beside it first — see
+    /// ``ManagedHooksFileEditor`` and ADR 0016.
+    func installIntegration() async throws {
+        try await runtime.installIntegration()
+    }
+
+    func removeIntegration() async throws {
+        try await runtime.removeIntegration()
+    }
+
+    /// The transcripts the quota readings leave in Claude Code's own project
+    /// folder -- see ``ClaudeCodeTranscriptFootprint``.
+    func diskFootprint() async -> AgentDiskFootprintReport {
+        await runtime.diskFootprint()
     }
 
     /// The process running a session, for navigation, asked of the list again
@@ -614,113 +263,19 @@ actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerD
     func processIdentifier(forThreadID threadID: String) async -> Int32? {
         await sessionSource.processIdentifier(forThreadID: threadID)
     }
+}
 
-    // MARK: - Internals
+/// The transcripts Claude Code's quota readings leave in its own project
+/// folder. Reported so the user can see them grow and clear them if they want
+/// to; never cleared here.
+///
+/// Answers from the first refresh, before there is anything to count: this
+/// product always leaves transcripts, so the row is never in doubt even while
+/// the figure in it is.
+nonisolated struct ClaudeCodeTranscriptFootprint: DiskFootprintReporting {
+    let usage: ClaudeCodeUsageReader
 
-    private func row(
-        for turn: HookTurnState,
-        in session: ClaudeCodeSession,
-        title: String?,
-        preview: String?
-    ) -> MonitoredSession {
-        // Project is the working directory (ADR 0009). The ban on deriving a
-        // Project from a path binds Codex only: there a path is an approximation
-        // of a grouping the user made, here the directory *is* the grouping --
-        // it is what Claude Code itself files transcripts by.
-        MonitoredSession(
-            agent: .claudeCode,
-            threadID: turn.threadID,
-            turnID: turn.turnID,
-            projectName: projectName(for: session),
-            // `Untitled` is the contract's answer for a title that cannot be
-            // obtained, and the folder name is never allowed to stand in for
-            // one.
-            title: title ?? "Untitled",
-            // The beginning of the newest message *this turn* printed, and the
-            // prompt it started from until it has printed one. The first half
-            // reads the same in every state: when a turn stops it is exactly
-            // the PRD's "beginning of the final answer", and while it runs it
-            // is the opening of whatever it last said — a weaker reading of
-            // "latest progress" than Codex's and the deliberate trade, since a
-            // rolling tail would track a long answer more closely but would
-            // stop being the beginning of it at the moment the turn ends.
-            // Messages between tool calls are mostly shorter than the cap, so
-            // the two readings usually coincide. A wait shows the words that
-            // led up to the question — never the question's own tool arguments,
-            // the command being approved, or a path.
-            //
-            // The second half is the same fallback Codex's `Running` row has
-            // always had, and this product went without it: the store is keyed
-            // by session, so a turn that had not spoken yet drew either nothing
-            // at all (a session's first turn, or the first after this app
-            // started listening) or the previous turn's closing words — the row
-            // describing finished work as the work in hand. Both are answered
-            // by asking the store for *this* turn's text and falling back to
-            // what the user just typed.
-            preview: preview,
-            status: turn.status,
-            startedAt: turn.startedAt,
-            // What the row says once its own turn has stopped and the thread
-            // has not. An `Agent` call returns as soon as the subagent is
-            // launched, so a turn can reach `Stop` with work it started still
-            // in flight -- measured 2026-08-23 against CLI 2.1.241, with the
-            // parent's `Stop` naming that subagent in `background_tasks` and
-            // its `SubagentStop` arriving afterwards.
-            runningSubagentCount: turn.runningSubagentIDs.count,
-            // No routing to subtract here: this product has no equivalent of
-            // Codex's automatic reviewer on the path a hook can see, so a
-            // `PermissionRequest` that opened over one of this thread's
-            // subagents is a person being asked.
-            subagentsAwaitingApprovalCount: turn.subagentsAwaitingApprovalCount,
-            // What the row says between its subagent stopping and the turn
-            // Claude Code opens next. The `Stop` that finished this turn said
-            // which of the two terminals it was, and a turn that stopped in
-            // order to wait is not a thread that has finished.
-            isPausedForBackgroundWork: turn.pausedForBackgroundWork,
-            // How long the turn took, for the row that draws it once the clock
-            // has stopped. `lastEventAt` is the turn's own last moment and is
-            // held there against a subagent's chatter, which is what makes it
-            // an end rather than a moving target on the rows this product can
-            // leave working after their turn.
-            finishedAt: turn.status == .completed ? turn.lastEventAt : nil,
-            // No reviewer to subtract on this side: Claude Code has nothing
-            // like Codex's `auto_review`, so a wait this reducer holds is a
-            // person being asked, full stop.
-            request: turn.requestAwaitingAnAnswer
-        )
-    }
-
-    /// Project is the working directory (ADR 0009). The ban on deriving a
-    /// Project from a path binds Codex only: there a path approximates a
-    /// grouping the user made, here the directory *is* the grouping -- it is
-    /// what Claude Code itself files transcripts by.
-    private func projectName(for session: ClaudeCodeSession) -> String {
-        let component = session.workingDirectory.lastPathComponent
-        return component.isEmpty ? "Untitled folder" : component
-    }
-
-    /// - Parameter presence: Defaults to `unknown` because the branches that do
-    ///   not reach the session list genuinely did not look. Asking would mean
-    ///   spawning `claude` on every refresh for a user who has not registered
-    ///   the hooks — the exact work the early return exists to skip — and it
-    ///   would change nothing: those branches are not `ready`, so the product
-    ///   is not connected whatever its presence turns out to be.
-    private func snapshot(
-        availability: MonitorAvailability,
-        sessions: [MonitoredSession],
-        setupStatus: IntegrationSetupStatus,
-        diagnostic: String?,
-        quota: QuotaSnapshot = .unavailable,
-        presence: AgentPresence = .unknown
-    ) -> AgentSnapshot {
-        AgentSnapshot(
-            agent: .claudeCode,
-            availability: availability,
-            sessions: sessions,
-            quota: quota,
-            diagnostic: diagnostic,
-            setupStatus: setupStatus,
-            presence: presence
-        )
+    func diskFootprint() async -> AgentDiskFootprintReport {
+        await usage.transcriptFootprint()
     }
 }

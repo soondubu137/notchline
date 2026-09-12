@@ -9,8 +9,12 @@ Words are settled here. Any naming disagreement in code, docs or commit messages
 **Product** — A monitored agent product; today Codex, Claude Code and Antigravity CLI, the last at Tier 0 (listed, not attended — [`docs/technical-explorations/multi-product-provider-architecture/tiered-support.md`](docs/technical-explorations/multi-product-provider-architecture/tiered-support.md) §2). A product is user-visible: row attribution and the footer's quota rules are per product. **A hue is not** — no product owns a colour anywhere in this app, and a product is named by a badge in the user's own theme ink ([`docs/colour-v2.md`](docs/colour-v2.md)). *Matrix hue* was on this list until that decision and is banned wording now, along with *product colour* and *product ink*.
 *Avoid:* backend, data source, integration, agent.
 
-**Provider** — The in-app adapter that translates one product's boundary signals into an `AgentSnapshot`, one per product. An implementation concept that never appears in user-visible copy.
+**Provider** — The in-app adapter that translates one product's boundary signals into an `AgentSnapshot`, one per product. An implementation concept that never appears in user-visible copy. For a product observed through its hooks alone it is a composition: the shared runtime with the product's **sources** handed in — its session reading, its non-hook Turn evidence, its row content, its read evidence, its quota — each supplying evidence and none deciding across the others. Codex's Provider is its own, because its App Server is a second lifecycle beside its hooks.
 *Avoid:* service, client, monitor.
+
+**Tier** — The promise a product's rows keep, cumulative: **Tier 0** *Listed* (a row from submission to end, a clock, a way back), **Tier 1** *Attended* (says when it is waiting and on what, and stops once answered in the product), **Tier 2** *Answerable* (can be answered from the notch, and a stale click answers nothing). A product's tier is the highest whose every requirement it meets ([`tiered-support.md`](docs/technical-explorations/multi-product-provider-architecture/tiered-support.md) §2).
+
+**Capability** — Something a product does beyond its tier, declared rather than inferred: exact or host navigation, read state, a product-owned Project, a title, live progress, quota. `unsupported` is a value, never zero, `nil` or a failed read.
 
 ## Threads and Turns
 

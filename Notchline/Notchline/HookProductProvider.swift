@@ -1,14 +1,13 @@
 import AppKit
 import Foundation
 
-// The Provider a hook-based product gets by default, and the two facts it has
-// to supply from outside the hooks: whether the product is open, and which of
-// the Threads the hooks name the product vouches for. Everything else a Tier 0
-// row needs — setup, the helper and its socket, the reducer, the row built from
-// a Turn — is here once. This is the destination `tiered-support.md` §5.4
-// describes; the two shipping products still run their own actors, which carry
-// the product-specific evidence (read state, interruption, Project, quota)
-// this skeleton does not yet have seams for.
+// The runtime every hook-based product runs on, and the shapes of the evidence
+// a product hands it: whether the product is open and which Threads it vouches
+// for, what it writes down about a Turn beyond the hooks, and what each row
+// says. Read evidence, usage and the transport have their shapes beside the
+// types that implement them (`TerminalUnreadRowFilter.swift`,
+// `ProductContracts.swift`, `HookLifecycleSource.swift`). `tiered-support.md`
+// §5.4 is the design; Claude Code and Antigravity CLI are compositions of it.
 
 /// Whether a product is open, as the user would judge it by glancing at their
 /// own machine (``AgentPresence``). Codex reads the running-application list
@@ -182,52 +181,124 @@ extension HookEventRepository {
     }
 }
 
-/// One hook-based product's Provider: setup, transport, the shared reducer and
-/// a row per Turn, with presence and admission supplied by the product
-/// (``ProductSessionReading``).
+/// What a row says beyond its Turn's own state.
+nonisolated struct RowContent: Sendable, Equatable {
+    let projectName: String
+    let title: String
+    let preview: String?
+}
+
+/// A product's project, title and line for each Turn, and whether a Turn draws
+/// a row at all.
 ///
-/// What the row can say is decided by the vocabulary handed in. A vocabulary
-/// that maps only a start and an end gives Tier 0: rows appear on submission,
-/// show the elapsed time, turn `Completed` on the end event and name their work
-/// by the submission directory's last component. A vocabulary that maps wait
-/// events gives Tier 1, and one with an `answering` encoding and a definition
-/// carrying the answering argument gives Tier 2 — nothing here changes between
-/// them.
+/// Everything else on a row — status, clock, subagents, the request — is the
+/// reducer's, and the Provider writes it; this is only what each product knows
+/// differently. ``WorkingDirectoryRowContent`` is what a product with nothing
+/// of its own gets; Claude Code's is ``ClaudeCodeRowContent``.
+protocol RowContentSource: Sendable {
+    /// Content for each Turn that draws a row, keyed by Thread. A Turn with no
+    /// entry draws none.
+    ///
+    /// - Parameter messages: The store of what each Turn has said, for a
+    ///   product whose vocabulary names a message event.
+    func content(
+        for turns: [HookTurnState],
+        messages: HookEventRepository
+    ) async -> [String: RowContent]
+}
+
+/// The Tier 0 row: the submission directory's last component for a project,
+/// the prompt for a title, and the Turn's closing words or its newest message
+/// for a line.
+struct WorkingDirectoryRowContent: RowContentSource {
+    func content(
+        for turns: [HookTurnState],
+        messages: HookEventRepository
+    ) async -> [String: RowContent] {
+        Dictionary(
+            turns.map { turn in
+                (
+                    turn.threadID,
+                    RowContent(
+                        projectName: Self.projectName(forWorkingDirectory: turn.workingDirectory),
+                        title: turn.promptPreview ?? "Untitled",
+                        // The closing words once the Turn has ended with some,
+                        // and until then the newest message this Turn has said,
+                        // for a product whose vocabulary names a message event.
+                        // The prompt is not the fallback here, as it is on Claude
+                        // Code's row: it is already the title.
+                        preview: turn.assistantPreview
+                            ?? messages.preview(forSession: turn.threadID, inTurn: turn.turnID)
+                    )
+                )
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
+    }
+
+    /// The submission directory's last component, which `tech-design.md` §5
+    /// permits as a project name; `Untitled folder` when there is none.
+    nonisolated static func projectName(forWorkingDirectory path: String?) -> String {
+        let component = path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
+        return component.isEmpty || component == "/" ? "Untitled folder" : component
+    }
+}
+
+/// The Provider every hook-based product runs on: one refresh, in one order,
+/// with the product's evidence handed in as sources.
 ///
-/// **What this deliberately does not do.** No interruption evidence beyond
-/// what the hooks say, no title beyond the prompt. Each of those is a
-/// capability a product adds beside this, not a flag on it. A quota is one a
-/// product hands in (``UsageReading``); with none, the footer draws the
-/// product's name and no lines.
+/// **This is `tiered-support.md` §5.4's runtime, and both hook-only products
+/// are compositions of it.** Antigravity CLI is the vocabulary, a scanner and
+/// the terminal's read evidence; Claude Code is the vocabulary and six sources
+/// of its own (``ClaudeCodeMonitorService``). What the runtime owns is what
+/// neither may do differently:
 ///
-/// **Read state is the one of those capabilities this now composes**, because
-/// for a terminal product it costs the product nothing: hand in
-/// ``TerminalReadEvidence`` and a `Completed` row is retired once the user has
-/// been at the terminal its Thread is running in. A product that hands in none
-/// keeps the lifecycle `CONTEXT.md` defines for a Turn whose read state cannot
-/// be asked about — the row stays until the Thread's next submission, its
-/// disappearance from the admission list, or a right-click.
-actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelivering {
+/// 1. the transport gate — helper, status, socket — and what a closed one
+///    stops (``HookLifecycleSource/gate(productName:)``);
+/// 2. the drain, then one session reading, then admission
+///    (``ProductSessionReading``);
+/// 3. the product's non-hook evidence, in order, and the watchers on it
+///    (``TurnEvidenceSource``);
+/// 4. a row per Turn the content source draws (``RowContentSource``), the read
+///    gate over them (``TerminalUnreadRowFilter`` with the product's
+///    ``ReadEvidenceSource``), and the rows published only while the product
+///    is open;
+/// 5. the snapshot: availability, the diagnostics in one order, the quota
+///    (``UsageReading``), and the deadlines of every timed source.
+///
+/// What the row can say about waiting is decided by the vocabulary. A
+/// vocabulary that maps only a start and an end gives Tier 0; wait events give
+/// Tier 1; an `answering` encoding and a definition carrying the answering
+/// argument give Tier 2 — nothing here changes between them.
+///
+/// **Codex is not a composition of this, and that is a boundary rather than a
+/// backlog.** Its hooks come through the same transport and its evidence
+/// through the same shapes, but beside them it runs a second lifecycle — an
+/// App Server it connects to under a cool-off, whose unsupported version and
+/// transient failures are availabilities of their own, and whose background
+/// reads decide which Threads have rows — and folding that into these five
+/// steps would make this the switchboard `tiered-support.md` §5.4 warns about.
+actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelivering,
+    DiskFootprintReporting {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents: AsyncStream<Void>
 
     private let hooks: HookLifecycleSource
     private let sessions: any ProductSessionReading
-    /// What the terminal a Thread runs in says about the user having read its
-    /// finished answer, or nil for a product that supplies no such evidence.
+    /// What the product writes down about its Turns beyond the hooks, applied
+    /// in order after admission (``TurnEvidenceSource``).
+    private let turnEvidence: [any TurnEvidenceSource]
+    private let rowContent: any RowContentSource
+    /// What says the user has read a finished answer, or nil for a product
+    /// that supplies no such evidence.
     private let readEvidence: (any ReadEvidenceSource)?
     /// How much of the product's limits is left, or nil for a product that
     /// reports none (``UsageReading``).
     private let usage: (any UsageReading)?
-    /// What the product writes down about its Turns beyond the hooks, applied
-    /// in order after admission (``TurnEvidenceSource``).
-    private let turnEvidence: [any TurnEvidenceSource]
+    /// What the product leaves on disk, or nil for one that leaves nothing.
+    private let footprint: (any DiskFootprintReporting)?
     /// Keeps a finished row listed until it has been read, and retires it the
     /// moment it has been.
-    ///
-    /// The same filter both shipping products use, given the same shape of
-    /// answer: the verdicts are computed per refresh from readings taken in
-    /// that refresh, so the unread set handed over is always current.
     private var readGate: TerminalUnreadRowFilter
     private let clock: any MonitorClock
 
@@ -247,65 +318,97 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
     ) {
         self.init(
             agent: agent,
-            paths: paths,
-            vocabulary: vocabulary,
+            hooks: HookLifecycleSource(
+                paths: paths,
+                vocabulary: vocabulary,
+                clock: clock,
+                timing: timing,
+                fileManager: fileManager
+            ),
             sessions: SeparateSessionReading(presence: presence, admission: admission),
             readEvidence: readEvidence,
             usage: usage,
             clock: clock,
             timing: timing,
-            fileManager: fileManager,
+            changeEvents: changeEvents
+        )
+    }
+
+    /// A product whose own list answers presence and admission together.
+    init(
+        agent: AgentKind,
+        paths: HookIntegrationPaths,
+        vocabulary: any AgentHookVocabulary,
+        sessions: any ProductSessionReading,
+        readEvidence: (any ReadEvidenceSource)? = nil,
+        clock: any MonitorClock = SystemMonitorClock(),
+        timing: MonitorTiming = .standard,
+        fileManager: FileManager = .default,
+        changeEvents: [AsyncStream<Void>] = []
+    ) {
+        self.init(
+            agent: agent,
+            hooks: HookLifecycleSource(
+                paths: paths,
+                vocabulary: vocabulary,
+                clock: clock,
+                timing: timing,
+                fileManager: fileManager
+            ),
+            sessions: sessions,
+            readEvidence: readEvidence,
+            clock: clock,
+            timing: timing,
             changeEvents: changeEvents
         )
     }
 
     init(
         agent: AgentKind,
-        paths: HookIntegrationPaths,
-        vocabulary: any AgentHookVocabulary,
+        /// The product's transport, wired once.
+        hooks: HookLifecycleSource,
         /// Whether the product is open and which Threads it vouches for, read
         /// together once per refresh.
         sessions: any ProductSessionReading,
         /// Interrupts and answered waits the product records somewhere a hook
         /// does not reach, in the order they are to be applied.
         turnEvidence: [any TurnEvidenceSource] = [],
-        /// What retires a finished row once it has been read. A terminal
-        /// product supplies it by naming the process each Thread runs in; a
-        /// product that supplies none keeps a finished row until the Thread's
-        /// next submission, its departure from the admission list or a
-        /// right-click.
+        /// What each row says beyond its Turn's state, and which Turns draw
+        /// one.
+        rowContent: any RowContentSource = WorkingDirectoryRowContent(),
+        /// What retires a finished row once it has been read. A product that
+        /// supplies none keeps a finished row until the Thread's next
+        /// submission, its departure from the admission list or a right-click.
         readEvidence: (any ReadEvidenceSource)? = nil,
         /// The product's quota, for one that reports limits. Its reads land on
         /// an edge the composer merges into `changeEvents`.
         usage: (any UsageReading)? = nil,
+        /// What the product leaves on disk, for one that leaves anything.
+        footprint: (any DiskFootprintReporting)? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard,
-        fileManager: FileManager = .default,
-        /// Edges from the presence or admission source that mean "ask me
-        /// again", merged with the reducer's own.
+        /// Edges from the product's sources that mean "ask me again", merged
+        /// with the reducer's own.
         changeEvents: [AsyncStream<Void>] = []
     ) {
         self.agent = agent
-        let hooks = HookLifecycleSource(
-            paths: paths,
-            vocabulary: vocabulary,
-            clock: clock,
-            timing: timing,
-            fileManager: fileManager
-        )
         self.hooks = hooks
         self.sessions = sessions
         self.turnEvidence = turnEvidence
+        self.rowContent = rowContent
         self.readEvidence = readEvidence
         self.usage = usage
+        self.footprint = footprint
         self.readGate = TerminalUnreadRowFilter(timing: timing)
         self.clock = clock
         self.stateChangeEvents = DirectoryChangeWatcher.merged(
             [hooks.changeEvents()] + changeEvents
                 // The display waking or the screen unlocking. A row waiting to
-                // be read books no re-check while neither is true, because the
-                // only route that could retire it needs a screen somebody can
+                // be read books no re-check while neither is true, because
+                // every route that could retire it needs a screen somebody can
                 // see; this is the edge that starts the re-checks again.
+                // Without it such a row would sit until the heartbeat, at the
+                // one moment the user is most likely to be looking.
                 + (readEvidence.map { [$0.screen.changeEvents()] } ?? [])
         )
     }
@@ -327,15 +430,14 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         case let .open(openStatus):
             status = openStatus
         case let .closed(availability, closedStatus, diagnostic):
-            // Nothing is listed, so nothing is waiting to be read. Left
-            // standing, the gate's entries would go on booking a re-check a
-            // second for rows nobody can see.
-            readGate.reset()
-            await readEvidence?.forget()
-            await sessions.stopWatching()
-            for source in turnEvidence {
-                await source.stopWatching()
-            }
+            // Nothing is being monitored, so nothing is worth an edge, and
+            // nothing is listed, so nothing is waiting to be read. Left
+            // standing, a watcher would keep a descriptor open on the records
+            // of whatever Turn was running when the integration went, the
+            // gate's entries would go on booking a re-check a second for rows
+            // nobody can see, and a session seen on a screen then would come
+            // back still claiming it.
+            await stopEverything()
             return snapshot(
                 availability: availability,
                 sessions: [],
@@ -344,6 +446,9 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
                 // A product with limits has them whether or not its hooks are
                 // registered; they are simply not being read.
                 quota: usage == nil ? .noneReported : .unavailable,
+                // The branches that do not reach the product's list genuinely
+                // did not look, and none of them is `ready` whatever presence
+                // would say.
                 presence: .unknown
             )
         }
@@ -355,81 +460,123 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         for source in turnEvidence {
             state = await source.settle(state, in: hooks.repository)
         }
+        // After the reduction, so a Turn this refresh just ended stops being
+        // watched in the same pass that ended it.
         for source in turnEvidence {
             await source.watch(openTurnsIn: state)
         }
 
-        // Presence unknown is the one state this skeleton reports as
-        // unwatchable: the product may be open and busy, and drawing nothing
-        // while claiming Connected would be the guess PRD §12 forbids.
+        let content = await rowContent.content(for: state.turns, messages: hooks.repository)
+        let candidates = state.turns.compactMap { turn -> ReadGateCandidate? in
+            guard let content = content[turn.threadID] else { return nil }
+            return ReadGateCandidate(
+                row: row(for: turn, content: content),
+                turnEndedAt: turn.turnEndedAt,
+                // The later of the Turn's own last event and the last subagent
+                // boundary: only the settling window is measured from it.
+                terminalBoundaryAt: turn.terminalBoundaryAt
+            )
+        }
+
+        var rows: [MonitoredSession] = []
+        var readDiagnostic: String?
+        if presence == .closed {
+            // The product's own list says nothing is open, so nothing listed
+            // is waiting to be read.
+            readGate.reset()
+            await readEvidence?.forget()
+        } else {
+            // Judged even while presence is `unknown`, and withheld below. A
+            // list nobody could read is not evidence a session ended, and a
+            // row already hidden for having been read must not come back the
+            // moment the list answers again (CC-024).
+            (rows, readDiagnostic) = await rowsStillWorthShowing(
+                candidates,
+                dismissedRowIDs: dismissedRowIDs
+            )
+        }
+        // Live text for a Thread the product no longer lists and that draws no
+        // row is pruned, and the set kept is also what lets a message arriving
+        // later wake the panel (``HookSessionPreviewStore/fold``). So it is the
+        // Threads the product's own list names, whether or not the reducer
+        // holds a Turn for them yet -- text arriving for a listed session with
+        // no row is exactly the text that has nothing else to draw it -- and
+        // the rows built rather than the rows shown, so a row the read gate
+        // withheld keeps its words for the next refresh that asks.
+        var retainedThreadIDs = Set(candidates.map(\.row.threadID))
+        if case let .exactly(listed, _) = reading.admission {
+            retainedThreadIDs.formUnion(listed)
+        }
+        hooks.repository.retainPreviews(
+            forSessions: presence == .closed ? [] : retainedThreadIDs
+        )
+
+        // Presence unknown is the one state reported as unwatchable: the
+        // product may be open and busy, and drawing nothing while claiming
+        // Connected would be the guess PRD §12 forbids.
         let unwatchable: String? = presence == .unknown
             ? reading.unwatchableReason
                 ?? "\(agent.displayName) is registered, but this app cannot tell whether it is open."
             : nil
-        var rows: [MonitoredSession] = []
-        var readDiagnostic: String?
-        if presence.isOpen {
-            (rows, readDiagnostic) = await rowsStillWorthShowing(
-                state.turns,
-                dismissedRowIDs: dismissedRowIDs
-            )
-        } else {
-            readGate.reset()
-            await readEvidence?.forget()
-        }
-        // Live text for a Thread this refresh does not list is pruned, and the
-        // listed set is also what lets a message arriving later wake the panel
-        // (``HookSessionPreviewStore/fold``). Held to the Turns the reducer
-        // holds rather than to the rows drawn, so a row the read gate withheld
-        // keeps its words for the next refresh that asks.
-        hooks.repository.retainPreviews(
-            forSessions: presence.isOpen ? Set(state.turns.map(\.threadID)) : []
-        )
         // Whatever is known right now, with a read started behind it. Awaiting
         // the read here would make a hook event's row wait on it.
         await usage?.readIfStale()
         return snapshot(
             availability: unwatchable == nil ? .ready : .disconnected,
-            sessions: rows,
+            // A product that is not open contributes no rows.
+            //
+            // A list that fails to answer goes on handing back its last
+            // reading, because a failed read is not evidence a session ended,
+            // and it does so on the understanding that the surface retires the
+            // rows by the product going Disconnected. The surface reads the
+            // rows before it reads presence, so a product whose mark had
+            // already gone still had its row on screen saying `Running` --
+            // the state a user sees as the product vanishing while it carries
+            // on working.
+            sessions: presence.isOpen ? rows : [],
             setupStatus: status,
             diagnostic: MonitorDiagnostics.combined(
                 unwatchable,
                 state.diagnostic,
                 readDiagnostic,
                 // Last, because it is the least urgent: the rows are all there
-                // and what is missing is the footer's lines.
+                // and what is missing is the footer's lines. It is here at all
+                // because nothing else reports it.
                 await usage?.quotaDiagnostic()
             ),
             quota: await usage?.currentQuota() ?? .noneReported,
+            // Not "has rows": a product open with nothing in flight is still
+            // open. The list answers which sessions exist and the reducer what
+            // they are doing.
             presence: presence
         )
+    }
+
+    /// Everything a closed integration stops.
+    private func stopEverything() async {
+        readGate.reset()
+        await readEvidence?.forget()
+        await sessions.stopWatching()
+        for source in turnEvidence {
+            await source.stopWatching()
+        }
     }
 
     /// The rows to list, with a finished one the user has already read taken
     /// off.
     ///
     /// **A row is withheld only on evidence that somebody read it**, and only a
-    /// product that supplied a ``ReadEvidenceSource`` has any —
-    /// ``TerminalReadEvidence`` for a CLI product: with none, every row the
-    /// reducer holds is listed and the gate is never consulted.
+    /// product that supplied a ``ReadEvidenceSource`` has any: with none, every
+    /// row is listed and the gate is never consulted.
     ///
-    /// Which rows are judged at all, and how, is ``TerminalUnreadRowFilter``'s
-    /// — the rules every Provider shares. What is this Provider's is only the
-    /// verdict, and it is taken only for a row that could be withheld: no
-    /// reading happens unless a finished row the user has not waved away is
-    /// listed (CR-Fable-041, CR-Fable-003), and a row whose thread is still
-    /// working is handed to the gate without one.
+    /// Which rows are judged at all, and how, is ``TerminalUnreadRowFilter``'s.
+    /// What is the product's is only the verdict, and it is taken only for a row
+    /// that could be withheld: no reading happens unless a finished row the
+    /// user has not waved away is listed (CR-Fable-041, CR-Fable-003).
     private func rowsStillWorthShowing(
-        _ turns: [HookTurnState],
+        _ candidates: [ReadGateCandidate],
         dismissedRowIDs: Set<String>
     ) async -> (rows: [MonitoredSession], diagnostic: String?) {
-        let candidates = turns.map { turn in
-            ReadGateCandidate(
-                row: row(for: turn),
-                turnEndedAt: turn.turnEndedAt,
-                terminalBoundaryAt: turn.terminalBoundaryAt
-            )
-        }
         guard let readEvidence else {
             return (candidates.map(\.row).sorted(by: MonitorAggregation.rowOrder), nil)
         }
@@ -456,15 +603,18 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         return (rows, judgement.diagnostic)
     }
 
-    /// Two timed sources and nothing else: the usage reader's next read, and a
-    /// finished row waiting to be read. The reducer's edges and the store's
-    /// heartbeat are the only other reasons to ask again.
+    /// Every timed source's next moment, and nothing else: the usage reader's
+    /// next read, and a finished row waiting to be read. The reducer's edges,
+    /// the sources' own and the store's heartbeat are the only other reasons
+    /// to ask again, and a deadline a refresh could not advance would be a
+    /// busy-wait wearing a deadline's clothes.
     ///
-    /// That row waits on the user rather than on time, so its deadline is a
-    /// floor under the edges — and the access time it is waiting for moves in
-    /// the kernel with nothing to watch it, so it can only be asked at a
-    /// re-check. It costs nothing while no such row is listed, and nothing at
-    /// all while the screen is one nobody could read it on.
+    /// A row waiting to be read waits on the user rather than on time, so its
+    /// deadline is a floor under the edges — and some of what it waits for (a
+    /// terminal's access time, whether an application holds the front) moves
+    /// with nothing to watch it, so it can only be asked at a re-check. It
+    /// costs nothing while no such row is listed, and nothing at all while the
+    /// screen is one nobody could read it on.
     func nextRefreshDeadline() async -> Date? {
         [
             await usage?.nextReadDeadline(),
@@ -476,10 +626,21 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         .min()
     }
 
+    /// What the product leaves on disk; nothing, for a product that supplied
+    /// no reporter.
+    func diskFootprint() async -> AgentDiskFootprintReport {
+        await footprint?.diskFootprint() ?? .leavesNothing
+    }
+
     func disconnect() async {
         hooks.disconnect()
     }
 
+    /// One answer, on the connection its request is still being held on.
+    ///
+    /// A pass-through, and deliberately nothing more: which bytes a product
+    /// will act on is its vocabulary's business (``RequestAnswering``), and
+    /// which connection they go down is the registry's.
     func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
         await hooks.answer(answer, on: handle)
     }
@@ -496,34 +657,37 @@ actor HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDelive
         try await hooks.remove()
     }
 
-    private func row(for turn: HookTurnState) -> MonitoredSession {
+    private func row(for turn: HookTurnState, content: RowContent) -> MonitoredSession {
         MonitoredSession(
             agent: agent,
             threadID: turn.threadID,
             turnID: turn.turnID,
-            projectName: Self.projectName(forWorkingDirectory: turn.workingDirectory),
-            title: turn.promptPreview ?? "Untitled",
-            // The closing words once the Turn has ended with some, and until
-            // then the newest message this Turn has said, for a product whose
-            // vocabulary names a message event. The prompt is not the fallback
-            // here, as it is on Claude Code's row: it is already the title.
-            preview: turn.assistantPreview
-                ?? hooks.repository.preview(forSession: turn.threadID, inTurn: turn.turnID),
+            projectName: content.projectName,
+            title: content.title,
+            preview: content.preview,
             status: turn.status,
             startedAt: turn.startedAt,
+            // What the row says once its own Turn has stopped and the thread
+            // has not: a Turn can reach its end with work it started still in
+            // flight.
             runningSubagentCount: turn.runningSubagentIDs.count,
             subagentsAwaitingApprovalCount: turn.subagentsAwaitingApprovalCount,
+            // What the row says between its subagent stopping and the Turn the
+            // product opens next: a Turn that stopped in order to wait is not a
+            // thread that has finished.
             isPausedForBackgroundWork: turn.pausedForBackgroundWork,
+            // How long the Turn took, for the row that draws it once the clock
+            // has stopped. `lastEventAt` is the Turn's own last moment and is
+            // held there against a subagent's chatter.
             finishedAt: turn.status == .completed ? turn.lastEventAt : nil,
             request: turn.requestAwaitingAnAnswer
         )
     }
 
-    /// The submission directory's last component, which `tech-design.md` §5
-    /// permits as a project name; `Untitled folder` when there is none.
+    /// The submission directory's last component — see
+    /// ``WorkingDirectoryRowContent/projectName(forWorkingDirectory:)``.
     nonisolated static func projectName(forWorkingDirectory path: String?) -> String {
-        let component = path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
-        return component.isEmpty || component == "/" ? "Untitled folder" : component
+        WorkingDirectoryRowContent.projectName(forWorkingDirectory: path)
     }
 
     private func snapshot(

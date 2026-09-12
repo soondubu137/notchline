@@ -94,8 +94,8 @@ Read the existing implementation and its tests first. Nearly every simplificatio
 
 The full list lives in [`docs/system-architecture.md`](docs/system-architecture.md) §7 and is authoritative. These are the ones most easily violated without noticing:
 
-- **One orchestration centre.** Decisions spanning data sources belong in `LiveCodexMonitorService`. UI, file adapters and transport do not assemble state from each other.
-- **One Turn reducer.** Hook events enter only `HookEventRepository`. A second source may *retire* a Turn, but never open, name or describe one, and only inside that actor with its ordering guards.
+- **One orchestration centre per product.** Decisions spanning a product's data sources belong in that product's Provider: `HookProductProvider` for a product observed through its hooks alone, composed from the product's sources (Claude Code, Antigravity CLI), and `LiveCodexMonitorService` for Codex, whose App Server is a second lifecycle beside its hooks. A source supplies evidence and decides nothing across sources; UI, file adapters and transport do not assemble state from each other.
+- **One Turn reducer.** Hook events enter only `HookEventRepository`. A second source (a `TurnEvidenceSource`, an admission list) may *retire* a Turn, but never open, name or describe one, and only inside that actor with its ordering guards.
 - **One UI data contract.** Layers above consume `MonitorSnapshot` and nothing else.
 - **Private dependencies stop at the boundary.** The `.codex-global-state.json` schema exists only inside the two read-only repositories; the domain layer sees Project resolution and an unread set tagged with its authority.
 - **The UI stays passive.** SwiftUI renders and emits user intent; it does not parse protocols or read files.
