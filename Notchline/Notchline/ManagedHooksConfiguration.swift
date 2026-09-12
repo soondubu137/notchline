@@ -16,8 +16,28 @@ nonisolated struct ManagedHookDefinition: Sendable, Equatable {
     /// first, so the one that fires is always the one closest to the problem.
     static let lifecycleTimeoutSeconds = 3
 
+    /// How a product's file arranges the handlers registered for one event.
+    ///
+    /// Both shipping products use one arrangement for every event. Antigravity
+    /// CLI uses two, and gets the difference wrong loudly: measured 2026-09-11
+    /// on 1.2.2, a *group* written under one of its list-shaped events fails
+    /// the parse of the whole named hook (`command hook must specify
+    /// 'command'`) and none of that hook's handlers run for any event. So the
+    /// shape is a fact about the definition, declared beside its event name,
+    /// never inferred from what is already in the file.
+    nonisolated enum Shape: Sendable, Equatable {
+        /// `[{"matcher": …, "hooks": [handler, …]}, …]` — Codex and Claude
+        /// Code for every event, and Antigravity CLI for its tool events.
+        case groupedByMatcher
+        /// `[handler, …]`, the handlers themselves with nothing around them —
+        /// Antigravity CLI's `PreInvocation`, `PostInvocation` and `Stop`.
+        /// There is no group to carry a matcher, so `matcher` is nil here.
+        case handlerList
+    }
+
     let event: String
     let matcher: String?
+    let shape: Shape
     /// How long this product may wait for the hook before killing it.
     ///
     /// The helper's own window has to be *inside* this: a helper that gives up
@@ -36,11 +56,13 @@ nonisolated struct ManagedHookDefinition: Sendable, Equatable {
     nonisolated init(
         event: String,
         matcher: String?,
+        shape: Shape = .groupedByMatcher,
         timeoutSeconds: Int = ManagedHookDefinition.lifecycleTimeoutSeconds,
         argument: String? = nil
     ) {
         self.event = event
         self.matcher = matcher
+        self.shape = shape
         self.timeoutSeconds = timeoutSeconds
         self.argument = argument
     }
@@ -95,6 +117,15 @@ nonisolated enum ManagedHooksConfigurationError: LocalizedError, Equatable {
 /// carries far more than hooks, so "coerce anything unexpected to empty" is a
 /// data-loss bug waiting for a bigger file to happen to.
 nonisolated struct ManagedHooksConfiguration: Sendable {
+    /// The key at the file's root under which the events sit.
+    ///
+    /// `hooks` for Codex and Claude Code, whose files hold one such object that
+    /// the user's own handlers share with this app's — which is why every edit
+    /// below identifies handlers one by one rather than replacing the object.
+    /// Antigravity CLI's root is a set of *named* hooks, each an object of
+    /// events, so this app's container there is a name of its own and holds
+    /// nothing but this app's definitions.
+    let containerKey: String
     /// What every handler this build installs runs.
     let command: String
     /// The arguments the helper is launched with, before this definition's own.
@@ -136,6 +167,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     let descriptionForNewFiles: String?
 
     nonisolated init(
+        containerKey: String = "hooks",
         command: String,
         baseArguments: [String]? = nil,
         identityMarker: String,
@@ -143,6 +175,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         definitions: [ManagedHookDefinition],
         descriptionForNewFiles: String? = "User-level agent lifecycle hooks."
     ) {
+        self.containerKey = containerKey
         self.command = command
         self.baseArguments = baseArguments
         self.identityMarker = identityMarker
@@ -168,11 +201,13 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     nonisolated static func command(
         _ command: String,
         arguments: [String]? = nil,
+        containerKey: String = "hooks",
         legacyCommands: [String] = [],
         definitions: [ManagedHookDefinition],
         descriptionForNewFiles: String? = "User-level Codex lifecycle hooks."
     ) -> ManagedHooksConfiguration {
         ManagedHooksConfiguration(
+            containerKey: containerKey,
             command: command,
             baseArguments: arguments,
             identityMarker: command,
@@ -229,16 +264,23 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         }
 
         for definition in definitions {
-            var groups = try validatedGroups(for: definition.event, in: hooks)
-            var group: [String: Any] = ["hooks": [handler(for: definition)]]
-            if let matcher = definition.matcher {
-                group["matcher"] = matcher
+            switch definition.shape {
+            case .groupedByMatcher:
+                var groups = try validatedGroups(for: definition.event, in: hooks)
+                var group: [String: Any] = ["hooks": [handler(for: definition)]]
+                if let matcher = definition.matcher {
+                    group["matcher"] = matcher
+                }
+                groups.append(group)
+                hooks[definition.event] = groups
+            case .handlerList:
+                var handlers = try validatedHandlerList(for: definition.event, in: hooks)
+                handlers.append(handler(for: definition))
+                hooks[definition.event] = handlers
             }
-            groups.append(group)
-            hooks[definition.event] = groups
         }
 
-        root["hooks"] = hooks
+        root[containerKey] = hooks
         // Only ever stamped on a file this app just created, and only for a
         // product that wants one. Adding a description to a file somebody else
         // owns is outside the boundary, however harmless it looks.
@@ -257,7 +299,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     /// `hooks.json` ends up pointing at a script that no longer exists.
     nonisolated func removing(from root: [String: Any]) throws -> [String: Any] {
         var root = root
-        guard root["hooks"] != nil else {
+        guard root[containerKey] != nil else {
             // No hooks at all is a clean state, but only if the command is not
             // hiding somewhere else in the document.
             if Self.containsAnyMarker(of: self, in: root) {
@@ -280,9 +322,9 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
         }
 
         if hooks.isEmpty {
-            root.removeValue(forKey: "hooks")
+            root.removeValue(forKey: containerKey)
         } else {
-            root["hooks"] = hooks
+            root[containerKey] = hooks
         }
 
         if Self.containsAnyMarker(of: self, in: root) {
@@ -320,18 +362,30 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     /// this app can do about it — it may not take the handler out of their
     /// file.
     nonisolated func isFullyInstalled(in root: [String: Any]) -> Bool {
-        guard let hooks = root["hooks"] as? [String: Any] else { return false }
+        guard let hooks = root[containerKey] as? [String: Any] else { return false }
         return definitions.allSatisfy { definition in
-            guard let groups = hooks[definition.event] as? [[String: Any]] else {
-                return false
-            }
-            var managed: [[String: Any]] = []
-            for group in groups where matcher(in: group, matches: definition.matcher) {
-                let handlers = group["hooks"] as? [[String: Any]] ?? []
-                managed.append(contentsOf: handlers.filter(isManagedHandler))
-            }
+            let managed = managedHandlers(for: definition, in: hooks)
             guard managed.count == 1 else { return false }
             return isCurrentManagedHandler(managed[0], for: definition)
+        }
+    }
+
+    /// This app's handlers registered where `definition` would be written —
+    /// in the group carrying its matcher, or in the list, as its shape says.
+    nonisolated private func managedHandlers(
+        for definition: ManagedHookDefinition,
+        in hooks: [String: Any]
+    ) -> [[String: Any]] {
+        guard let registered = hooks[definition.event] as? [[String: Any]] else {
+            return []
+        }
+        switch definition.shape {
+        case .groupedByMatcher:
+            return registered
+                .filter { matcher(in: $0, matches: definition.matcher) }
+                .flatMap { ($0["hooks"] as? [[String: Any]] ?? []).filter(isManagedHandler) }
+        case .handlerList:
+            return registered.filter(isManagedHandler)
         }
     }
 
@@ -360,12 +414,9 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     nonisolated func eventsWhoseDefinitionChanges(
         comparedTo root: [String: Any]?
     ) -> [String] {
-        guard let hooks = root?["hooks"] as? [String: Any] else { return [] }
+        guard let hooks = root?[containerKey] as? [String: Any] else { return [] }
         return definitions.filter { definition in
-            let groups = hooks[definition.event] as? [[String: Any]] ?? []
-            let registered = groups
-                .filter { matcher(in: $0, matches: definition.matcher) }
-                .flatMap { ($0["hooks"] as? [[String: Any]] ?? []).filter(isManagedHandler) }
+            let registered = managedHandlers(for: definition, in: hooks)
             // Nothing of ours registered for this event is a first install of
             // it, not a change to it.
             guard let existing = registered.first, registered.count == 1 else {
@@ -450,11 +501,34 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     nonisolated private func validatedHooks(
         in root: [String: Any]
     ) throws -> [String: Any] {
-        guard let existing = root["hooks"] else { return [:] }
+        guard let existing = root[containerKey] else { return [:] }
         guard let hooks = existing as? [String: Any] else {
             throw ManagedHooksConfigurationError.hooksIsNotObject
         }
         return hooks
+    }
+
+    /// The handlers already registered for one list-shaped managed event.
+    ///
+    /// The same rule as ``validatedGroups(for:in:)``: absent is fine, and
+    /// present in a shape this type cannot read is a refusal, because writing
+    /// our handler would mean replacing what is there.
+    nonisolated private func validatedHandlerList(
+        for event: String,
+        in hooks: [String: Any]
+    ) throws -> [[String: Any]] {
+        guard let existing = hooks[event] else { return [] }
+        guard let handlers = existing as? [[String: Any]] else {
+            throw ManagedHooksConfigurationError.eventIsNotGroupArray(event: event)
+        }
+        return handlers
+    }
+
+    /// How this app arranges `event`, where it registers one; a group array
+    /// where it does not, which is the only shape a stripped event can have
+    /// anything of ours inside.
+    nonisolated private func shape(ofEvent event: String) -> ManagedHookDefinition.Shape {
+        definitions.first { $0.event == event }?.shape ?? .groupedByMatcher
     }
 
     /// The groups already registered for one managed event.
@@ -501,6 +575,18 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
                 }
                 // Not a shape this app could have written, so there is nothing
                 // of ours to take out and nothing we are entitled to change.
+                continue
+            }
+
+            if shape(ofEvent: event) == .handlerList {
+                // The elements are the handlers. Ours go; anything else
+                // stays, and an event left with nothing goes with them.
+                let survivors = groups.filter { !isManagedHandler($0) }
+                if survivors.isEmpty {
+                    hooks.removeValue(forKey: event)
+                } else {
+                    hooks[event] = survivors
+                }
                 continue
             }
 
