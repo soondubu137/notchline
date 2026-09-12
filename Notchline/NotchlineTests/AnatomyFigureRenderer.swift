@@ -102,7 +102,7 @@ struct AnatomyFigureRenderer {
             id: "anatomy-approval",
             toolName: "Bash",
             form: .command("npm run build -- --profile"),
-            replyTicket: 0
+            answerHandle: AnswerHandle(ticket: 0)
         )
     }
 

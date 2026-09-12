@@ -20,7 +20,8 @@ import Foundation
 /// the reconstruction could only ever say Running -- a session parked on a
 /// permission prompt when the app started was drawn as working, and telling a
 /// wait from work is precisely what the product is for.
-actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
+actor ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDelivering,
+    DiskFootprintReporting, ClaudeCodeSessionLocating {
     nonisolated let agent = AgentKind.claudeCode
     nonisolated let stateChangeEvents: AsyncStream<Void>
 
@@ -1554,11 +1555,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     /// will act on is its vocabulary's business (``RequestAnswering``), and
     /// which connection they go down is the registry's. This is the boundary
     /// the store reaches both through.
-    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) async -> Bool {
-        await hookEvents.answer(answer, on: ticket)
+    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
+        await hookEvents.answer(answer, on: handle.ticket)
     }
 
-    func hookSetupStatus() async -> HookSetupStatus {
+    func setupStatus() async -> IntegrationSetupStatus {
         await setup.status()
     }
 
@@ -1569,11 +1570,11 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     /// ``ManagedHooksFileEditor`` and ADR 0016. Nothing here is Claude Code
     /// specific: the switch in Settings is the same switch Codex has, and it
     /// converges through the same path in ``MonitorStore``.
-    func installHooks() async throws {
+    func installIntegration() async throws {
         try await setup.install()
     }
 
-    func removeHooks() async throws {
+    func removeIntegration() async throws {
         try await setup.uninstall()
     }
 
@@ -1806,7 +1807,7 @@ actor ClaudeCodeMonitorService: AgentMonitoring, ClaudeCodeSessionLocating {
     private func snapshot(
         availability: MonitorAvailability,
         sessions: [MonitoredSession],
-        setupStatus: HookSetupStatus,
+        setupStatus: IntegrationSetupStatus,
         diagnostic: String?,
         quota: QuotaSnapshot = .unavailable,
         presence: AgentPresence = .unknown

@@ -47,7 +47,7 @@ struct OptionPresentationTests {
                 AgentQuestion(id: 0, header: nil, text: "Which approach?", options: [
                     AgentQuestionOption(id: 7, label: "Inspect first", description: String(repeating: "Read the complete explanation. ", count: 30))
                 ], allowsSeveralAnswers: false)
-            ]), replyTicket: 1)
+            ]), answerHandle: AnswerHandle(ticket: 1))
             return AgentSnapshot(agent: .claudeCode, availability: .ready, sessions: [
                 MonitoredSession(agent: .claudeCode, threadID: "same-thread", turnID: "turn", projectName: "notchline", title: "Question", preview: nil, status: .inputNeeded, startedAt: Date(), request: request)
             ], quota: .unavailable, diagnostic: nil)
@@ -163,7 +163,7 @@ struct OptionPresentationTests {
             AgentQuestion(id: 1, header: "Second", text: "And where should it land?", options: [
                 AgentQuestionOption(id: 1, label: "Here", description: description)
             ], allowsSeveralAnswers: false)
-        ]), replyTicket: 1)
+        ]), answerHandle: AnswerHandle(ticket: 1))
         let snapshot = AgentSnapshot(agent: .claudeCode, availability: .ready, sessions: [
             MonitoredSession(agent: .claudeCode, threadID: "thread", turnID: "turn", projectName: "notchline", title: "Question", preview: nil, status: .inputNeeded, startedAt: Date(), request: request)
         ], quota: .unavailable, diagnostic: nil)
@@ -244,7 +244,7 @@ extension OptionPresentationTests {
         ]
         let request = AgentRequest(id: "targets", toolName: "AskUserQuestion", form: .questions([
             AgentQuestion(id: 0, header: "Approach", text: "Which approach?", options: options, allowsSeveralAnswers: false)
-        ]), replyTicket: 1)
+        ]), answerHandle: AnswerHandle(ticket: 1))
         let snapshot = AgentSnapshot(agent: .claudeCode, availability: .ready, sessions: [
             MonitoredSession(agent: .claudeCode, threadID: "thread", turnID: "turn", projectName: "notchline", title: "Question", preview: nil, status: .inputNeeded, startedAt: Date(), request: request)
         ], quota: .unavailable, diagnostic: nil)

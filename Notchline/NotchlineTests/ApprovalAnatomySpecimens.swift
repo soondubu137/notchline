@@ -48,7 +48,7 @@ enum ApprovalSpecimens {
                     role: .prose
                 )
             ],
-            replyTicket: 0
+            answerHandle: AnswerHandle(ticket: 0)
         )
     }
 
@@ -91,7 +91,7 @@ enum ApprovalSpecimens {
                     ("Nothing", "Leave it out of the changelog.")
                 ])
             ]),
-            replyTicket: 0
+            answerHandle: AnswerHandle(ticket: 0)
         )
     }
 

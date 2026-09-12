@@ -2211,7 +2211,7 @@ final class MonitorStore: ObservableObject {
     /// Published because the settings rows read it, and written only when it
     /// actually changes -- one publish here re-evaluates the whole overlay
     /// (`AGENTS.md` §7), and a refresh re-states the same status every second.
-    @Published private(set) var setupStatusByAgent: [AgentKind: HookSetupStatus] = [:]
+    @Published private(set) var setupStatusByAgent: [AgentKind: IntegrationSetupStatus] = [:]
     /// Where each product's switch is sitting.
     ///
     /// Held apart from ``setupStatusByAgent`` because the two disagree for as
@@ -2529,6 +2529,19 @@ final class MonitorStore: ObservableObject {
     private let navigator: (any AgentNavigating)?
     private func integrationService(for agent: AgentKind) -> (any AgentMonitoring)? {
         services.first { $0.agent == agent }
+    }
+    /// The optional contracts, found on the product's service where it
+    /// implements them (``ProductContracts.swift``). A product that does not
+    /// conform has no switch to operate, no answer to deliver and nothing on
+    /// disk to report, and each caller reads `nil` as exactly that.
+    private func configurer(for agent: AgentKind) -> (any IntegrationConfiguring)? {
+        integrationService(for: agent) as? any IntegrationConfiguring
+    }
+    private func answerer(for agent: AgentKind) -> (any AnswerDelivering)? {
+        integrationService(for: agent) as? any AnswerDelivering
+    }
+    private func footprintReporter(for agent: AgentKind) -> (any DiskFootprintReporting)? {
+        integrationService(for: agent) as? any DiskFootprintReporting
     }
     /// Where every persisted preference is read and written. `nil` in tests,
     /// which is what keeps them off the running user's real defaults.
@@ -3935,7 +3948,7 @@ final class MonitorStore: ObservableObject {
               let session = openSession,
               let request = session.request,
               let shape = request.answerRow(showing: openQuestionIndex),
-              let ticket = request.replyTicket else { return }
+              let ticket = request.answerHandle else { return }
 
         switch ground {
         case .affirmative where shape.refusal == nil:
@@ -4160,7 +4173,7 @@ final class MonitorStore: ObservableObject {
     /// deliberately came back to change.
     private func answerTheQuestion(
         of session: MonitoredSession,
-        on ticket: HookReplyRegistry.Ticket,
+        on ticket: AnswerHandle,
         saying notice: String
     ) {
         guard let request = session.request, let openRowID else { return }
@@ -4242,7 +4255,7 @@ final class MonitorStore: ObservableObject {
     private func send(
         _ answer: AgentAnswer,
         for session: MonitoredSession,
-        on ticket: HookReplyRegistry.Ticket,
+        on ticket: AnswerHandle,
         saying notice: String
     ) {
         isAnswerInFlight = true
@@ -4250,7 +4263,7 @@ final class MonitorStore: ObservableObject {
         let rowID = session.id
         let previewWhenWritten = session.preview
         Task { [weak self] in
-            let delivered = await self?.integrationService(for: agent)?
+            let delivered = await self?.answerer(for: agent)?
                 .answer(answer, on: ticket) ?? false
             // The store is `@MainActor` and this task body is not: under
             // `SWIFT_APPROACHABLE_CONCURRENCY` the hop back is elided, and a
@@ -4768,7 +4781,7 @@ final class MonitorStore: ObservableObject {
     /// on the main actor with no suspension between the loop's last read of
     /// the desired state and the handle being released.
     private func startIntegrationConvergenceIfNeeded(for agent: AgentKind) {
-        guard integrationService(for: agent) != nil,
+        guard configurer(for: agent) != nil,
               integrationTasks[agent] == nil else {
             return
         }
@@ -4796,8 +4809,8 @@ final class MonitorStore: ObservableObject {
         if succeeded {
             // Re-read health rather than trusting the requested value: the
             // install may have landed in reviewRequired rather than active.
-            if let service = integrationService(for: agent) {
-                let status = await service.hookSetupStatus()
+            if let configurer = configurer(for: agent) {
+                let status = await configurer.setupStatus()
                 setSetupStatus(status, for: agent)
                 setSwitch(status.isIntegrationEnabled, for: agent)
             }
@@ -4808,7 +4821,7 @@ final class MonitorStore: ObservableObject {
 
     @discardableResult
     func installIntegrationHooksAndWait(for agent: AgentKind) async -> Bool {
-        guard let service = integrationService(for: agent),
+        guard let configurer = configurer(for: agent),
               !integrationBusyAgents.contains(agent) else {
             return false
         }
@@ -4816,8 +4829,8 @@ final class MonitorStore: ObservableObject {
         defer { integrationBusyAgents.remove(agent) }
 
         do {
-            try await service.installHooks()
-            let status = await service.hookSetupStatus()
+            try await configurer.installIntegration()
+            let status = await configurer.setupStatus()
             setSetupStatus(status, for: agent)
             setSwitch(status.isIntegrationEnabled, for: agent)
             lastIntegrationMessage = ProductRegistry.descriptor(for: agent).setup.installedMessage
@@ -4836,7 +4849,7 @@ final class MonitorStore: ObservableObject {
 
     @discardableResult
     func removeIntegrationAndWait(for agent: AgentKind) async -> Bool {
-        guard let service = integrationService(for: agent),
+        guard let configurer = configurer(for: agent),
               !integrationBusyAgents.contains(agent) else {
             return false
         }
@@ -4844,7 +4857,7 @@ final class MonitorStore: ObservableObject {
         defer { integrationBusyAgents.remove(agent) }
 
         do {
-            try await service.removeHooks()
+            try await configurer.removeIntegration()
             // Only this product's half of the merge is dropped. It used to be
             // the whole of it -- sessions, quota and availability cleared
             // outright -- which was harmless while one product had a switch and
@@ -5486,7 +5499,7 @@ final class MonitorStore: ObservableObject {
     }
 
     /// How far along a product's registration is.
-    func setupStatus(for agent: AgentKind) -> HookSetupStatus {
+    func setupStatus(for agent: AgentKind) -> IntegrationSetupStatus {
         setupStatusByAgent[agent] ?? .notInstalled
     }
 
@@ -5505,7 +5518,7 @@ final class MonitorStore: ObservableObject {
     /// the value in them actually changes. A refresh restates the same status
     /// every second, and one publish on this store re-evaluates the whole
     /// overlay (`AGENTS.md` §7).
-    private func setSetupStatus(_ status: HookSetupStatus, for agent: AgentKind) {
+    private func setSetupStatus(_ status: IntegrationSetupStatus, for agent: AgentKind) {
         guard setupStatusByAgent[agent] != status else { return }
         setupStatusByAgent[agent] = status
     }
@@ -5535,11 +5548,11 @@ final class MonitorStore: ObservableObject {
     /// often costs nothing.
     private func refreshDiskFootprintIfNeeded(for agent: AgentKind) {
         guard diskFootprintTask == nil,
-              let service = services.first(where: { $0.agent == agent }) else {
+              let reporter = footprintReporter(for: agent) else {
             return
         }
         diskFootprintTask = Task { [weak self] in
-            let report = await service.diskFootprint()
+            let report = await reporter.diskFootprint()
             guard let self else { return }
             self.diskFootprintTask = nil
             // Absence *is* `leavesNothing`, so it has to be folded into the

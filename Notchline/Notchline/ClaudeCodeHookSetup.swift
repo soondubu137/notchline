@@ -139,8 +139,8 @@ actor ClaudeCodeHookSetup {
     /// project against -- Claude Code has no trust step, so "registered but
     /// never trusted" is not a state it can reach -- and a complete
     /// registration is reported as connected directly.
-    func status() -> HookSetupStatus {
-        HookSetupStatus.card(
+    func status() -> IntegrationSetupStatus {
+        IntegrationSetupStatus.card(
             registration: configuration.registration(in: readSettings()),
             hasObservedEvent: true
         )

@@ -209,7 +209,7 @@ enum NotchSpecimen {
         id: "specimen-codex-approval-request",
         toolName: "Bash",
         form: .command("swiftformat Notchline/Notchline/MonitorStore.swift"),
-        replyTicket: 0
+        answerHandle: AnswerHandle(ticket: 0)
     )
 
     /// The row that leaves, so the panel has a Recent seam to name.
@@ -452,7 +452,7 @@ enum NotchSpecimen {
                         allowsSeveralAnswers: multiple
                     )
                 ]),
-                replyTicket: 0
+                answerHandle: AnswerHandle(ticket: 0)
             )
         )
     }

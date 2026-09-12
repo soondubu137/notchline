@@ -9006,10 +9006,10 @@ struct NotchlineTests {
 
     @Test
     func onlyCompleteHookStatusesTurnTheIntegrationSwitchOn() {
-        #expect(!HookSetupStatus.notInstalled.isIntegrationEnabled)
-        #expect(!HookSetupStatus.repairRequired.isIntegrationEnabled)
-        #expect(HookSetupStatus.reviewRequired.isIntegrationEnabled)
-        #expect(HookSetupStatus.active.isIntegrationEnabled)
+        #expect(!IntegrationSetupStatus.notInstalled.isIntegrationEnabled)
+        #expect(!IntegrationSetupStatus.repairRequired.isIntegrationEnabled)
+        #expect(IntegrationSetupStatus.reviewRequired.isIntegrationEnabled)
+        #expect(IntegrationSetupStatus.active.isIntegrationEnabled)
     }
 
     @Test @MainActor
@@ -16410,7 +16410,7 @@ struct NotchlineTests {
 
         // Querying health repeatedly must leave the refresh's own answer alone.
         for _ in 0 ..< 3 {
-            _ = await service.hookSetupStatus()
+            _ = await service.setupStatus()
         }
         #expect(await repository.observedState().hasObservedLiveEvent)
 
@@ -18209,7 +18209,7 @@ for line in sys.stdin:
 
         // Onboarding installs, which is what creates the directory the socket
         // lives in and writes the helper the definitions name.
-        try await service.installHooks()
+        try await service.installIntegration()
         #expect(FileManager.default.isExecutableFile(atPath: paths.hookHelper.path))
 
         // The very next hook goes through the installed helper, over the real
@@ -18959,43 +18959,43 @@ for line in sys.stdin:
 
     /// Two facts with two sources, and the four cards they make.
     ///
-    /// `HookSetupStatus` used to be the model as well as the display, which is
+    /// `IntegrationSetupStatus` used to be the model as well as the display, which is
     /// what made the reading take the second fact as a parameter and forced
     /// every caller to thread one through the other.
     @Test @MainActor
     func registrationAndDeliveryProjectToTheFourCards() async throws {
         #expect(
-            HookSetupStatus.card(registration: .absent, hasObservedEvent: false)
+            IntegrationSetupStatus.card(registration: .absent, hasObservedEvent: false)
                 == .notInstalled
         )
         #expect(
-            HookSetupStatus.card(registration: .absent, hasObservedEvent: true)
+            IntegrationSetupStatus.card(registration: .absent, hasObservedEvent: true)
                 == .notInstalled
         )
         // Mismatched says the same thing whatever has been delivered: some of
         // ours is firing, which is exactly why the rest failing is invisible.
         #expect(
-            HookSetupStatus.card(registration: .mismatched, hasObservedEvent: false)
+            IntegrationSetupStatus.card(registration: .mismatched, hasObservedEvent: false)
                 == .repairRequired
         )
         #expect(
-            HookSetupStatus.card(registration: .mismatched, hasObservedEvent: true)
+            IntegrationSetupStatus.card(registration: .mismatched, hasObservedEvent: true)
                 == .repairRequired
         )
         #expect(
-            HookSetupStatus.card(registration: .complete, hasObservedEvent: false)
+            IntegrationSetupStatus.card(registration: .complete, hasObservedEvent: false)
                 == .reviewRequired
         )
         #expect(
-            HookSetupStatus.card(registration: .complete, hasObservedEvent: true)
+            IntegrationSetupStatus.card(registration: .complete, hasObservedEvent: true)
                 == .active
         )
         // Registered is enough to monitor; only the two unregistered states
         // turn the integration off.
-        #expect(HookSetupStatus.reviewRequired.isIntegrationEnabled)
-        #expect(HookSetupStatus.active.isIntegrationEnabled)
-        #expect(!HookSetupStatus.repairRequired.isIntegrationEnabled)
-        #expect(!HookSetupStatus.notInstalled.isIntegrationEnabled)
+        #expect(IntegrationSetupStatus.reviewRequired.isIntegrationEnabled)
+        #expect(IntegrationSetupStatus.active.isIntegrationEnabled)
+        #expect(!IntegrationSetupStatus.repairRequired.isIntegrationEnabled)
+        #expect(!IntegrationSetupStatus.notInstalled.isIntegrationEnabled)
 
         // And end to end: a user who trusted the hooks last week is not asked
         // to do it again after a restart.
@@ -19006,7 +19006,7 @@ for line in sys.stdin:
         try await registrar.install()
 
         let fresh = HookEventRepository(paths: paths)
-        #expect(HookSetupStatus.card(
+        #expect(IntegrationSetupStatus.card(
             registration: await registrar.registration(),
             hasObservedEvent: await fresh.observedState().hasObservedEvent
         ) == .reviewRequired)
@@ -19019,7 +19019,7 @@ for line in sys.stdin:
         _ = await fresh.drainDeliveredEvents()
 
         let restarted = HookEventRepository(paths: paths)
-        #expect(HookSetupStatus.card(
+        #expect(IntegrationSetupStatus.card(
             registration: await registrar.registration(),
             hasObservedEvent: await restarted.observedState().hasObservedEvent
         ) == .active)
@@ -19389,7 +19389,7 @@ for line in sys.stdin:
             }
         }
 
-        #expect(HookSetupStatus.card(
+        #expect(IntegrationSetupStatus.card(
             registration: await registrar.registration(),
             hasObservedEvent: false
         ) == .reviewRequired)
@@ -19477,12 +19477,12 @@ for line in sys.stdin:
         ).write(to: paths.hooksConfiguration, options: .atomic)
 
         await installer.invalidateRegistration()
-        #expect(HookSetupStatus.card(registration: await installer.registration(), hasObservedEvent: true) == .repairRequired)
+        #expect(IntegrationSetupStatus.card(registration: await installer.registration(), hasObservedEvent: true) == .repairRequired)
 
         try await installer.install()
 
         await installer.invalidateRegistration()
-        #expect(HookSetupStatus.card(registration: await installer.registration(), hasObservedEvent: false) == .reviewRequired)
+        #expect(IntegrationSetupStatus.card(registration: await installer.registration(), hasObservedEvent: false) == .reviewRequired)
         let repairedData = try Data(contentsOf: paths.hooksConfiguration)
         let repairedRoot = try #require(
             JSONSerialization.jsonObject(with: repairedData) as? [String: Any]
@@ -19519,7 +19519,7 @@ for line in sys.stdin:
         ).write(to: paths.hooksConfiguration, options: .atomic)
 
         await installer.invalidateRegistration()
-        #expect(HookSetupStatus.card(registration: await installer.registration(), hasObservedEvent: true) == .repairRequired)
+        #expect(IntegrationSetupStatus.card(registration: await installer.registration(), hasObservedEvent: true) == .repairRequired)
 
         try await installer.install()
 
@@ -19542,7 +19542,7 @@ for line in sys.stdin:
         #expect(exactGroup["matcher"] == nil)
         #expect(exactHandler["timeout"] as? Int == 3)
         await installer.invalidateRegistration()
-        #expect(HookSetupStatus.card(registration: await installer.registration(), hasObservedEvent: false) == .reviewRequired)
+        #expect(IntegrationSetupStatus.card(registration: await installer.registration(), hasObservedEvent: false) == .reviewRequired)
     }
 
     /// Captured from a real Desktop approval on 2026-08-15: asking to run a
@@ -21740,10 +21740,10 @@ for line in sys.stdin:
         let harness = try ClaudeCodeHarness()
         defer { harness.tearDown() }
 
-        #expect(await harness.service.hookSetupStatus() == .notInstalled)
+        #expect(await harness.service.setupStatus() == .notInstalled)
 
-        try await harness.service.installHooks()
-        #expect(await harness.service.hookSetupStatus() == .active)
+        try await harness.service.installIntegration()
+        #expect(await harness.service.setupStatus() == .active)
 
         let root = try #require(
             try JSONSerialization.jsonObject(
@@ -21760,8 +21760,8 @@ for line in sys.stdin:
         // would be the first unrecognised thing in it.
         #expect(root["description"] == nil)
 
-        try await harness.service.removeHooks()
-        #expect(await harness.service.hookSetupStatus() == .notInstalled)
+        try await harness.service.removeIntegration()
+        #expect(await harness.service.setupStatus() == .notInstalled)
     }
 
     /// The store carries each product's registration state separately, which is
@@ -26055,15 +26055,15 @@ for line in sys.stdin:
 
         // A file this app creates has no earlier version, so it leaves no copy.
         // An empty one would only be misleading.
-        try await harness.service.installHooks()
+        try await harness.service.installIntegration()
         #expect(!FileManager.default.fileExists(atPath: backup.path))
-        try await harness.service.removeHooks()
+        try await harness.service.removeIntegration()
         try? FileManager.default.removeItem(at: settings)
 
         let theirs = "{\n  \"theme\" : \"auto\"\n}\n"
         try Data(theirs.utf8).write(to: settings)
 
-        try await harness.service.installHooks()
+        try await harness.service.installIntegration()
         #expect(String(decoding: try Data(contentsOf: backup), as: UTF8.self) == theirs)
 
         // They keep working in that file. The next change this app makes must
@@ -26079,7 +26079,7 @@ for line in sys.stdin:
             .write(to: settings)
         let beforeRemoval = try Data(contentsOf: settings)
 
-        try await harness.service.removeHooks()
+        try await harness.service.removeIntegration()
 
         #expect(try Data(contentsOf: backup) == beforeRemoval)
         let restored = try #require(
@@ -26128,7 +26128,7 @@ for line in sys.stdin:
             .write(to: settings)
         let before = try Data(contentsOf: settings)
 
-        try await harness.service.installHooks()
+        try await harness.service.installIntegration()
 
         let installed = try #require(
             try JSONSerialization.jsonObject(with: try Data(contentsOf: settings))
@@ -26183,10 +26183,10 @@ for line in sys.stdin:
         // a rewrite would reformat a file this app does not own and renumber
         // groups the user's own trust may be keyed by.
         let afterInstall = try Data(contentsOf: settings)
-        try await harness.service.installHooks()
+        try await harness.service.installIntegration()
         #expect(try Data(contentsOf: settings) == afterInstall)
 
-        try await harness.service.removeHooks()
+        try await harness.service.removeIntegration()
 
         // The round trip is exact once the serialiser's own formatting is taken
         // out of it: same document, none of ours left in it.
@@ -26221,7 +26221,7 @@ for line in sys.stdin:
             try Data(document.utf8).write(to: settings)
 
             await #expect(throws: (any Error).self) {
-                try await harness.service.installHooks()
+                try await harness.service.installIntegration()
             }
             #expect(
                 String(decoding: try Data(contentsOf: settings), as: UTF8.self) == document
@@ -26390,7 +26390,7 @@ for line in sys.stdin:
         defer { harness.tearDown() }
         let settings = harness.paths.hooksConfiguration
 
-        try await harness.service.installHooks()
+        try await harness.service.installIntegration()
         #expect(await harness.setup.status() == .active)
 
         var document = try #require(
@@ -26409,7 +26409,7 @@ for line in sys.stdin:
         // And switching on again repairs it, which is the half ADR 0010 could
         // not do: the missing event is written back without the user editing
         // anything.
-        try await harness.service.installHooks()
+        try await harness.service.installIntegration()
         #expect(await harness.setup.status() == .active)
     }
 
@@ -29295,7 +29295,7 @@ for line in sys.stdin:
                 id: "c-1",
                 toolName: "Bash",
                 form: .command("rm -rf build"),
-                replyTicket: 1
+                answerHandle: AnswerHandle(ticket: 1)
             )
         )
         let store = bench.store
@@ -29324,7 +29324,7 @@ for line in sys.stdin:
                 id: "c-1",
                 toolName: "AskUserQuestion",
                 form: .question("Which database should this use?"),
-                replyTicket: 1
+                answerHandle: AnswerHandle(ticket: 1)
             )
         )
         let store = bench.store
@@ -29352,7 +29352,7 @@ for line in sys.stdin:
             id: "c-1",
             toolName: "ExitPlanMode",
             form: .document("Read the file, then write the fix."),
-            replyTicket: 1
+            answerHandle: AnswerHandle(ticket: 1)
         )
         #expect(plan.answerRow()?.affirmative == "Accept")
         #expect(plan.answerRow()?.refusal == "Send it back")
@@ -29361,7 +29361,7 @@ for line in sys.stdin:
             id: "c-2",
             toolName: "Bash",
             form: .command("ls"),
-            replyTicket: 1
+            answerHandle: AnswerHandle(ticket: 1)
         )
         #expect(command.answerRow()?.affirmative == "Approve")
         #expect(command.answerRow()?.refusal == "Deny")
@@ -29388,7 +29388,7 @@ for line in sys.stdin:
                 id: "c-1",
                 toolName: "Bash",
                 form: .command("rm -rf build"),
-                replyTicket: 1
+                answerHandle: AnswerHandle(ticket: 1)
             )
         )
         let (store, service, row) = bench
@@ -29419,7 +29419,7 @@ for line in sys.stdin:
                 id: "c-1",
                 toolName: "Bash",
                 form: .command("rm -rf build"),
-                replyTicket: 7
+                answerHandle: AnswerHandle(ticket: 7)
             )
         )
         let (store, service, row) = bench
@@ -29451,7 +29451,7 @@ for line in sys.stdin:
                     id: "c-1",
                     toolName: "Bash",
                     form: .command("rm -rf /"),
-                    replyTicket: 1
+                    answerHandle: AnswerHandle(ticket: 1)
                 )
             )
             let (store, service, row) = bench
@@ -29481,7 +29481,7 @@ for line in sys.stdin:
                 id: "c-1",
                 toolName: "Bash",
                 form: .command("rm -rf build"),
-                replyTicket: 1
+                answerHandle: AnswerHandle(ticket: 1)
             ),
             delivers: false
         )
@@ -29513,7 +29513,7 @@ for line in sys.stdin:
                 id: "c-1",
                 toolName: "Bash",
                 form: .command("rm -rf build"),
-                replyTicket: 1
+                answerHandle: AnswerHandle(ticket: 1)
             )
         )
         let service = AnsweringMonitoringStub(agent: .claudeCode, sessions: [waiting])
@@ -29571,7 +29571,7 @@ for line in sys.stdin:
                 id: "c-1",
                 toolName: "Bash",
                 form: .command("rm -rf build"),
-                replyTicket: 1
+                answerHandle: AnswerHandle(ticket: 1)
             )
         )
         let service = AnsweringMonitoringStub(agent: .claudeCode, sessions: [waiting])
@@ -29614,7 +29614,7 @@ for line in sys.stdin:
                 id: "c-1",
                 toolName: "Bash",
                 form: .command("rm -rf build"),
-                replyTicket: 1
+                answerHandle: AnswerHandle(ticket: 1)
             )
         )
         let (store, service, row) = bench
@@ -29646,7 +29646,7 @@ for line in sys.stdin:
                 id: "c-1",
                 toolName: "Bash",
                 form: .command("rm -rf build"),
-                replyTicket: 1
+                answerHandle: AnswerHandle(ticket: 1)
             )
         )
         let second = answerableSession(
@@ -29655,7 +29655,7 @@ for line in sys.stdin:
                 id: "c-2",
                 toolName: "Bash",
                 form: .command("git push --force"),
-                replyTicket: 2
+                answerHandle: AnswerHandle(ticket: 2)
             )
         )
         let service = AnsweringMonitoringStub(
@@ -30069,13 +30069,13 @@ for line in sys.stdin:
                 id: "c-2",
                 toolName: "AskUserQuestion",
                 form: .question("Which database should this use?"),
-                replyTicket: 1
+                answerHandle: AnswerHandle(ticket: 1)
             ).answerRow()?.affirmative == "Submit"
         )
 
         // An approval has no set to be anywhere in, and the position it is
         // asked for changes nothing about what it says.
-        let granting = AgentRequest(id: "c-3", toolName: "Bash", form: .command("ls"), replyTicket: 1)
+        let granting = AgentRequest(id: "c-3", toolName: "Bash", form: .command("ls"), answerHandle: AnswerHandle(ticket: 1))
         #expect(granting.answerRow(showing: 0)?.affirmative == "Approve")
         #expect(granting.answerRow(showing: 3)?.affirmative == "Approve")
     }
@@ -30259,7 +30259,7 @@ for line in sys.stdin:
         let long = String(repeating: "Read this complete description before deciding. ", count: 30)
         let request = AgentRequest(id: "reading", toolName: "AskUserQuestion", form: .questions([
             AgentQuestion(id: 0, header: nil, text: "Which approach?", options: [AgentQuestionOption(id: 7, label: "Inspect first", description: long)], allowsSeveralAnswers: false)
-        ]), replyTicket: 1)
+        ]), answerHandle: AnswerHandle(ticket: 1))
         let (store, service, row) = answeringStore(request: request, status: .inputNeeded)
         store.toggleOpenRow(row)
         #expect(await eventually { store.isAffirmativeArmed })
@@ -30313,7 +30313,7 @@ for line in sys.stdin:
                         allowsSeveralAnswers: false
                     )
                 ]),
-                replyTicket: 1
+                answerHandle: AnswerHandle(ticket: 1)
             ),
             status: .inputNeeded
         )
@@ -30874,7 +30874,7 @@ for line in sys.stdin:
     func aProductNobodyCanWatchSaysSoRatherThanSayingConnected() async throws {
         let missing = try ClaudeCodeHarness(commandIsInstalled: false)
         defer { missing.tearDown() }
-        try await missing.service.installHooks()
+        try await missing.service.installIntegration()
         missing.presence = .unknown
 
         let blind = await missing.service.fetchSnapshot()
@@ -30889,7 +30889,7 @@ for line in sys.stdin:
         // would send them the wrong way entirely.
         let silent = try ClaudeCodeHarness(commandIsInstalled: true)
         defer { silent.tearDown() }
-        try await silent.service.installHooks()
+        try await silent.service.installIntegration()
         silent.presence = .unknown
 
         let unanswered = await silent.service.fetchSnapshot()
@@ -31158,7 +31158,7 @@ for line in sys.stdin:
         #expect(request.canBeAnswered)
         #expect(!asking.isPeerClosed)
 
-        let ticket = try #require(request.replyTicket)
+        let ticket = try #require(request.answerHandle?.ticket)
         let granted = await repository.answer(.grant, on: ticket)
         #expect(granted)
         let sent = try #require(asking.readFromPeer())
@@ -31295,7 +31295,7 @@ for line in sys.stdin:
         // And the answer really travels: `updatedInput` is the tool's own input
         // with the person's choices merged into it, so the call runs and
         // returns them rather than being refused.
-        let ticket = try #require(request.replyTicket)
+        let ticket = try #require(request.answerHandle?.ticket)
         #expect(
             await repository.answer(
                 .answers([
@@ -33400,7 +33400,7 @@ for line in sys.stdin:
         availability: MonitorAvailability = .ready,
         sessions: [MonitoredSession] = [],
         diagnostic: String? = nil,
-        setupStatus: HookSetupStatus = .active,
+        setupStatus: IntegrationSetupStatus = .active,
         presence: AgentPresence = .open
     ) -> AgentSnapshot {
         AgentSnapshot(
@@ -33573,7 +33573,7 @@ for line in sys.stdin:
 /// it finishes and starts waiting on the user, at which point the provider books
 /// a re-check — during the refresh a watcher edge drove, not during the store's
 /// own loop iteration.
-private actor OnDemandDeadlineMonitoringStub: AgentMonitoring {
+private actor OnDemandDeadlineMonitoringStub: AgentMonitoring, IntegrationConfiguring {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
 
@@ -33603,9 +33603,9 @@ private actor OnDemandDeadlineMonitoringStub: AgentMonitoring {
         )
     }
 
-    func hookSetupStatus() async -> HookSetupStatus { .active }
-    func installHooks() async throws {}
-    func removeHooks() async throws {}
+    func setupStatus() async -> IntegrationSetupStatus { .active }
+    func installIntegration() async throws {}
+    func removeIntegration() async throws {}
     func disconnect() async {}
 }
 
@@ -33613,7 +33613,7 @@ private actor OnDemandDeadlineMonitoringStub: AgentMonitoring {
 ///
 /// This is the shape every real instance of the bug took: a deadline derived
 /// from state that the refresh it triggers does not update.
-private actor StuckDeadlineMonitoringStub: AgentMonitoring {
+private actor StuckDeadlineMonitoringStub: AgentMonitoring, IntegrationConfiguring {
     nonisolated let agent = AgentKind.codex
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
 
@@ -33638,9 +33638,9 @@ private actor StuckDeadlineMonitoringStub: AgentMonitoring {
 
     func snapshotCount() -> Int { snapshots }
 
-    func hookSetupStatus() async -> HookSetupStatus { .reviewRequired }
-    func installHooks() async throws {}
-    func removeHooks() async throws {}
+    func setupStatus() async -> IntegrationSetupStatus { .reviewRequired }
+    func installIntegration() async throws {}
+    func removeIntegration() async throws {}
     func disconnect() async {}
 }
 
@@ -33743,12 +33743,12 @@ private final class PreviewWakeUpCounter: @unchecked Sendable {
     }
 }
 
-private actor GatedMonitoringStub: AgentMonitoring {
+private actor GatedMonitoringStub: AgentMonitoring, IntegrationConfiguring {
     nonisolated let agent = AgentKind.codex
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
 
     private var observedSnapshots = 0
-    private var status: HookSetupStatus = .reviewRequired
+    private var status: IntegrationSetupStatus = .reviewRequired
     private var waiters: [CheckedContinuation<Void, Never>] = []
     private var holdsSnapshots = false
     private var installRequests = 0
@@ -33772,16 +33772,16 @@ private actor GatedMonitoringStub: AgentMonitoring {
         )
     }
 
-    func hookSetupStatus() async -> HookSetupStatus { status }
+    func setupStatus() async -> IntegrationSetupStatus { status }
 
-    func installHooks() async throws {
+    func installIntegration() async throws {
         try await applyIntegrationChange {
             installRequests += 1
             status = .reviewRequired
         }
     }
 
-    func removeHooks() async throws {
+    func removeIntegration() async throws {
         try await applyIntegrationChange {
             removeRequests += 1
             status = .notInstalled
@@ -33805,7 +33805,7 @@ private actor GatedMonitoringStub: AgentMonitoring {
 
     func disconnect() async {}
 
-    func setStatus(_ status: HookSetupStatus) { self.status = status }
+    func setStatus(_ status: IntegrationSetupStatus) { self.status = status }
     func setHoldsSnapshots(_ holds: Bool) { holdsSnapshots = holds }
     func snapshotCount() -> Int { observedSnapshots }
     func installCount() -> Int { installRequests }
@@ -33818,7 +33818,7 @@ private actor GatedMonitoringStub: AgentMonitoring {
     }
 }
 
-private actor IntegrationMonitoringStub: AgentMonitoring {
+private actor IntegrationMonitoringStub: AgentMonitoring, IntegrationConfiguring {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
 
@@ -33834,7 +33834,7 @@ private actor IntegrationMonitoringStub: AgentMonitoring {
     // Nothing to schedule: the stub's output never changes on its own.
     func nextRefreshDeadline() async -> Date? { nil }
 
-    private var setupStatus: HookSetupStatus = .notInstalled
+    private var setupStatus: IntegrationSetupStatus = .notInstalled
     private var installRequests = 0
     private var removeRequests = 0
 
@@ -33851,16 +33851,16 @@ private actor IntegrationMonitoringStub: AgentMonitoring {
         )
     }
 
-    func hookSetupStatus() async -> HookSetupStatus {
+    func setupStatus() async -> IntegrationSetupStatus {
         setupStatus
     }
 
-    func installHooks() async throws {
+    func installIntegration() async throws {
         installRequests += 1
         setupStatus = .reviewRequired
     }
 
-    func removeHooks() async throws {
+    func removeIntegration() async throws {
         removeRequests += 1
         setupStatus = .notInstalled
     }
@@ -34075,7 +34075,7 @@ private func questionSet(
                 )
             }
         ),
-        replyTicket: 1
+        answerHandle: AnswerHandle(ticket: 1)
     )
 }
 
@@ -34113,7 +34113,7 @@ private func answeringStore(
 /// which bytes a product will act on is its vocabulary's business and which
 /// connection they travel down is the registry's, so what the store can be
 /// tested against is *the answer it handed over and the ticket it named*.
-private actor AnsweringMonitoringStub: AgentMonitoring {
+private actor AnsweringMonitoringStub: AgentMonitoring, IntegrationConfiguring, AnswerDelivering {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
 
@@ -34134,9 +34134,9 @@ private actor AnsweringMonitoringStub: AgentMonitoring {
     /// What this product says next time it is asked.
     func publish(_ sessions: [MonitoredSession]) { self.sessions = sessions }
 
-    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) async -> Bool {
+    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
         answers.append(answer)
-        tickets.append(ticket)
+        tickets.append(handle.ticket)
         return delivers
     }
 
@@ -34152,9 +34152,9 @@ private actor AnsweringMonitoringStub: AgentMonitoring {
     }
 
     func nextRefreshDeadline() async -> Date? { nil }
-    func hookSetupStatus() async -> HookSetupStatus { .active }
-    func installHooks() async throws {}
-    func removeHooks() async throws {}
+    func setupStatus() async -> IntegrationSetupStatus { .active }
+    func installIntegration() async throws {}
+    func removeIntegration() async throws {}
     func disconnect() async {}
 }
 
@@ -35556,7 +35556,7 @@ private actor HeldReading {
     }
 }
 
-private actor DiskFootprintMonitoringStub: AgentMonitoring {
+private actor DiskFootprintMonitoringStub: AgentMonitoring, IntegrationConfiguring, DiskFootprintReporting {
     nonisolated let agent = AgentKind.claudeCode
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
     private let report: AgentDiskFootprintReport
@@ -35586,9 +35586,9 @@ private actor DiskFootprintMonitoringStub: AgentMonitoring {
 
     func diskFootprint() async -> AgentDiskFootprintReport { report }
 
-    func hookSetupStatus() async -> HookSetupStatus { .active }
-    func installHooks() async throws {}
-    func removeHooks() async throws {}
+    func setupStatus() async -> IntegrationSetupStatus { .active }
+    func installIntegration() async throws {}
+    func removeIntegration() async throws {}
     func disconnect() async {}
 }
 
@@ -35677,7 +35677,7 @@ private actor ResponseQueue {
 /// Both real providers behave this way through their terminal gate. Stated here
 /// without one, so the test is about the removal reaching the provider rather
 /// than about either product's read state.
-private actor RowRemovalMonitoringStub: AgentMonitoring {
+private actor RowRemovalMonitoringStub: AgentMonitoring, IntegrationConfiguring {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
 
@@ -35712,13 +35712,13 @@ private actor RowRemovalMonitoringStub: AgentMonitoring {
         removed.contains(row.id) ? nil : recheck
     }
 
-    func hookSetupStatus() async -> HookSetupStatus { .active }
-    func installHooks() async throws {}
-    func removeHooks() async throws {}
+    func setupStatus() async -> IntegrationSetupStatus { .active }
+    func installIntegration() async throws {}
+    func removeIntegration() async throws {}
     func disconnect() async {}
 }
 
-private actor HoldableMonitoringStub: AgentMonitoring {
+private actor HoldableMonitoringStub: AgentMonitoring, IntegrationConfiguring {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
 
@@ -35731,7 +35731,7 @@ private actor HoldableMonitoringStub: AgentMonitoring {
         agent: AgentKind,
         sessions: [MonitoredSession] = [],
         availability: MonitorAvailability = .ready,
-        setupStatus: HookSetupStatus = .active,
+        setupStatus: IntegrationSetupStatus = .active,
         deadline: Date? = nil,
         heldOpen: Bool = false
     ) {
@@ -35763,9 +35763,9 @@ private actor HoldableMonitoringStub: AgentMonitoring {
         return snapshot
     }
 
-    func hookSetupStatus() async -> HookSetupStatus { snapshot.setupStatus }
-    func installHooks() async throws {}
-    func removeHooks() async throws {}
+    func setupStatus() async -> IntegrationSetupStatus { snapshot.setupStatus }
+    func installIntegration() async throws {}
+    func removeIntegration() async throws {}
     func disconnect() async {}
 }
 

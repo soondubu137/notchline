@@ -79,15 +79,16 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// special case. So this is a fact about one request rather than a setting,
     /// and the vocabulary that read the request is what knows it.
     ///
-    /// **Derived from ``replyTicket``, and it cannot be set independently.** A
+    /// **Derived from ``answerHandle``, and it cannot be set independently.** A
     /// request is answerable exactly when a connection is being held open for
     /// it — not when its product *could* accept an answer, and not when its
     /// status happens to be `Approval needed`. Offering an affirmative the app
     /// cannot deliver is a promise made quietly (§11 rule 03), so the one fact
     /// that decides it is the one that would carry the answer.
-    nonisolated var canBeAnswered: Bool { replyTicket != nil }
+    nonisolated var canBeAnswered: Bool { answerHandle != nil }
 
-    /// The connection this request arrived on, while it is still held.
+    /// The way back to the connection this request arrived on, while it is
+    /// still held (``AnswerHandle``).
     ///
     /// `nil` on every request that reached this app down a connection already
     /// closed — every product surface whose approval does not arrive as the
@@ -97,7 +98,7 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// Not drawn and not compared by the change projection: it is how an answer
     /// finds its way back, and the surface's business with it is only whether
     /// there is one.
-    let replyTicket: HookReplyRegistry.Ticket?
+    let answerHandle: AnswerHandle?
 
     nonisolated init(
         id: String,
@@ -105,14 +106,14 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
         form: Form,
         argumentFields: [ApprovalArgument] = [],
         offeredRules: [PermissionRuleOffer] = [],
-        replyTicket: HookReplyRegistry.Ticket? = nil
+        answerHandle: AnswerHandle? = nil
     ) {
         self.id = id
         self.toolName = toolName
         self.form = form
         self.argumentFields = argumentFields
         self.offeredRules = offeredRules
-        self.replyTicket = replyTicket
+        self.answerHandle = answerHandle
     }
 
     /// The same request, filed against the connection it arrived on.
@@ -120,16 +121,14 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// The vocabulary reads the request out of the payload and knows nothing
     /// about descriptors; the reducer holds both. Rebuilding here rather than
     /// making the field `var` keeps the type a value the surface can only read.
-    nonisolated func answerable(
-        on replyTicket: HookReplyRegistry.Ticket?
-    ) -> AgentRequest {
+    nonisolated func answerable(on answerHandle: AnswerHandle?) -> AgentRequest {
         AgentRequest(
             id: id,
             toolName: toolName,
             form: form,
             argumentFields: argumentFields,
             offeredRules: offeredRules,
-            replyTicket: replyTicket
+            answerHandle: answerHandle
         )
     }
 

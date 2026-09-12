@@ -802,7 +802,7 @@ struct AgentSnapshot: Equatable, Sendable {
     /// Integration health as observed by the same refresh that built this
     /// snapshot. It rides along so the store never has to ask a second time --
     /// asking used to consume the Hook queue a second time per cycle.
-    let setupStatus: HookSetupStatus
+    let setupStatus: IntegrationSetupStatus
     /// Whether the product itself is open, independent of whether we can watch
     /// it. Sourced per product: Codex from the running-application list, Claude
     /// Code from its live session list.
@@ -814,7 +814,7 @@ struct AgentSnapshot: Equatable, Sendable {
         sessions: [MonitoredSession],
         quota: QuotaSnapshot,
         diagnostic: String?,
-        setupStatus: HookSetupStatus = .active,
+        setupStatus: IntegrationSetupStatus = .active,
         presence: AgentPresence = .open
     ) {
         self.agent = agent

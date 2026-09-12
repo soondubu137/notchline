@@ -656,7 +656,7 @@ struct ProductSettingsCopy: Equatable {
 
     init(
         descriptor: ProductDescriptor,
-        setup: HookSetupStatus,
+        setup: IntegrationSetupStatus,
         availability: MonitorAvailability?,
         diagnostic: String?
     ) {

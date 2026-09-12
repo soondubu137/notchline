@@ -6,7 +6,7 @@ import Foundation
 /// One of the two facts behind the settings card. It answers "are our
 /// definitions in their file, in the shape this build writes them", which is
 /// the only question a file read can answer. Whether Codex actually *runs* them
-/// is the other fact, and it has a different source — see ``HookSetupStatus``.
+/// is the other fact, and it has a different source — see ``IntegrationSetupStatus``.
 nonisolated enum HookRegistration: Sendable, Equatable {
     /// Nothing of this app's is registered.
     case absent
@@ -28,7 +28,7 @@ nonisolated enum HookRegistration: Sendable, Equatable {
 /// forced every caller to thread one fact through the other. Registration comes
 /// from a file this app can read; delivery comes from events arriving. They are
 /// projected here and nowhere else.
-enum HookSetupStatus: Equatable, Sendable {
+enum IntegrationSetupStatus: Equatable, Sendable {
     case notInstalled
     case repairRequired
     case reviewRequired
@@ -38,7 +38,7 @@ enum HookSetupStatus: Equatable, Sendable {
     nonisolated static func card(
         registration: HookRegistration,
         hasObservedEvent: Bool
-    ) -> HookSetupStatus {
+    ) -> IntegrationSetupStatus {
         switch registration {
         case .absent:
             .notInstalled
@@ -1924,13 +1924,17 @@ struct HookTurnState: Sendable {
     /// question by silence.
     nonisolated var heldReplyTickets: [HookReplyRegistry.Ticket] {
         var tickets: [HookReplyRegistry.Ticket] = []
-        if let ticket = pendingInput?.request?.replyTicket { tickets.append(ticket) }
-        if let ticket = pendingApproval?.request?.replyTicket { tickets.append(ticket) }
+        if let ticket = pendingInput?.request?.answerHandle?.ticket {
+            tickets.append(ticket)
+        }
+        if let ticket = pendingApproval?.request?.answerHandle?.ticket {
+            tickets.append(ticket)
+        }
         for slots in subagentSlots.values {
-            if let ticket = slots.pendingInput?.request?.replyTicket {
+            if let ticket = slots.pendingInput?.request?.answerHandle?.ticket {
                 tickets.append(ticket)
             }
-            if let ticket = slots.pendingApproval?.request?.replyTicket {
+            if let ticket = slots.pendingApproval?.request?.answerHandle?.ticket {
                 tickets.append(ticket)
             }
         }
@@ -3555,21 +3559,21 @@ actor HookEventRepository {
     private func withdrawTicket(_ ticket: HookReplyRegistry.Ticket) {
         for (threadID, var turn) in turnsByThreadID {
             var changed = false
-            if turn.pendingApproval?.request?.replyTicket == ticket {
+            if turn.pendingApproval?.request?.answerHandle?.ticket == ticket {
                 turn.pendingApproval = turn.pendingApproval?.withdrawingReplyTicket()
                 changed = true
             }
-            if turn.pendingInput?.request?.replyTicket == ticket {
+            if turn.pendingInput?.request?.answerHandle?.ticket == ticket {
                 turn.pendingInput = turn.pendingInput?.withdrawingReplyTicket()
                 changed = true
             }
             for (agentID, var slots) in turn.subagentSlots {
-                if slots.pendingApproval?.request?.replyTicket == ticket {
+                if slots.pendingApproval?.request?.answerHandle?.ticket == ticket {
                     slots.pendingApproval = slots.pendingApproval?.withdrawingReplyTicket()
                     turn.subagentSlots[agentID] = slots
                     changed = true
                 }
-                if slots.pendingInput?.request?.replyTicket == ticket {
+                if slots.pendingInput?.request?.answerHandle?.ticket == ticket {
                     slots.pendingInput = slots.pendingInput?.withdrawingReplyTicket()
                     turn.subagentSlots[agentID] = slots
                     changed = true
@@ -4128,7 +4132,7 @@ actor HookEventRepository {
                 toolInput: event.toolInput,
                 permissionSuggestions: event.permissionSuggestions,
                 openedBy: toolUseID
-            )?.answerable(on: replyTicket)
+            )?.answerable(on: replyTicket.map(AnswerHandle.init))
         }
 
         switch signal {
@@ -4286,7 +4290,7 @@ actor HookEventRepository {
                     request: requestAsked(openToolUse.id) ?? (
                         state.pendingApproval?.toolUseID == openToolUse.id
                             ? state.pendingApproval?.request?
-                                .answerable(on: replyTicket)
+                                .answerable(on: replyTicket.map(AnswerHandle.init))
                             : nil
                     )
                 )
@@ -4315,7 +4319,7 @@ actor HookEventRepository {
                         // arrive must not blank the one the opening call
                         // already supplied.
                         request: requestAsked(waiting.toolUseID)
-                            ?? waiting.request?.answerable(on: replyTicket)
+                            ?? waiting.request?.answerable(on: replyTicket.map(AnswerHandle.init))
                     )
                 }
                 state.sessionStatus = state.sessionStatus
@@ -4674,7 +4678,7 @@ actor HookEventRepository {
                         toolInput: event.toolInput,
                         permissionSuggestions: event.permissionSuggestions,
                         openedBy: toolUseID
-                    )?.answerable(on: replyTicket)
+                    )?.answerable(on: replyTicket.map(AnswerHandle.init))
                 )
             case .approvalWaitOpened:
                 slots.pendingApproval = PendingApproval(
@@ -4687,7 +4691,7 @@ actor HookEventRepository {
                         toolInput: event.toolInput,
                         permissionSuggestions: event.permissionSuggestions,
                         openedBy: toolUseID
-                    )?.answerable(on: replyTicket)
+                    )?.answerable(on: replyTicket.map(AnswerHandle.init))
                 )
             default:
                 break
@@ -4716,9 +4720,9 @@ actor HookEventRepository {
                     toolInput: event.toolInput,
                     permissionSuggestions: event.permissionSuggestions,
                     openedBy: openToolUse.id
-                )?.answerable(on: replyTicket) ?? (
+                )?.answerable(on: replyTicket.map(AnswerHandle.init)) ?? (
                     slots.pendingApproval?.toolUseID == openToolUse.id
-                        ? slots.pendingApproval?.request?.answerable(on: replyTicket)
+                        ? slots.pendingApproval?.request?.answerable(on: replyTicket.map(AnswerHandle.init))
                         : nil
                 )
             )

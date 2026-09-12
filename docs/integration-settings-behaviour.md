@@ -30,7 +30,7 @@ Same store path and convergence, different service: `ClaudeCodeHookSetup.install
 
 ## 3. Turning either switch off
 
-Convergence calls `removeIntegrationAndWait` → `service.removeHooks()`.
+Convergence calls `removeIntegrationAndWait` → `IntegrationConfiguring.removeIntegration()` on that product's service.
 
 - **Both products**: the editor removes every handler of that product from every parsable event (removal is never strict about events, so an odd event elsewhere cannot block an uninstall); the backup is refreshed first; all handlers are verified gone; and `unremovableManagedCommand` is thrown if a marker survives anywhere in the document.
 - **Codex additionally**: resets hook observations and clears Turns; stops the listener; deletes the helper, `install.json`, the socket and retired artefacts; removes directories that are now empty; and clears the observed Desktop pid, tracked threads, refresh tasks and gates, and `lastTrustedSnapshot`.
@@ -40,7 +40,7 @@ Convergence calls `removeIntegrationAndWait` → `service.removeHooks()`.
 
 ## 4. How `Connected` is decided
 
-From two independent facts, projected by `HookSetupStatus.card(registration:hasObservedEvent:)` and then crossed with **that product's own** integration availability by the one rule in `ProductSettingsCopy`. There used to be a rule per product; the two disagreed in the ways the struck paragraphs below record, and the single rule reads `store.agentAvailability(for:)` for every row.
+From two independent facts, projected by `IntegrationSetupStatus.card(registration:hasObservedEvent:)` and then crossed with **that product's own** integration availability by the one rule in `ProductSettingsCopy`. There used to be a rule per product; the two disagreed in the ways the struck paragraphs below record, and the single rule reads `store.agentAvailability(for:)` for every row.
 
 - **Registration status** comes from a pure file read: `complete` / `mismatched` / `absent`.
 - **Event delivery**: for Codex, whether a hook event has *ever* reached the reducer (`hasObservedEvent`), seeded at launch from `lastEventAt` in `install.json` and set true once a payload lands. Claude Code always passes `hasObservedEvent: true`, since it has no trust step and therefore cannot be "registered but never trusted".

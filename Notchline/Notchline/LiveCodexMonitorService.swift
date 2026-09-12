@@ -1,89 +1,8 @@
 import AppKit
 import Foundation
 
-/// One product's boundary, reduced to what the store needs.
-///
-/// The shape was always general — nothing in it names Codex — so a second
-/// product does not widen it, it just means there is more than one of them.
-protocol AgentMonitoring: Sendable {
-    /// Which product this provider speaks for.
-    nonisolated var agent: AgentKind { get }
-    /// Edges that mean "ask me again", merged by the store into one wake-up
-    /// stream. A provider whose answer arrives late reports it here rather than
-    /// through a deadline, which is what lets a slow provider not hold up a
-    /// fast one.
-    nonisolated var stateChangeEvents: AsyncStream<Void> { get }
-    /// This product's answer, told which of its rows the user has already taken
-    /// off the list.
-    ///
-    /// A removed row is still this product's row -- nothing was deleted, and
-    /// the record of the removal belongs to the store, which is the only layer
-    /// that can tell "the user waved it away" from "the Turn is over"
-    /// (CR-Fable-004). What changes here is that the row is no longer waiting
-    /// for anything, and only the provider can act on that: an entry in the
-    /// terminal gate books a re-check once a second, and it does so for a row
-    /// nobody can see as readily as for one on the notch. Removal used to stop
-    /// at the top layer, so both products went on sampling read state for a row
-    /// the user had already dismissed, for as long as its session lived
-    /// (CR-Fable-003).
-    ///
-    /// Ids are ``MonitoredSession/id``, and only this product's.
-    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot
-    /// Earliest moment a refresh could produce different output.
-    ///
-    /// The store sleeps until this instead of sampling on a fixed cadence, so a
-    /// quiet monitor does no work at all and a due window is served exactly when
-    /// it comes due.
-    func nextRefreshDeadline() async -> Date?
-    /// What this product's monitoring has left on disk, or why there is not a
-    /// figure for it yet.
-    ///
-    /// Reporting only. Nothing in this app deletes them — the folder they go to
-    /// can hold a user's own sessions as well, so the decision is theirs. A
-    /// product that leaves files answers even before it can measure them, so
-    /// that Settings can draw the row it is going to draw anyway.
-    func diskFootprint() async -> AgentDiskFootprintReport
-    /// Sends one answer back down the connection its request arrived on.
-    ///
-    /// Returns whether the whole answer reached the product. `false` is an
-    /// ordinary outcome rather than a bug — the product may have been answered
-    /// in its own window and killed the hook process, and this is the only
-    /// moment that can be discovered (``HookReplyRegistry``). It is
-    /// [`answer-in-notch.md`](../../docs/answer-in-notch.md) §8's *not
-    /// delivered*, and the row says so.
-    ///
-    /// **The ticket rather than the row**, because the connection is what an
-    /// answer travels on and a row is only where it was typed. A ticket no
-    /// longer held answers nothing, which is what makes a stale click harmless.
-    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) async -> Bool
-    func hookSetupStatus() async -> HookSetupStatus
-    func installHooks() async throws
-    func removeHooks() async throws
-    func disconnect() async
-}
-
-extension AgentMonitoring {
-    /// Nothing removed, which is what a caller with no removal record of its
-    /// own is saying. The store holds the only one there is.
-    func fetchSnapshot() async -> AgentSnapshot {
-        await fetchSnapshot(dismissedRowIDs: [])
-    }
-
-    /// Nothing, which is the ordinary case and the one Codex is in: its quota
-    /// arrives over the app server and leaves no files anywhere. Only a product
-    /// that writes something the user might want back overrides this.
-    func diskFootprint() async -> AgentDiskFootprintReport { .leavesNothing }
-
-    /// Nothing delivered, which is the truthful answer for a provider with no
-    /// hook transport at all — the drawing specimens, and the doubles a test
-    /// builds a list out of. A row backed by one of these never offers an
-    /// affirmative in the first place, because it holds no ticket.
-    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) async -> Bool {
-        false
-    }
-}
-
-actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
+actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDelivering,
+    DiskFootprintReporting, CodexNavigationTargetChecking {
     nonisolated let agent = AgentKind.codex
 
     /// Thread-level metadata cached for one thread.
@@ -519,7 +438,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
             hookState: hookState,
             desktopProcessIdentifier: desktopProcessIdentifier
         )
-        let setupStatus = HookSetupStatus.card(
+        let setupStatus = IntegrationSetupStatus.card(
             registration: await hookRegistrar.registration(),
             hasObservedEvent: hookState.hasObservedEvent
         )
@@ -1082,19 +1001,23 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// will act on is its vocabulary's business (``RequestAnswering``), and
     /// which connection they go down is the registry's. This is the boundary
     /// the store reaches both through.
-    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) async -> Bool {
-        await hookEvents.answer(answer, on: ticket)
+    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
+        await hookEvents.answer(answer, on: handle.ticket)
     }
 
-    func hookSetupStatus() async -> HookSetupStatus {
+    /// Nothing: the quota arrives over the App Server and leaves no files
+    /// anywhere.
+    func diskFootprint() async -> AgentDiskFootprintReport { .leavesNothing }
+
+    func setupStatus() async -> IntegrationSetupStatus {
         await hookRegistrar.invalidateRegistration()
-        return HookSetupStatus.card(
+        return IntegrationSetupStatus.card(
             registration: await hookRegistrar.registration(),
             hasObservedEvent: await hookEvents.observedState().hasObservedEvent
         )
     }
 
-    func installHooks() async throws {
+    func installIntegration() async throws {
         try await hookRegistrar.install()
         didCompareHelperThisLaunch = true
         // The support directory exists now. On a first run the socket could not
@@ -1104,7 +1027,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
         await prepareTransport()
     }
 
-    func removeHooks() async throws {
+    func removeIntegration() async throws {
         await hookEvents.resetIntegrationObservation(clearTurns: true)
         hookListener.stop()
         try await hookRegistrar.uninstall()
@@ -1950,7 +1873,7 @@ actor LiveCodexMonitorService: AgentMonitoring, CodexNavigationTargetChecking {
     /// integration over a `reviewRequired` the Settings row exists to surface.
     private func snapshotPreservingTrustedState(
         after error: CodexAppServerError,
-        setupStatus: HookSetupStatus,
+        setupStatus: IntegrationSetupStatus,
         presence: AgentPresence
     ) -> AgentSnapshot {
         let diagnostic = "An App Server request failed for the moment; the most recent state has been kept: \(error.localizedDescription)"
