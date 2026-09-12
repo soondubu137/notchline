@@ -233,16 +233,12 @@ protocol TerminalTabFocusing: AnyObject {
 /// Focuses the tab attached to a terminal device, through the terminal's own
 /// public scripting dictionary.
 ///
-/// **Only two hosts are scripted, and by measurement rather than by choice.**
-/// A tab can only be named if the terminal publishes the tty its shell is
-/// attached to. Terminal.app does (`tty` on `tab`) and iTerm2 does (`tty` on
-/// `session`). Ghostty publishes a full dictionary — windows, tabs, terminal
-/// surfaces, `select tab`, `activate window` — and **no tty anywhere in it**
-/// (`Ghostty.sdef`, 1.3.1, checked 2026-08-19); the only identifiers it exposes
-/// are the title and the working directory, and matching on either is the
-/// guessing the PRD forbids. kitty, WezTerm and Alacritty ship no scripting
-/// dictionary at all. All of them therefore take the documented degrade: the
-/// application is raised and the row says so.
+/// **Which hosts can be asked, and how, lives in ``TerminalHostRegistry``**,
+/// not here: this type owns the consent choreography, the deadline and the
+/// AppleScript execution, and looks the script up by the host's bundle
+/// identifier. A host with no entry takes the documented degrade — the
+/// application is raised and the row says so — and adding one is an entry in
+/// the registry, not a branch in this file.
 ///
 /// **The first click on a terminal row never focuses a tab, on purpose.**
 /// Automation consent is asked for in the background and the click degrades
@@ -288,12 +284,17 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
     /// while builds ran alongside, at 2.7 s and 2.9 s against a 2 s budget,
     /// with the deadline itself working correctly every time.
     private let scheduleDeadline: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
+    /// The hosts that can be asked to name a pane, and how. The built-in list
+    /// in production; a test hands in its own to prove that a host is an entry
+    /// and nothing else.
+    private let adapters: [TerminalHostAdapter]
     /// Hosts with a consent request already out, so a second click while the
     /// prompt is on screen does not stack another one behind it.
     private var asking: Set<String> = []
 
     init(
         timeout: TimeInterval = 5,
+        adapters: [TerminalHostAdapter] = TerminalHostRegistry.builtIn,
         permission: @escaping @Sendable (String) -> AutomationPermission = {
             AppleEventsTerminalTabFocuser.systemPermission(forHost: $0, askUserIfNeeded: false)
         },
@@ -304,6 +305,7 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
         )? = nil
     ) {
         self.timeout = timeout
+        self.adapters = adapters
         self.permission = permission
         self.requestConsent = requestConsent ?? { bundleIdentifier in
             Self.queue.async {
@@ -322,7 +324,8 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
     ) async -> TerminalTabFocus {
         guard let source = Self.script(
             forHost: application.bundleIdentifier,
-            device: device
+            device: device,
+            in: adapters
         ) else { return .unavailable }
 
         switch permission(application.bundleIdentifier) {
@@ -378,47 +381,18 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
     }
 
     /// The script that names one tab by its terminal device, or nil for a host
-    /// that cannot be asked.
-    nonisolated static func script(forHost bundleIdentifier: String, device: String) -> String? {
-        let literal = appleScriptLiteral(device)
-        switch bundleIdentifier {
-        case "com.apple.Terminal":
-            return """
-            tell application id "com.apple.Terminal"
-                repeat with theWindow in windows
-                    repeat with theTab in tabs of theWindow
-                        if tty of theTab is \(literal) then
-                            set selected of theTab to true
-                            set frontmost of theWindow to true
-                            activate
-                            return true
-                        end if
-                    end repeat
-                end repeat
-            end tell
-            return false
-            """
-        case "com.googlecode.iterm2":
-            return """
-            tell application id "com.googlecode.iterm2"
-                repeat with theWindow in windows
-                    repeat with theTab in tabs of theWindow
-                        repeat with theSession in sessions of theTab
-                            if tty of theSession is \(literal) then
-                                select theWindow
-                                select theTab
-                                select theSession
-                                activate
-                                return true
-                            end if
-                        end repeat
-                    end repeat
-                end repeat
-            end tell
-            return false
-            """
-        default:
+    /// that is not registered and so cannot be asked.
+    nonisolated static func script(
+        forHost bundleIdentifier: String,
+        device: String,
+        in adapters: [TerminalHostAdapter] = TerminalHostRegistry.builtIn
+    ) -> String? {
+        guard let adapter = TerminalHostRegistry.adapter(for: bundleIdentifier, in: adapters) else {
             return nil
+        }
+        switch adapter.paneLocator {
+        case let .appleScript(selecting):
+            return selecting(appleScriptLiteral(device))
         }
     }
 

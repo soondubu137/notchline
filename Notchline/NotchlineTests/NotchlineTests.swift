@@ -2,6 +2,7 @@ import AppKit
 import Combine
 import Darwin
 import SwiftUI
+import Synchronization
 import Testing
 @testable import Notchline
 
@@ -32734,18 +32735,27 @@ for line in sys.stdin:
         #expect(enclosing("/tmp/.app/thing") == nil)
     }
 
-    /// Only the hosts that publish a terminal device get a script.
+    /// Only the hosts that publish a terminal device get a script, and the list
+    /// of them is the registry's, not the focuser's.
     ///
-    /// Everything else takes the documented degrade rather than a script that
-    /// would have to match on a title or a working directory to find anything.
+    /// Every registered locator names the pane by the device it was handed —
+    /// the identity the kernel reports — never by a title or a working
+    /// directory. Everything unregistered takes the documented degrade, and
+    /// the five below stay unregistered until somebody measures a way in
+    /// (`TerminalHostRegistry.builtIn`).
     @Test @MainActor
-    func onlyHostsThatPublishATerminalDeviceAreScripted() {
-        let script = AppleEventsTerminalTabFocuser.script
-        #expect(script("com.apple.Terminal", "/dev/ttys001")?.contains("tty of theTab") == true)
-        #expect(
-            script("com.googlecode.iterm2", "/dev/ttys001")?.contains("tty of theSession")
-                == true
-        )
+    func onlyRegisteredHostsAreScriptedAndEveryScriptNamesThePaneByItsDevice() {
+        let registered = Set(TerminalHostRegistry.builtIn.map(\.bundleIdentifier))
+        #expect(registered == ["com.apple.Terminal", "com.googlecode.iterm2"])
+        for adapter in TerminalHostRegistry.builtIn {
+            let source = AppleEventsTerminalTabFocuser.script(
+                forHost: adapter.bundleIdentifier,
+                device: "/dev/ttys001"
+            )
+            #expect(source?.contains("tty of the") == true, "\(adapter.bundleIdentifier)")
+            #expect(source?.contains("\"/dev/ttys001\"") == true, "\(adapter.bundleIdentifier)")
+            #expect(source?.contains("tell application id \"\(adapter.bundleIdentifier)\"") == true)
+        }
         for unscripted in [
             "com.mitchellh.ghostty",
             "net.kovidgoyal.kitty",
@@ -32753,7 +32763,8 @@ for line in sys.stdin:
             "org.alacritty",
             "com.microsoft.VSCode"
         ] {
-            #expect(script(unscripted, "/dev/ttys001") == nil)
+            #expect(TerminalHostRegistry.adapter(for: unscripted) == nil)
+            #expect(AppleEventsTerminalTabFocuser.script(forHost: unscripted, device: "/dev/ttys001") == nil)
         }
         // The device reaches the script through two layers of C, so it is
         // escaped rather than trusted to keep its shape.
@@ -32761,6 +32772,43 @@ for line in sys.stdin:
             AppleEventsTerminalTabFocuser.appleScriptLiteral(#"/dev/"od\d"#)
                 == #""/dev/\"od\\d""#
         )
+    }
+
+    /// A T1 terminal is a registry entry: handed one for a host the focuser has
+    /// never heard of, it runs that host's script and reports the tab focused,
+    /// with no edit anywhere else.
+    @Test @MainActor
+    func aRegisteredHostIsFocusedThroughItsOwnLocatorAlone() async {
+        let ran = Mutex<[String]>([])
+        let focuser = AppleEventsTerminalTabFocuser(
+            adapters: [
+                TerminalHostAdapter(
+                    bundleIdentifier: "com.example.terminal",
+                    paneLocator: .appleScript { literal in "select pane \(literal)" }
+                )
+            ],
+            permission: { _ in .granted },
+            execute: { source in
+                ran.withLock { $0.append(source) }
+                return true
+            }
+        )
+        let host = HostApplication(
+            bundleIdentifier: "com.example.terminal",
+            displayName: "Example",
+            processIdentifier: 877
+        )
+        #expect(await focuser.focusTab(withTerminalDevice: "/dev/ttys004", in: host) == .focused)
+        #expect(ran.withLock { $0 } == ["select pane \"/dev/ttys004\""])
+
+        // And a host the registry it was given does not know is never asked.
+        let terminal = HostApplication(
+            bundleIdentifier: "com.apple.Terminal",
+            displayName: "Terminal",
+            processIdentifier: 878
+        )
+        #expect(await focuser.focusTab(withTerminalDevice: "/dev/ttys004", in: terminal) == .unavailable)
+        #expect(ran.withLock { $0.count } == 1)
     }
 
     /// The first click asks for Automation once and does not wait for the answer.
@@ -35908,6 +35956,7 @@ private final class ForegroundSpy: ForegroundClaiming {
 }
 
 @MainActor
+
 private final class TerminalTabFocuserSpy: TerminalTabFocusing {
     private let answer: TerminalTabFocus
     private(set) var requested: [(device: String, host: String)] = []
