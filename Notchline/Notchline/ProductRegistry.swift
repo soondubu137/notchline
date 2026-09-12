@@ -24,6 +24,28 @@ struct ProductDescriptor: Sendable {
     /// together, because the Codex navigator pre-flights a click against the
     /// Provider's own App Server connection.
     let make: @MainActor @Sendable () -> ProductModule
+    /// What this product's rows will never say, stated where the switch is.
+    ///
+    /// A Tier 0 product draws an active Turn as `Running` with the same mark
+    /// as every other — the row carries one mark and it is the timer — and
+    /// says here, once, that a wait is not among the things it can show
+    /// (`tiered-support.md` §2, the presentation decision). Nil for a product
+    /// whose rows can say everything the notch draws.
+    let declaredBoundary: String?
+
+    init(
+        kind: AgentKind,
+        settingsTitle: String,
+        setup: SetupDescription,
+        declaredBoundary: String? = nil,
+        make: @escaping @MainActor @Sendable () -> ProductModule
+    ) {
+        self.kind = kind
+        self.settingsTitle = settingsTitle
+        self.setup = setup
+        self.declaredBoundary = declaredBoundary
+        self.make = make
+    }
 
     var displayName: String {
         kind.displayName
@@ -143,6 +165,35 @@ enum ProductRegistry {
                     // is the declared boundary rather than a fallback -- see
                     // ADR 0004 and ``ProcessHostNavigator``.
                     navigator: ProcessHostNavigator(sessions: service)
+                )
+            }
+        ),
+        ProductDescriptor(
+            kind: .antigravity,
+            settingsTitle: "Antigravity CLI",
+            setup: SetupDescription(
+                configurationFileRelativeToHome: AntigravityHookVocabulary.hooksFileRelativeToHome,
+                definitionCount: AntigravityHookVocabulary().managedDefinitions.count,
+                trustStep: nil,
+                connectedDetail: "hooks installed"
+            ),
+            declaredBoundary: "Approvals and questions are not detected for Antigravity CLI; "
+                + "a row shows Running until its turn ends.",
+            make: {
+                // One kernel reading answers presence, admission and which
+                // process a row's conversation is running in; the navigator
+                // raises that process's host, as it does for Claude Code.
+                let conversations = AntigravityConversationScanner()
+                let service = HookProductProvider(
+                    agent: .antigravity,
+                    paths: .live(for: .antigravity),
+                    vocabulary: AntigravityHookVocabulary(),
+                    presence: conversations,
+                    admission: conversations
+                )
+                return ProductModule(
+                    service: service,
+                    navigator: ProcessHostNavigator(sessions: conversations)
                 )
             }
         )

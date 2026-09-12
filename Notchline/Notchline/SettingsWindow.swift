@@ -434,7 +434,10 @@ struct ProductConnectionRows: View {
         let copy = copy(for: descriptor)
         return SettingsRow(
             title: descriptor.settingsTitle,
-            caption: copy.diagnostic,
+            // A failure the product reported, or else what the product's rows
+            // will never say; never both, and the failure wins because it is
+            // the one that is happening.
+            caption: copy.diagnostic ?? descriptor.declaredBoundary,
             status: SettingsRowStatus(color: copy.color, text: copy.status)
         ) {
             HStack(spacing: 10) {

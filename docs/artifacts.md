@@ -6,7 +6,7 @@ All under `~/Library/Application Support/Notchline/`, namespaced per product (`a
 
 | File | Purpose | Written by |
 | --- | --- | --- |
-| `agents/<agent>/hook.sh` | The helper the product runs once per event, writing to the socket via `nc -U`. Mode `0700`; rewritten whenever its bytes differ from this build's version. It takes **one literal argument**: bare on a lifecycle event (`nc -w 1`, stdout thrown away), `wait` on the one event that asks a person (`nc -w` the product's own window, stdout carrying the app's answer back). `NOTCHLINE_HOOKS_OFF` in the agent's environment exits before either | `ClaudeCodeHookSetup.install()`, `CodexHookRegistrar` |
+| `agents/<agent>/hook.sh` | The helper the product runs once per event, writing to the socket via `nc -U`. Mode `0700`; rewritten whenever its bytes differ from this build's version. It takes **one literal argument**: bare on a lifecycle event (`nc -w 1`, stdout thrown away), `wait` on the one event that asks a person (`nc -w` the product's own window, stdout carrying the app's answer back) — or, for a product whose payloads do not name their event (Antigravity CLI), the event's name, which the helper writes ahead of the payload on a line of its own. `NOTCHLINE_HOOKS_OFF` in the agent's environment exits before any of them | `ManagedHooksSetup`, `CodexHookRegistrar` |
 | `agents/<agent>/hook.sock` | The Unix domain socket the listener binds. The path is kept deliberately short — `sun_path` caps at 104 bytes | `AgentHookListener.start()` |
 | `agents/<agent>/install.json` | Two dates (`installedAt`, `lastEventAt`) and a list (`eventsAwaitingTrust`), mode `0600`. `lastEventAt` is written once per launch; `eventsAwaitingTrust` names the definitions this app rewrote and has not seen fire since, and shrinks by one as each of them arrives. `installedAt` is still written and still never read | `HookIntegration` |
 | `agents/claudeCode/usage/` | An empty directory. It is only the fixed working directory for the app's own `claude -p /usage` runs, so the session registry and the hook store can tell those sessions from the user's | `ClaudeCodeUsageReader` |
@@ -15,8 +15,8 @@ Two more kinds of file are written **outside** the app's own directory — the u
 
 | File | Notes |
 | --- | --- |
-| `~/.codex/hooks.json`, `~/.claude/settings.json` | Edited in place, touching only this app's own keys. Written atomically at mode `0600`, with a byte comparison before and a read-back after |
-| `~/.codex/hooks.json.notchline-backup`, `~/.claude/settings.json.notchline-backup` | The user's file as it was immediately before this app last changed it — **refreshed on every write**, not kept from the first ([ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md), `ManagedHooksFileEditor.preserveRecoveryCopy(of:)`) |
+| `~/.codex/hooks.json`, `~/.claude/settings.json`, `~/.gemini/config/hooks.json` | Edited in place, touching only this app's own keys — in the Antigravity file, one named hook of its own, `notchline`, beside the user's. Written atomically at mode `0600`, with a byte comparison before and a read-back after |
+| `~/.codex/hooks.json.notchline-backup`, `~/.claude/settings.json.notchline-backup`, `~/.gemini/config/hooks.json.notchline-backup` | The user's file as it was immediately before this app last changed it — **refreshed on every write**, not kept from the first ([ADR 0016](adr/0016-write-the-users-claude-code-settings-and-keep-a-copy.md), `ManagedHooksFileEditor.preserveRecoveryCopy(of:)`) |
 
 Preferences live in `~/Library/Preferences/com.yinfenglu.Notchline.plist`, with seven keys: `selectedDisplayID`, `hidesCompactWings`, `namesWorkOnPill`, `drawsSurfaceOutline`, `quotaExpanded`, `recentExpanded` and `hasCompletedOnboarding`. `recentExpanded` remembers whether the Recent queue is open; like `quotaExpanded` it is absent until somebody opens that block, and the queue it governs is never itself persisted.
 

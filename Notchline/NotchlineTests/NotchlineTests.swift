@@ -9428,9 +9428,10 @@ struct NotchlineTests {
     /// Codex leads, always — the order is a product rule, not a sort result.
     @Test @MainActor
     func agentOrderIsFixedWithCodexLeading() {
-        #expect(AgentKind.allCases == [.codex, .claudeCode])
+        #expect(AgentKind.allCases == [.codex, .claudeCode, .antigravity])
         #expect(AgentKind.codex < AgentKind.claudeCode)
-        #expect(AgentKind.allCases.shuffled().sorted() == [.codex, .claudeCode])
+        #expect(AgentKind.claudeCode < AgentKind.antigravity)
+        #expect(AgentKind.allCases.shuffled().sorted() == [.codex, .claudeCode, .antigravity])
     }
 
     /// The registry is the list the store and Settings iterate, and the enum is
@@ -9451,7 +9452,7 @@ struct NotchlineTests {
     @Test
     func setupCopyIsDerivedFromTheProductsOwnDefinitions() {
         let vocabularies: [any AgentHookVocabulary] = [
-            CodexHookVocabulary(), ClaudeCodeHookVocabulary()
+            CodexHookVocabulary(), ClaudeCodeHookVocabulary(), AntigravityHookVocabulary()
         ]
         for vocabulary in vocabularies {
             let setup = ProductRegistry.descriptor(for: vocabulary.agent).setup
@@ -9467,8 +9468,12 @@ struct NotchlineTests {
         }
         #expect(ProductRegistry.descriptor(for: .codex).setup.backupName == "hooks.json.notchline-backup")
         #expect(ProductRegistry.descriptor(for: .claudeCode).setup.backupName == "settings.json.notchline-backup")
-        #expect(ProductRegistry.spokenNames == "Codex and Claude Code")
-        #expect(ProductRegistry.spokenConfigurationFiles == "~/.codex/hooks.json or ~/.claude/settings.json")
+        #expect(ProductRegistry.descriptor(for: .antigravity).setup.backupName == "hooks.json.notchline-backup")
+        #expect(ProductRegistry.spokenNames == "Codex, Claude Code and Antigravity")
+        #expect(
+            ProductRegistry.spokenConfigurationFiles
+                == "~/.codex/hooks.json, ~/.claude/settings.json or ~/.gemini/config/hooks.json"
+        )
     }
 
     /// One copy rule for every product, and the two states the hand-written
@@ -9642,7 +9647,7 @@ struct NotchlineTests {
         }
         #expect(
             mixed.reversed().sorted(by: MonitorAggregation.rowOrder).map(\.agent)
-                == [.codex, .claudeCode]
+                == AgentKind.allCases
         )
     }
 
@@ -21530,7 +21535,8 @@ for line in sys.stdin:
     func everyRegisteredHookDefinitionMapsToASignalForItsAgent() {
         let vocabularies: [any AgentHookVocabulary] = [
             CodexHookVocabulary(),
-            ClaudeCodeHookVocabulary()
+            ClaudeCodeHookVocabulary(),
+            AntigravityHookVocabulary()
         ]
         #expect(Set(vocabularies.map(\.agent)) == Set(AgentKind.allCases))
 

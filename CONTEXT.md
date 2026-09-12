@@ -6,7 +6,7 @@ Words are settled here. Any naming disagreement in code, docs or commit messages
 
 ## Products and adapters
 
-**Product** — A monitored agent product; today Codex and Claude Code. A product is user-visible: row attribution and the footer's quota rules are per product. **A hue is not** — no product owns a colour anywhere in this app, and a product is named by a badge in the user's own theme ink ([`docs/colour-v2.md`](docs/colour-v2.md)). *Matrix hue* was on this list until that decision and is banned wording now, along with *product colour* and *product ink*.
+**Product** — A monitored agent product; today Codex, Claude Code and Antigravity CLI, the last at Tier 0 (listed, not attended — [`docs/technical-explorations/multi-product-provider-architecture/tiered-support.md`](docs/technical-explorations/multi-product-provider-architecture/tiered-support.md) §2). A product is user-visible: row attribution and the footer's quota rules are per product. **A hue is not** — no product owns a colour anywhere in this app, and a product is named by a badge in the user's own theme ink ([`docs/colour-v2.md`](docs/colour-v2.md)). *Matrix hue* was on this list until that decision and is banned wording now, along with *product colour* and *product ink*.
 *Avoid:* backend, data source, integration, agent.
 
 **Provider** — The in-app adapter that translates one product's boundary signals into an `AgentSnapshot`, one per product. An implementation concept that never appears in user-visible copy.
@@ -80,7 +80,7 @@ Only the rules already asking that second question read it: summary status, prod
 
 ## Connectivity
 
-**Presence** — Whether a product is open right now, independent of whether this app can observe it. Sourced per product: Codex by whether the app is running, Claude Code by whether the active-session list is non-empty — with no app to ask, the session list is the presence signal. **Presence answers only "is it open", never "what is it doing"**: presence draws the matrix and the Turn reducer lights it, and the two must not be recombined. It has three values — open, not open, and unknown; unknown is what it takes when the only source of an answer has been failing past the trustworthy limit, and like "not open" it does not amount to Connected.
+**Presence** — Whether a product is open right now, independent of whether this app can observe it. Sourced per product: Codex by whether the app is running, Claude Code by whether the active-session list is non-empty — with no app to ask, the session list is the presence signal — and Antigravity CLI by whether an `agy` process holds a conversation's presence lock open, read off the kernel. **Presence answers only "is it open", never "what is it doing"**: presence draws the matrix and the Turn reducer lights it, and the two must not be recombined. It has three values — open, not open, and unknown; unknown is what it takes when the only source of an answer has been failing past the trustworthy limit, and like "not open" it does not amount to Connected.
 *Avoid:* availability, connection state, whether any thread is running.
 
 **Connected** — A product that is both **open** and **observable**. These are independent facts and may contradict each other — open but with hooks unregistered is an ordinary first run — so only both together count as Connected.

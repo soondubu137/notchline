@@ -3,7 +3,8 @@ import Darwin
 import Foundation
 import os
 
-/// Which process is running a session right now.
+/// Which process is running a session right now — a Claude Code session, or
+/// an Antigravity CLI conversation.
 ///
 /// Navigation needs this and the row cannot carry it: ``MonitoredSession``
 /// names a thread and a turn, and such a session's host is a *process*.
@@ -805,7 +806,8 @@ enum ProcessHostNavigationError: LocalizedError, Equatable {
     }
 }
 
-/// Takes a process-hosted row back to whatever is showing it.
+/// Takes a process-hosted row — Claude Code's, Antigravity CLI's — back to
+/// whatever is showing it.
 ///
 /// **It raises a host; it does not reopen a session.** No supported interface
 /// focuses a Claude Code session that already exists — the official deep links

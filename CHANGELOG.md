@@ -4,6 +4,22 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## Unreleased
+
+**A third product is a row: Antigravity CLI is listed.** Its switch in Settings writes two lifecycle definitions into `~/.gemini/config/hooks.json`, and a conversation's turns then appear as Running from the first model call until the turn ends. It is the first product to arrive as a folder and a registry entry rather than a rewrite, and the first with a declared boundary stated under its switch.
+
+### Added
+
+- **Antigravity CLI, listed only.** A row per conversation shows Running from a turn's first model call to its end and Completed after, named by the workspace folder, and clears when the `agy` process exits. Approvals and questions are not detected and rows have no title, which the Settings row says under its switch. (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`.)
+
+### Changed
+
+- **A row's caption in Settings can state what the product will never say.** A failure the product reported still takes the line; otherwise a product listed at a lower tier shows its declared boundary there, so the absence of an approval on its rows is announced once rather than discovered.
+
+### Known limitations
+
+Everything listed under `0.2.7` and earlier still stands, unchanged.
+
 ## 0.2.7 Alpha — 2026-09-11
 
 **The peek control arrives and retires like every other mark in the band, and a Claude Code session that has a name draws it.** Throwing `Privacy Mode` used to make the control blink, because the switch mounted and unmounted it; its box now stands in the band whether or not a peek is on offer, and only the three pills come and go. The title was in the transcript all along, behind an opening this reader's fixed window never reached.

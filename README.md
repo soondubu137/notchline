@@ -20,7 +20,7 @@
 
 ## Overview
 
-Notchline shows which sessions are working, waiting for you or completed. Hover to see monitored sessions, read previews, answer supported requests or return to the originating conversation. Displays without a notch use a compact pill. Currently supports Codex Desktop and Claude Code (Desktop + CLI).
+Notchline shows which sessions are working, waiting for you or completed. Hover to see monitored sessions, read previews, answer supported requests or return to the originating conversation. Displays without a notch use a compact pill. Currently supports Codex Desktop, Claude Code (Desktop + CLI) and, as a listed-only product, Antigravity CLI.
 
 <p align="center">
   <img src="design/assets/07-readme/notchline-anatomy.png" width="880" alt="Notchline anatomy: the compact view with the status mark, session and subagent counts, project name, unread dot and elapsed timer; and the expanded view with the live session list grouped into one block per product, recent sessions and usage.">
@@ -49,6 +49,7 @@ My screens are already full of code editors, browser windows, and communication 
 - **Existing activity** — Existing sessions appear only after a new lifecycle event establishes their state.
 - **Side chats** — Temporary side chats do not appear as rows.
 - **Claude Code navigation** — Exact session or terminal-tab selection is not always available, and full-screen hosts cannot be reached.
+- **Antigravity CLI** — Listed only: a row shows Running from a turn's first model call until it ends, with no title and no approval or question detection, and clears when the CLI process exits.
 - **Persistent history** — Recent sessions are temporary; there is no searchable archive or cross-device sync.
 - **Compatibility** — Some features depend on undocumented product behaviour and may break after updates.
 
@@ -68,7 +69,7 @@ To build from source, open `Notchline/Notchline.xcodeproj` in Xcode 26.6 or late
 
 ## Files and data
 
-- **Product configuration** — Edits `~/.codex/hooks.json` and `~/.claude/settings.json` when managing integrations, preserving unrelated settings and saving a `.notchline-backup` beside each existing file before changes.
+- **Product configuration** — Edits `~/.codex/hooks.json`, `~/.claude/settings.json` and `~/.gemini/config/hooks.json` when managing integrations, preserving unrelated settings and saving a `.notchline-backup` beside each existing file before changes.
 - **Support files** — Creates hook helpers, local sockets and installation records under `~/Library/Application Support/Notchline/`.
 - **Preferences** — Saves settings in `~/Library/Preferences/com.yinfenglu.Notchline.plist`.
 - **Quota transcripts** — Claude Code quota checks create transcripts under `~/.claude/projects/`; Notchline shows their size in Settings and does not delete them.
@@ -96,7 +97,7 @@ Introduce tiered support for more coding agents: a shared monitoring core for Tu
 | Capability | Notchline | Open Island |
 | --- | --- | --- |
 | Shared features | Notch overlay, previews, supported request answers, Codex deep links and Recent | Same core features |
-| Supported products | Codex Desktop and Claude Code (Desktop + CLI) | Also standalone Codex CLI, Cursor, Gemini CLI, OpenCode and more |
+| Supported products | Codex Desktop, Claude Code (Desktop + CLI) and Antigravity CLI (listed only) | Also standalone Codex CLI, Cursor, Gemini CLI, OpenCode and more |
 | Completed rows | Cleared using per-Thread read evidence | Visibility follows activity and process state |
 | Codex Projects | Actual Desktop Project assignments and Chats | Working-directory names |
 | Codex automatic approvals | Distinguishes automatic review from requests needing a person | No equivalent filter found |

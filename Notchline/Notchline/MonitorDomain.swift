@@ -10,6 +10,10 @@ import Foundation
 enum AgentKind: String, CaseIterable, Codable, Sendable, Comparable {
     case codex
     case claudeCode
+    /// Antigravity CLI, `agy`. Tier 0 (`tiered-support.md` §2): listed,
+    /// not attended. The raw value names its folder under this app's
+    /// support directory, so it is short enough for a socket path.
+    case antigravity
 
     var displayName: String {
         switch self {
@@ -17,6 +21,8 @@ enum AgentKind: String, CaseIterable, Codable, Sendable, Comparable {
             "Codex"
         case .claudeCode:
             "Claude Code"
+        case .antigravity:
+            "Antigravity"
         }
     }
 
