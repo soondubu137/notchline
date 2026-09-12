@@ -132,7 +132,7 @@ struct OnboardingView: View {
                 .frame(width: 52, height: 52)
 
             Text(
-                "Every Codex and Claude Code session at the top of your screen "
+                "Every \(ProductRegistry.spokenNames) session at the top of your screen "
                     + "— running, waiting on you, or finished but unseen."
             )
             .font(.system(size: 13))
@@ -143,7 +143,7 @@ struct OnboardingView: View {
         }
     }
 
-    /// The two connections, in the rows Settings uses for the same job.
+    /// The connections, in the rows Settings uses for the same job.
     ///
     /// `Recheck` sits in the footnote rather than beside the switches because
     /// turning the Codex one on is not the end of it: Codex keys hook trust to
@@ -156,9 +156,9 @@ struct OnboardingView: View {
             ProductConnectionRows()
         } footnote: {
             SettingsFootnote(
-                "Each switch writes Notchline’s hooks into ~/.codex/hooks.json "
-                    + "or ~/.claude/settings.json and takes them out again when "
-                    + "off. Both files are backed up first."
+                "Each switch writes Notchline’s hooks into "
+                    + "\(ProductRegistry.spokenConfigurationFiles) and takes them out "
+                    + "again when off. Each file is backed up first."
             ) {
                 Button("Recheck") {
                     store.refreshNow()
@@ -192,7 +192,7 @@ struct OnboardingView: View {
                 .padding(.vertical, 14)
         } footnote: {
             SettingsFootnote(
-                "Hovering opens one list — both products, most urgent first. "
+                "Hovering opens one list — every product, most urgent first. "
                     + "With nothing connected the mark is grey, or absent on a "
                     + "notched display."
             )

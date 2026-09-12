@@ -8758,7 +8758,8 @@ struct NotchlineTests {
         await service.setHoldsSnapshots(false)
         await service.releaseHeldSnapshots()
 
-        let reported = await recheck.value
+        await recheck.value
+        let reported = store.setupStatus(for: .codex)
         #expect(
             reported == .active,
             "Recheck reported \(reported); it returned before a fresh read"
@@ -8823,13 +8824,13 @@ struct NotchlineTests {
             )
         )
 
-        store.setIntegrationEnabled(true)
-        store.setIntegrationEnabled(false)
-        let settled = await store.setIntegrationEnabledAndWait(true)
+        store.setIntegrationEnabled(true, for: .codex)
+        store.setIntegrationEnabled(false, for: .codex)
+        let settled = await store.setIntegrationEnabledAndWait(true, for: .codex)
 
         #expect(settled)
-        #expect(store.integrationSwitchIsOn, "the last flip must decide")
-        #expect(store.hookSetupStatus.isIntegrationEnabled)
+        #expect(store.integrationSwitchIsOn(for: .codex), "the last flip must decide")
+        #expect(store.setupStatus(for: .codex).isIntegrationEnabled)
         #expect(await service.installCount() >= 1)
         #expect(
             await service.observedOverlappingIntegrationChange == false,
@@ -8854,12 +8855,12 @@ struct NotchlineTests {
             )
         )
 
-        store.setIntegrationEnabled(true)
-        let settled = await store.setIntegrationEnabledAndWait(false)
+        store.setIntegrationEnabled(true, for: .codex)
+        let settled = await store.setIntegrationEnabledAndWait(false, for: .codex)
 
         #expect(settled)
-        #expect(!store.integrationSwitchIsOn)
-        #expect(!store.hookSetupStatus.isIntegrationEnabled)
+        #expect(!store.integrationSwitchIsOn(for: .codex))
+        #expect(!store.setupStatus(for: .codex).isIntegrationEnabled)
         #expect(
             await service.observedOverlappingIntegrationChange == false,
             "install and remove overlapped"
@@ -8880,18 +8881,18 @@ struct NotchlineTests {
             )
         )
 
-        let installed = await store.installIntegrationHooksAndWait()
+        let installed = await store.installIntegrationHooksAndWait(for: .codex)
 
         #expect(installed)
-        #expect(store.integrationSwitchIsOn)
-        #expect(store.hookSetupStatus == .reviewRequired)
+        #expect(store.integrationSwitchIsOn(for: .codex))
+        #expect(store.setupStatus(for: .codex) == .reviewRequired)
         #expect(await service.installCount() == 1)
 
-        let removed = await store.removeIntegrationAndWait()
+        let removed = await store.removeIntegrationAndWait(for: .codex)
 
         #expect(removed)
-        #expect(!store.integrationSwitchIsOn)
-        #expect(store.hookSetupStatus == .notInstalled)
+        #expect(!store.integrationSwitchIsOn(for: .codex))
+        #expect(store.setupStatus(for: .codex) == .notInstalled)
         #expect(store.availability == .setupRequired)
         #expect(await service.removeCount() == 1)
     }
@@ -9429,6 +9430,93 @@ struct NotchlineTests {
         #expect(AgentKind.allCases == [.codex, .claudeCode])
         #expect(AgentKind.codex < AgentKind.claudeCode)
         #expect(AgentKind.allCases.shuffled().sorted() == [.codex, .claudeCode])
+    }
+
+    /// The registry is the list the store and Settings iterate, and the enum is
+    /// what rows and footer groups sort by; the two must name the same products
+    /// in the same order, or a product could be drawn in Settings and sorted
+    /// nowhere, or the reverse.
+    @Test
+    func everyProductHasOneDescriptorInEnumOrder() {
+        #expect(ProductRegistry.builtIn.map(\.kind) == AgentKind.allCases)
+        for kind in AgentKind.allCases {
+            #expect(ProductRegistry.descriptor(for: kind).kind == kind)
+        }
+    }
+
+    /// What Settings says about a product's file is read off the values the
+    /// writer uses, so the sentences cannot drift from the definitions the way
+    /// the hand-written help text did ("five", for a product writing seven).
+    @Test
+    func setupCopyIsDerivedFromTheProductsOwnDefinitions() {
+        let vocabularies: [any AgentHookVocabulary] = [
+            CodexHookVocabulary(), ClaudeCodeHookVocabulary()
+        ]
+        for vocabulary in vocabularies {
+            let setup = ProductRegistry.descriptor(for: vocabulary.agent).setup
+            #expect(setup.definitionCount == vocabulary.managedDefinitions.count)
+            #expect(setup.switchHelp.contains("\(vocabulary.managedDefinitions.count) lifecycle definitions"))
+            #expect(setup.switchHelp.contains(setup.displayPath))
+            #expect(setup.installedMessage.contains(setup.trustStep ?? setup.displayPath))
+            #expect(setup.removedMessage.contains(setup.displayPath))
+            #expect(
+                HookIntegrationPaths.live(for: vocabulary.agent).hooksConfiguration.path
+                    .hasSuffix(setup.configurationFileRelativeToHome)
+            )
+        }
+        #expect(ProductRegistry.descriptor(for: .codex).setup.backupName == "hooks.json.notchline-backup")
+        #expect(ProductRegistry.descriptor(for: .claudeCode).setup.backupName == "settings.json.notchline-backup")
+        #expect(ProductRegistry.spokenNames == "Codex and Claude Code")
+        #expect(ProductRegistry.spokenConfigurationFiles == "~/.codex/hooks.json or ~/.claude/settings.json")
+    }
+
+    /// One copy rule for every product, and the two states the hand-written
+    /// Codex rule got wrong: a registration written but never trusted said
+    /// `Connected`, and a Codex row read the merged availability, so a ready
+    /// Claude Code could make it say `Connected` on the other product's
+    /// evidence (`integration-settings-behaviour.md` §4).
+    @Test
+    func settingsCopyNeverClaimsConnectedOnAnotherProductsEvidence() {
+        let codex = ProductRegistry.descriptor(for: .codex)
+        let claudeCode = ProductRegistry.descriptor(for: .claudeCode)
+
+        let untrusted = ProductSettingsCopy(
+            descriptor: codex, setup: .reviewRequired, availability: .ready, diagnostic: nil
+        )
+        #expect(!untrusted.status.contains("Connected"))
+        #expect(untrusted.status.contains("/hooks"))
+
+        let unreachable = ProductSettingsCopy(
+            descriptor: codex, setup: .active, availability: .disconnected, diagnostic: nil
+        )
+        #expect(!unreachable.status.contains("Connected"))
+        #expect(unreachable.status.contains("Codex"))
+
+        let unanswered = ProductSettingsCopy(
+            descriptor: codex, setup: .active, availability: nil, diagnostic: nil
+        )
+        #expect(unanswered.status == "Connecting…")
+
+        // Claude Code has no trust step, so `reviewRequired` cannot mean
+        // "trust it" there; it reads as registered and takes availability.
+        let registered = ProductSettingsCopy(
+            descriptor: claudeCode, setup: .reviewRequired, availability: .ready, diagnostic: nil
+        )
+        #expect(registered.status == "Connected · hooks installed")
+
+        for descriptor in ProductRegistry.builtIn {
+            let off = ProductSettingsCopy(
+                descriptor: descriptor, setup: .notInstalled, availability: .setupRequired, diagnostic: nil
+            )
+            #expect(off.status == "Integration is off")
+            // The row's label is the product name, so the status line must not
+            // repeat it.
+            let connected = ProductSettingsCopy(
+                descriptor: descriptor, setup: .active, availability: .ready, diagnostic: nil
+            )
+            #expect(connected.status.hasPrefix("Connected · "))
+            #expect(!connected.status.contains(descriptor.settingsTitle))
+        }
     }
 
     /// Availability only speaks for the aggregate while it is not ready.
@@ -30635,7 +30723,8 @@ for line in sys.stdin:
         #expect(store.diagnostic(for: .codex) == reported)
         #expect(store.diagnostic(for: .claudeCode) == nil)
 
-        let codex = ProductSettingsCopy.codex(
+        let codex = ProductSettingsCopy(
+            descriptor: ProductRegistry.descriptor(for: .codex),
             setup: .active,
             availability: .ready,
             diagnostic: store.diagnostic(for: .codex)
@@ -30646,7 +30735,8 @@ for line in sys.stdin:
         // repeat it.
         #expect(!codex.status.contains("Codex Desktop"))
 
-        let claudeCode = ProductSettingsCopy.claudeCode(
+        let claudeCode = ProductSettingsCopy(
+            descriptor: ProductRegistry.descriptor(for: .claudeCode),
             setup: .active,
             availability: .ready,
             diagnostic: store.diagnostic(for: .claudeCode)
@@ -30658,7 +30748,8 @@ for line in sys.stdin:
 
         // A registration that stopped matching keeps its own sentence, and the
         // report rides under it rather than replacing it.
-        let stale = ProductSettingsCopy.claudeCode(
+        let stale = ProductSettingsCopy(
+            descriptor: ProductRegistry.descriptor(for: .claudeCode),
             setup: .repairRequired,
             availability: .ready,
             diagnostic: reported
@@ -30817,7 +30908,8 @@ for line in sys.stdin:
         // What the user actually reads. The headline names none of the three
         // ways of being registered and blind, because the diagnostic under it
         // names the one that happened.
-        let card = ProductSettingsCopy.claudeCode(
+        let card = ProductSettingsCopy(
+            descriptor: ProductRegistry.descriptor(for: .claudeCode),
             setup: .active,
             availability: .disconnected,
             diagnostic: noCommand
@@ -33272,8 +33364,8 @@ for line in sys.stdin:
         store.applyForTesting(
             makeAgentSnapshot(.codex, availability: .ready, setupStatus: .active)
         )
-        #expect(store.integrationSwitchIsOn)
-        #expect(store.hookSetupStatus == .active)
+        #expect(store.integrationSwitchIsOn(for: .codex))
+        #expect(store.setupStatus(for: .codex) == .active)
 
         store.applyForTesting(
             makeAgentSnapshot(
@@ -33282,8 +33374,8 @@ for line in sys.stdin:
                 setupStatus: .notInstalled
             )
         )
-        #expect(store.integrationSwitchIsOn)
-        #expect(store.hookSetupStatus == .active)
+        #expect(store.integrationSwitchIsOn(for: .codex))
+        #expect(store.setupStatus(for: .codex) == .active)
     }
 
     private func makeSession(

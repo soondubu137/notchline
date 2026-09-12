@@ -1,4 +1,4 @@
-// Shared application state and display geometry for the Codex monitor.
+// Shared application state and display geometry for the monitor.
 import AppKit
 import Combine
 
@@ -2106,16 +2106,6 @@ struct ConnectionStabilityGate {
 
 @MainActor
 final class MonitorStore: ObservableObject {
-    /// Which product an integration call means when it does not say.
-    ///
-    /// Every switch in this store is per product (ADR 0016 gave Claude Code one
-    /// too), and none of the state below is shared between them: installing or
-    /// removing one product's hooks can never move the other product's switch.
-    /// This default exists so the no-argument spelling still reads as Codex,
-    /// which is what it has always meant.
-    static let defaultIntegrationAgent = AgentKind.codex
-    private static let liveService = LiveCodexMonitorService()
-    private static let claudeCodeService = ClaudeCodeMonitorService()
     static let shared = makeShared()
 
     /// The store the product runs on, and nothing at all when this process is
@@ -2140,27 +2130,26 @@ final class MonitorStore: ObservableObject {
                 preferences: .standard
             )
         }
+        // One module per registered product, and nothing here names one: a
+        // product contributes nothing until its hooks are registered (an
+        // unregistered product reports setupRequired, which loses to any
+        // product that is ready and to any product that has a row), so a user
+        // who runs one product sees exactly what they would with it alone.
+        let modules = ProductRegistry.builtIn.map { descriptor in
+            (kind: descriptor.kind, module: descriptor.make())
+        }
         return MonitorStore(
-            // Claude Code contributes nothing until its hooks are registered: an
-            // unregistered product reports setupRequired, which loses to any
-            // product that is ready and to any product that has a row. A user who
-            // only runs Codex sees exactly what they saw before.
-            services: [liveService, claudeCodeService],
-            navigator: AgentNavigationRouter([
-                .codex: CodexDesktopNavigator(targetChecker: liveService),
-                // Raises the host rather than reopening the session, which is the
-                // declared boundary rather than a fallback -- see ADR 0004 and
-                // ``ClaudeCodeNavigator``.
-                .claudeCode: ClaudeCodeNavigator(sessions: claudeCodeService)
-            ]),
+            services: modules.map(\.module.service),
+            navigator: AgentNavigationRouter(
+                Dictionary(uniqueKeysWithValues: modules.map { ($0.kind, $0.module.navigator) })
+            ),
             initialSnapshot: .connecting,
             preferences: .standard,
             // Every provider's "ask me again" edges on one stream, so a late
             // answer from any of them wakes the loop.
-            refreshEvents: DirectoryChangeWatcher.merged([
-                liveService.stateChangeEvents,
-                claudeCodeService.stateChangeEvents
-            ])
+            refreshEvents: DirectoryChangeWatcher.merged(
+                modules.map(\.module.service.stateChangeEvents)
+            )
         )
     }
 
@@ -2706,7 +2695,7 @@ final class MonitorStore: ObservableObject {
             forKey: Self.onboardingDefaultsKey
         ) ?? false
         self.lastIntegrationMessage = snapshots.first?.diagnostic
-            ?? "Waiting for Codex data"
+            ?? "Waiting for the first refresh"
 
         if !services.isEmpty {
             startMonitoring()
@@ -4465,23 +4454,6 @@ final class MonitorStore: ObservableObject {
         PanelMetrics.surfaceBottomCornerRadius(panelHeight: compactHeight)
     }
 
-    var integrationSummary: String {
-        switch availability {
-        case .setupRequired:
-            "Codex integration not set up"
-        case .connecting:
-            "Connecting to the Codex App Server"
-        case .ready:
-            "Codex live monitoring connected"
-        case .updateAgent:
-            "Codex needs updating"
-        case .unsupportedVersion:
-            "This version of Codex does not support the required protocol"
-        case .disconnected:
-            "Codex live monitoring not connected"
-        }
-    }
-
     func selectDisplay(id: String) {
         guard displays.contains(where: { $0.id == id }) else { return }
 
@@ -4740,13 +4712,11 @@ final class MonitorStore: ObservableObject {
         return true
     }
 
-    @discardableResult
-    func recheckIntegrationAndWait() async -> HookSetupStatus {
+    func recheckIntegrationAndWait() async {
         await refreshAndWait()
-        return hookSetupStatus
     }
 
-    func installIntegrationHooks(for agent: AgentKind = MonitorStore.defaultIntegrationAgent) {
+    func installIntegrationHooks(for agent: AgentKind) {
         Task { [weak self] in
             _ = await self?.installIntegrationHooksAndWait(for: agent)
         }
@@ -4767,10 +4737,7 @@ final class MonitorStore: ObservableObject {
     /// decides where things end up. Intermediate flips are collapsed rather than
     /// replayed -- nobody wants three installs because the switch was tapped
     /// three times.
-    func setIntegrationEnabled(
-        _ isEnabled: Bool,
-        for agent: AgentKind = MonitorStore.defaultIntegrationAgent
-    ) {
+    func setIntegrationEnabled(_ isEnabled: Bool, for agent: AgentKind) {
         guard isEnabled != desiredIntegrationEnabled[agent]
             ?? integrationSwitchIsOn(for: agent) else {
             return
@@ -4783,10 +4750,7 @@ final class MonitorStore: ObservableObject {
 
     /// Applies the desired integration state, and waits for it to settle.
     @discardableResult
-    func setIntegrationEnabledAndWait(
-        _ isEnabled: Bool,
-        for agent: AgentKind = MonitorStore.defaultIntegrationAgent
-    ) async -> Bool {
+    func setIntegrationEnabledAndWait(_ isEnabled: Bool, for agent: AgentKind) async -> Bool {
         setIntegrationEnabled(isEnabled, for: agent)
         await integrationTasks[agent]?.value
         return integrationSwitchIsOn(for: agent) == isEnabled
@@ -4843,9 +4807,7 @@ final class MonitorStore: ObservableObject {
     }
 
     @discardableResult
-    func installIntegrationHooksAndWait(
-        for agent: AgentKind = MonitorStore.defaultIntegrationAgent
-    ) async -> Bool {
+    func installIntegrationHooksAndWait(for agent: AgentKind) async -> Bool {
         guard let service = integrationService(for: agent),
               !integrationBusyAgents.contains(agent) else {
             return false
@@ -4858,7 +4820,7 @@ final class MonitorStore: ObservableObject {
             let status = await service.hookSetupStatus()
             setSetupStatus(status, for: agent)
             setSwitch(status.isIntegrationEnabled, for: agent)
-            lastIntegrationMessage = Self.installedMessage(for: agent)
+            lastIntegrationMessage = ProductRegistry.descriptor(for: agent).setup.installedMessage
             return true
         } catch {
             lastIntegrationMessage = "Could not install the hooks: \(error.localizedDescription)"
@@ -4866,16 +4828,14 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    func removeIntegration(for agent: AgentKind = MonitorStore.defaultIntegrationAgent) {
+    func removeIntegration(for agent: AgentKind) {
         Task { [weak self] in
             _ = await self?.removeIntegrationAndWait(for: agent)
         }
     }
 
     @discardableResult
-    func removeIntegrationAndWait(
-        for agent: AgentKind = MonitorStore.defaultIntegrationAgent
-    ) async -> Bool {
+    func removeIntegrationAndWait(for agent: AgentKind) async -> Bool {
         guard let service = integrationService(for: agent),
               !integrationBusyAgents.contains(agent) else {
             return false
@@ -4910,42 +4870,11 @@ final class MonitorStore: ObservableObject {
                 observedAt: clock.now()
             )
             setSwitch(false, for: agent)
-            lastIntegrationMessage = Self.removedMessage(for: agent)
+            lastIntegrationMessage = ProductRegistry.descriptor(for: agent).setup.removedMessage
             return true
         } catch {
             lastIntegrationMessage = "Could not remove the integration: \(error.localizedDescription)"
             return false
-        }
-    }
-
-    /// What to say once a product's definitions are in its file.
-    ///
-    /// Per product because the next step is: Codex keys trust to each
-    /// definition's place in the file and will not run one until the user says
-    /// so, while Claude Code runs what is registered.
-    ///
-    /// Both products get the copy beside their file, and only Claude Code's
-    /// message names it — not because the Codex one is not made, but because
-    /// that message has a required action to carry and a second sentence would
-    /// compete with it. The disclosure that has to land is the one *before* the
-    /// switch is flipped, and both footnotes name both files.
-    nonisolated private static func installedMessage(for agent: AgentKind) -> String {
-        switch agent {
-        case .codex:
-            "Hooks installed; open /hooks in Codex and trust the new definitions."
-        case .claudeCode:
-            "Hooks written to ~/.claude/settings.json. Your file as it was is beside "
-                + "it, as settings.json.notchline-backup."
-        }
-    }
-
-    nonisolated private static func removedMessage(for agent: AgentKind) -> String {
-        switch agent {
-        case .codex:
-            "The hooks managed by Notchline have been removed from ~/.codex/hooks.json."
-        case .claudeCode:
-            "The hooks managed by Notchline have been removed from ~/.claude/settings.json; "
-                + "nothing else in it was touched."
         }
     }
 
@@ -5214,7 +5143,7 @@ final class MonitorStore: ObservableObject {
             agents: snapshot.agents,
             sessions: undismissedSessions
         )
-        let integrationMessage = snapshot.diagnostic ?? "Codex data refreshed"
+        let integrationMessage = snapshot.diagnostic ?? "Data refreshed"
 
         if availability != snapshot.availability {
             availability = snapshot.availability
@@ -5561,19 +5490,9 @@ final class MonitorStore: ObservableObject {
         setupStatusByAgent[agent] ?? .notInstalled
     }
 
-    /// The Codex registration, which is what the no-argument spelling has
-    /// always meant.
-    var hookSetupStatus: HookSetupStatus {
-        setupStatus(for: Self.defaultIntegrationAgent)
-    }
-
     /// Where one product's switch is sitting.
     func integrationSwitchIsOn(for agent: AgentKind) -> Bool {
         integrationSwitchIsOnByAgent[agent] ?? false
-    }
-
-    var integrationSwitchIsOn: Bool {
-        integrationSwitchIsOn(for: Self.defaultIntegrationAgent)
     }
 
     /// Whether that product's hooks are being written or removed right now, and

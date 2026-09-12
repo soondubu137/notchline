@@ -715,7 +715,7 @@ Light and dark are **one set of nodes**: every colour binds to the two-mode `Col
 
 ### 8.1 Products
 
-`Codex Desktop` and `Claude Code` are two rows in one card, not two groups. A third product costs a row, not a new panel.
+`Codex Desktop` and `Claude Code` are two rows in one card, not two groups. A third product costs a row, not a new panel — and since 2026-09-11 not even that: the rows are drawn from `ProductRegistry.builtIn`, one per descriptor, with the title, tooltip and status sentence read off the descriptor.
 
 - Each row has the product name on the left and a caption beginning with a status dot, stating the connection conclusion and capability (`Connected · compatible version`, `Connected · hooks installed`).
 - **Beneath that caption there can be one more line, carrying failures that product reported itself — not on the board, the third divergence.** For example `Ignored 2 hook payloads that could not be read.` or `Claude Code is not running the PreToolUse hook, so Input needed and Approval needed cannot be shown.` It **appears only when there is something to say**: a permanent empty line for a failure that is not happening reads as though it is. This line is the only thing in this window that exists to report failure — integration failure in this product is naturally silent and the interface goes on saying `Connected` — so it accumulates for the run rather than reporting once and clearing ([`PRD.md`](PRD.md) §12, CR-029). It costs the same as the `Quota reading transcripts` row's "the card grows a line by itself", with the difference that when this line grows, the user needs it.

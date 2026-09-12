@@ -193,39 +193,26 @@ nonisolated struct HookIntegrationPaths: Sendable {
         hooksConfiguration.appendingPathExtension("notchline-backup")
     }
 
+    /// The Codex paths, which is what the no-argument spelling has always
+    /// meant.
     nonisolated static func live(
-        agent: AgentKind = .codex,
         fileManager: FileManager = .default
     ) -> HookIntegrationPaths {
-        HookIntegrationPaths(
-            supportDirectory: supportDirectory(fileManager: fileManager),
-            hooksConfiguration: fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent(".codex/hooks.json"),
-            agent: agent
-        )
+        live(for: .codex, fileManager: fileManager)
     }
 
-    /// The paths one product's live monitoring is actually built over, chosen
-    /// by kind.
-    ///
-    /// The two spellings that already exist answer for one product each —
-    /// ``live(agent:fileManager:)`` for Codex and
-    /// ``liveClaudeCode(fileManager:)`` for Claude Code — so a caller holding
-    /// an ``AgentKind`` and nothing else has no way through them. Settings is
-    /// that caller: its Products card offers to open the folder each product's
-    /// hooks are registered in, for a product it knows only by kind. Routed to
-    /// those two rather than spelling either path a second time, so a file that
-    /// moves moves for the button as well as for the writer.
+    /// One product's paths: the shared support directory, and the file that
+    /// product's ``ProductDescriptor`` says its hooks are registered in.
     nonisolated static func live(
         for agent: AgentKind,
         fileManager: FileManager = .default
     ) -> HookIntegrationPaths {
-        switch agent {
-        case .codex:
-            HookIntegrationPaths.live(fileManager: fileManager)
-        case .claudeCode:
-            HookIntegrationPaths.liveClaudeCode(fileManager: fileManager)
-        }
+        HookIntegrationPaths(
+            supportDirectory: supportDirectory(fileManager: fileManager),
+            hooksConfiguration: ProductRegistry.descriptor(for: agent).setup
+                .configurationFile(fileManager: fileManager),
+            agent: agent
+        )
     }
 
     nonisolated static func supportDirectory(fileManager: FileManager) -> URL {

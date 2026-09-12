@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Proposal.** Written from a full read of the code on this date; no implementation, contract, hook registration or test has changed. Supersedes §1.1 of [`README.md`](README.md) where the two disagree (§10 says where) |
+| Status | **Agreed 2026-09-11; implementation under way.** Supersedes §1.1 of [`README.md`](README.md) where the two disagree (§10 says where). Progress against §8: **P1 landed** the same day (`ProductRegistry`, one Settings copy rule, generated setup sentences, the composition root read from the registry). P0's generic harness is deferred to P4, where the module shape it needs first exists; P0's registry-iterating tests landed with P1 |
 | Investigated | 2026-09-11 |
 | Source baseline | Local `master`, `288d19a` (0.2.7 Alpha) |
 | Question | Codex and Claude Code are each supported well and each supported differently, and every part of that support was written twice. What is the smallest ladder of promises a third product can climb, and what has to move in the code so that climbing it costs a module rather than a rewrite? Same question for terminals |

@@ -216,15 +216,9 @@ actor ClaudeCodeHookSetup {
 }
 
 extension HookIntegrationPaths {
-    /// Where Claude Code keeps the settings the hooks are registered in.
     nonisolated static func liveClaudeCode(
         fileManager: FileManager = .default
     ) -> HookIntegrationPaths {
-        HookIntegrationPaths(
-            supportDirectory: supportDirectory(fileManager: fileManager),
-            hooksConfiguration: fileManager.homeDirectoryForCurrentUser
-                .appendingPathComponent(".claude/settings.json"),
-            agent: .claudeCode
-        )
+        live(for: .claudeCode, fileManager: fileManager)
     }
 }

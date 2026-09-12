@@ -61,19 +61,25 @@ struct AppSettingsView: View {
 
     // MARK: - Products
 
-    /// Both products are rows in one card, not two groups.
+    /// Every product is a row in one card, not a group of its own.
     ///
-    /// A third product costs a row, not a pane. Both rows now carry a switch:
+    /// A third product costs a row, not a pane: the rows are drawn from
+    /// ``ProductRegistry/builtIn``, and every row carries a switch, because
     /// ADR 0016 lets this app write `~/.claude/settings.json` the way it has
-    /// always written `~/.codex/hooks.json`, so there is no longer a product
-    /// whose registration it can describe but not make.
+    /// always written `~/.codex/hooks.json`, so there is no product whose
+    /// registration it can describe but not make.
     private var productsGroup: some View {
         SettingsGroup(header: "Products") {
             ProductConnectionRows()
 
-            if let transcripts = store.diskFootprints[.claudeCode] {
-                SettingsSeparator()
-                claudeCodeTranscriptRow(transcripts)
+            // Only the products that leave anything have a key here; the
+            // presence of the key is what decides whether the row is drawn
+            // (CC-020), so this is not a filter on the value.
+            ForEach(store.diskFootprints.keys.sorted(), id: \.self) { agent in
+                if let report = store.diskFootprints[agent] {
+                    SettingsSeparator()
+                    transcriptRow(report, for: agent)
+                }
             }
         } footnote: {
             SettingsFootnote(
@@ -111,10 +117,10 @@ struct AppSettingsView: View {
     /// Claude Code on it never starts one — the refresh stops at the setup gate
     /// — so the row there reads `Unavailable` from the first refresh rather
     /// than claiming progress on work that is never going to begin.
-    private func claudeCodeTranscriptRow(_ report: AgentDiskFootprintReport) -> some View {
+    private func transcriptRow(_ report: AgentDiskFootprintReport, for agent: AgentKind) -> some View {
         SettingsRow(
             title: "Quota reading transcripts",
-            caption: "Each reading leaves one in Claude Code's project folder. "
+            caption: "Each reading leaves one in \(agent.displayName)'s project folder. "
                 + "Notchline never deletes them."
         ) {
             HStack(spacing: 10) {
@@ -399,64 +405,49 @@ struct AppSettingsView: View {
     }
 }
 
-/// The two connections the app needs, as the two rows that ask for them.
+/// The connections the app needs, as the rows that ask for them — one per
+/// registered product.
 ///
-/// Shared by first run and Settings rather than drawn twice. Both windows ask
-/// for exactly the same thing, and since ADR 0016 they ask for it in exactly
-/// the same shape on both rows: one switch each. The asymmetry these rows used
-/// to make visible — a switch for Codex, a paste-it-yourself card for Claude
-/// Code — is gone, and with it the card, the snippet and the copy button.
+/// Shared by first run and Settings rather than drawn twice. Every row asks for
+/// the same thing in the same shape: one switch (ADR 0016). The rows used to be
+/// two hand-written blocks, and the help text under one of them said "five"
+/// definitions for a product that writes seven; everything a row says about
+/// its product is now read off its ``ProductDescriptor``, so a third product is
+/// an element in the registry and nothing here.
 ///
-/// What is left of the difference is in the footnote each window draws under
-/// this view, because the two switches write different files and only one of
-/// them is followed by a trust step.
+/// What is left of the difference between products is in the footnote each
+/// window draws under this view, because the switches write different files
+/// and only some of them are followed by a trust step.
 struct ProductConnectionRows: View {
     @EnvironmentObject private var store: MonitorStore
 
     var body: some View {
-        SettingsRow(
-            title: "Codex Desktop",
-            caption: codexCopy.diagnostic,
-            status: SettingsRowStatus(
-                color: codexCopy.color,
-                text: codexCopy.status
-            )
-        ) {
-            HStack(spacing: 10) {
-                Toggle("Codex integration", isOn: integrationSelection(for: .codex))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .disabled(store.isIntegrationBusy(for: .codex))
-                    .help(
-                        "Installs or removes the five Codex lifecycle definitions together, "
-                            + "after copying ~/.codex/hooks.json to hooks.json.notchline-backup."
-                    )
-
-                ShowInFinderButton(target: hookConfigurationTarget(for: .codex))
+        ForEach(Array(ProductRegistry.builtIn.enumerated()), id: \.element.kind) { index, descriptor in
+            if index > 0 {
+                SettingsSeparator()
             }
+            row(for: descriptor)
         }
+    }
 
-        SettingsSeparator()
-
-        SettingsRow(
-            title: "Claude Code",
-            caption: claudeCodeCopy.diagnostic,
-            status: SettingsRowStatus(
-                color: claudeCodeCopy.color,
-                text: claudeCodeCopy.status
-            )
+    private func row(for descriptor: ProductDescriptor) -> some View {
+        let copy = copy(for: descriptor)
+        return SettingsRow(
+            title: descriptor.settingsTitle,
+            caption: copy.diagnostic,
+            status: SettingsRowStatus(color: copy.color, text: copy.status)
         ) {
             HStack(spacing: 10) {
-                Toggle("Claude Code integration", isOn: integrationSelection(for: .claudeCode))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .disabled(store.isIntegrationBusy(for: .claudeCode))
-                    .help(
-                        "Writes the lifecycle definitions into ~/.claude/settings.json, "
-                            + "after copying that file to settings.json.notchline-backup."
-                    )
+                Toggle(
+                    "\(descriptor.displayName) integration",
+                    isOn: integrationSelection(for: descriptor.kind)
+                )
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .disabled(store.isIntegrationBusy(for: descriptor.kind))
+                .help(descriptor.setup.switchHelp)
 
-                ShowInFinderButton(target: hookConfigurationTarget(for: .claudeCode))
+                ShowInFinderButton(target: hookConfigurationTarget(for: descriptor.kind))
             }
         }
     }
@@ -470,19 +461,16 @@ struct ProductConnectionRows: View {
         .revealing(HookIntegrationPaths.live(for: agent).hooksConfiguration)
     }
 
-    private var codexCopy: ProductSettingsCopy {
-        .codex(
-            setup: store.hookSetupStatus,
-            availability: store.availability,
-            diagnostic: store.diagnostic(for: .codex)
-        )
-    }
-
-    private var claudeCodeCopy: ProductSettingsCopy {
-        .claudeCode(
-            setup: store.setupStatus(for: .claudeCode),
-            availability: store.agentAvailability(for: .claudeCode),
-            diagnostic: store.diagnostic(for: .claudeCode)
+    /// Read off that product's own answer, never the merged one. The Codex row
+    /// used to read `store.availability`, which is ready when *any* product is,
+    /// so a ready Claude Code made the Codex row say `Connected` on Claude
+    /// Code's evidence (`integration-settings-behaviour.md` §4).
+    private func copy(for descriptor: ProductDescriptor) -> ProductSettingsCopy {
+        ProductSettingsCopy(
+            descriptor: descriptor,
+            setup: store.setupStatus(for: descriptor.kind),
+            availability: store.agentAvailability(for: descriptor.kind),
+            diagnostic: store.diagnostic(for: descriptor.kind)
         )
     }
 
@@ -629,6 +617,32 @@ nonisolated enum FinderRevealTarget: Equatable {
 ///
 /// The product name is the row's label, so the status line must not repeat it:
 /// `Codex Desktop / Codex Desktop connected` reads as a stutter.
+///
+/// **One rule for every product, reading the product's own availability.**
+/// There used to be a factory per product with different control flow, and the
+/// two disagreed in ways the behaviour document had to list as smells: the
+/// Codex one read the merged availability, and let a registration written but
+/// never trusted fall through to `Connected`. The rule now, top to bottom:
+///
+/// 1. A registration that does not match this build gets its own sentence,
+///    because it is the failure with no other symptom. An event left out
+///    simply never arrives; a handler in an older shape does arrive and
+///    misbehaves quietly — an `http` handler from before ADR 0013 posts every
+///    event to a port nothing listens on. Neither reports an error anywhere.
+///    The app can repair it and the switch already reads off in this state, so
+///    the sentence says to turn it on.
+/// 2. Off is off.
+/// 3. Written but never seen to fire, on a product with a trust step, says what
+///    the step is. Only Codex can be here: Claude Code has no trust step and
+///    never reports `reviewRequired`.
+/// 4. Registered, and then whatever the product's own boundary says about
+///    being able to watch. **`Connected` is a claim about being able to
+///    watch**, so it needs `.ready`; registered and `.disconnected` is one
+///    neutral headline for every way of being registered and blind — the
+///    helper and its socket, no command to run, a command that will not
+///    answer, an App Server that will not start — because each writes its own
+///    diagnostic, that sentence is drawn directly underneath, and a headline
+///    naming one of them would be wrong about the others.
 struct ProductSettingsCopy: Equatable {
     /// The caption line the status dot starts.
     let status: String
@@ -640,93 +654,45 @@ struct ProductSettingsCopy: Equatable {
     /// that is.
     let diagnostic: String?
 
-    static func codex(
-        setup: HookSetupStatus,
-        availability: MonitorAvailability,
-        diagnostic: String?
-    ) -> Self {
-        if setup == .repairRequired {
-            return Self(
-                status: "Integration needs repair",
-                color: MacOSWindowColor.statusWarning,
-                diagnostic: diagnostic
-            )
-        }
-        if setup == .notInstalled {
-            return Self(
-                status: "Integration is off",
-                color: MacOSWindowColor.statusIdle,
-                diagnostic: diagnostic
-            )
-        }
-
-        let status = switch availability {
-        case .ready: "Connected · compatible version"
-        case .setupRequired: "Integration not installed"
-        case .connecting: "Connecting…"
-        case .updateAgent: "Update Codex Desktop"
-        case .unsupportedVersion: "Version unsupported"
-        case .disconnected: "Disconnected"
-        }
-        let color = switch availability {
-        case .ready: MacOSWindowColor.statusHealthy
-        case .connecting: MacOSWindowColor.statusPending
-        case .setupRequired: MacOSWindowColor.statusIdle
-        case .updateAgent, .unsupportedVersion, .disconnected: MacOSWindowColor.statusBlocked
-        }
-        return Self(status: status, color: color, diagnostic: diagnostic)
-    }
-
-    /// A registration that does not match this build gets its own sentence,
-    /// because it is the failure with no other symptom. An event left out
-    /// simply never arrives; a handler in an older shape does arrive and
-    /// misbehaves quietly — an `http` handler from before ADR 0013 posts every
-    /// event to a port nothing listens on, which is a line in the user's
-    /// session each time and nothing at all in the notch. Neither reports an
-    /// error anywhere.
-    ///
-    /// It survives ADR 0016 rather than being folded into "off". The app can
-    /// repair it now, and the switch already reads off in this state — so the
-    /// sentence says to turn it on, which strips the stale handler and writes
-    /// the current one. Until somebody does, the notch stays empty and nothing
-    /// anywhere reports an error, which is why this cannot share a line with
-    /// "the integration is off".
-    ///
-    /// **`Connected` is a claim about being able to watch, and this line used
-    /// to make it on the registration alone.** Codex's copy above has always
-    /// read `availability`; this one read `setup`, so it said
-    /// `Connected · hooks installed` on a machine drawing no Claude Code mark
-    /// and no rows — which is exactly the state a user hits when they enable
-    /// the integration on a machine with no `claude` for the session list to
-    /// run (`ClaudeExecutableLocator`). It now defers to availability the way
-    /// the Codex line does, and to one neutral headline for all three ways of
-    /// being registered and blind: the helper and its socket, no command to
-    /// run, and a command that will not answer. **The headline stays neutral
-    /// on purpose** — each of the three writes its own diagnostic, that
-    /// sentence is drawn directly underneath this one, and a headline naming
-    /// one of the three would be wrong about the other two.
-    static func claudeCode(
+    init(
+        descriptor: ProductDescriptor,
         setup: HookSetupStatus,
         availability: MonitorAvailability?,
         diagnostic: String?
-    ) -> Self {
-        let status: String
-        let color: Color
+    ) {
+        self.diagnostic = diagnostic
         switch setup {
-        case .active where availability == .disconnected:
-            status = "Registered · not watching Claude Code"
-            color = MacOSWindowColor.statusWarning
-        case .active:
-            status = "Connected · hooks installed"
-            color = MacOSWindowColor.statusHealthy
         case .repairRequired:
             status = "Registration is out of date · turn the switch on to rewrite it"
             color = MacOSWindowColor.statusWarning
-        default:
+        case .notInstalled:
             status = "Integration is off"
             color = MacOSWindowColor.statusIdle
+        case .reviewRequired where descriptor.setup.trustStep != nil:
+            status = "Installed · \(descriptor.setup.trustStep ?? "")"
+            color = MacOSWindowColor.statusPending
+        case .reviewRequired, .active:
+            switch availability {
+            case .ready:
+                status = "Connected · \(descriptor.setup.connectedDetail)"
+                color = MacOSWindowColor.statusHealthy
+            case .connecting, nil:
+                status = "Connecting…"
+                color = MacOSWindowColor.statusPending
+            case .setupRequired:
+                status = "Integration not installed"
+                color = MacOSWindowColor.statusIdle
+            case .updateAgent:
+                status = "Update \(descriptor.settingsTitle)"
+                color = MacOSWindowColor.statusBlocked
+            case .unsupportedVersion:
+                status = "Version unsupported"
+                color = MacOSWindowColor.statusBlocked
+            case .disconnected:
+                status = "Registered · not watching \(descriptor.displayName)"
+                color = MacOSWindowColor.statusWarning
+            }
         }
-        return Self(status: status, color: color, diagnostic: diagnostic)
     }
 }
 
