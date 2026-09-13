@@ -31,19 +31,7 @@ protocol HookRegistrationSetup: Sendable {
     func uninstall() async throws
 }
 
-/// What a refresh may do with a product's hooks, decided before anything is
-/// drained.
-nonisolated enum HookTransportGate: Sendable {
-    /// The registration is complete and the socket is bound.
-    case open(IntegrationSetupStatus)
-    /// Nothing can be listed, and the sentence the settings card says about
-    /// why.
-    case closed(
-        availability: MonitorAvailability,
-        setupStatus: IntegrationSetupStatus,
-        diagnostic: String
-    )
-}
+typealias HookTransportGate = MonitoringSourceGate
 
 /// One product's hook transport, wired once: the setup that writes its
 /// registration and helper, the reducer its events land in, and the socket
@@ -57,7 +45,7 @@ nonisolated enum HookTransportGate: Sendable {
 /// of the three (`tiered-support.md` §5.4).
 ///
 /// Not an actor: the three it holds are, and it adds no state of its own.
-struct HookLifecycleSource: Sendable {
+struct HookLifecycleSource: MonitoringLifecycleSource {
     let setup: any HookRegistrationSetup
     let repository: HookEventRepository
     let listener: AgentHookListener

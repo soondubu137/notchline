@@ -96,6 +96,9 @@ Antigravity's two surfaces are one engine reading one `~/.gemini/config/hooks.js
 
 ## 6. Implementation and verification
 
+The shared entry is now typed `MonitoringEvidence` into `MonitoringRepository`; `HookEvidenceBoundary` interprets native Hooks before submission. `ProductMonitoringRuntime` accepts any `MonitoringLifecycleSource`, with `HookProductProvider` supplying the Hooks composition. [MonitoringEvidenceConformanceTests](../Notchline/NotchlineTests/MonitoringEvidenceConformanceTests.swift) verify lifecycle, progress, wait projection/resolution, subagent isolation and observation-epoch rejection through a source with no Hooks, JSON or socket. This changes no product coverage: concurrent request collections, structured answers, transport-neutral answer handles/results and general Settings/source scheduling remain separate packages in [the implementation plan](product-generalisation-plan.md).
+
+
 The levels classify existing capabilities; they do not select reducer behaviour. `AgentMonitoring` supplies observation, `RowContentSource` supplies row content, `AgentHookVocabulary` supplies supported events and request projection, and `AnswerDelivering` supplies an answer path. Read evidence, navigation and usage retain their own contracts. No level field or runtime capability matrix is implemented merely to repeat this document.
 
 The implementation and tests must establish each promised behaviour, not just a level number:

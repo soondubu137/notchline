@@ -3,9 +3,9 @@ import Foundation
 
 /// What one agent is asking a person, in the shapes a row can draw.
 ///
-/// **A value, not a schema.** Everything the surface needs was decided inside
-/// ``HookEventRepository``'s actor, at the moment the wait opened and while the
-/// vocabulary, the event name and the tool name were all still in hand. The
+/// **A value, not a schema.** The native boundary projects the body before submitting typed evidence.
+/// ``MonitoringRepository`` attaches the established correlation identity
+/// and handle while reducing the wait; it parses no native request schema. The
 /// panel receives a request it can only render, which is the UI-stays-passive
 /// invariant (`AGENTS.md` §6) applied to the one payload this app had never
 /// carried.
@@ -128,6 +128,16 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
             form: form,
             argumentFields: argumentFields,
             offeredRules: offeredRules,
+            answerHandle: answerHandle
+        )
+    }
+
+    /// Bind a boundary-projected body to the correlation identity established
+    /// by the reducer. Borrowed hook approvals learn that identity after decode.
+    nonisolated func identified(by id: String) -> AgentRequest {
+        AgentRequest(
+            id: id, toolName: toolName, form: form,
+            argumentFields: argumentFields, offeredRules: offeredRules,
             answerHandle: answerHandle
         )
     }

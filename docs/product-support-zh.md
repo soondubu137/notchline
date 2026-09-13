@@ -96,6 +96,9 @@ Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/h
 
 ## 6. 实现与验证
 
+共享入口现在是提交到 `MonitoringRepository` 的有类型 `MonitoringEvidence`；`HookEvidenceBoundary` 在提交前解释原生 Hooks。`ProductMonitoringRuntime` 接受任意 `MonitoringLifecycleSource`，`HookProductProvider` 提供 Hooks 组合。[MonitoringEvidenceConformanceTests](../Notchline/NotchlineTests/MonitoringEvidenceConformanceTests.swift) 使用不依赖 Hooks、JSON 或 socket 的来源，验证生命周期、进展、等待投影与解除、subagent 隔离和旧观察周期事件拒绝。这不改变任何产品的支持范围：并发请求集合、结构化答案、与传输无关的回答句柄和结果，以及通用设置和来源调度，仍是[实施计划](product-generalisation-plan.md)中的独立工作项。
+
+
 层级用于归类已有能力，不决定 reducer 的行为。`AgentMonitoring` 提供观察结果，`RowContentSource` 提供监测行内容，`AgentHookVocabulary` 提供受支持的事件和请求投影，`AnswerDelivering` 提供回答路径。已读证据、导航和用量保留各自的契约。不会仅为重复表达本文内容而实现层级字段或运行时能力矩阵。
 
 实现和测试必须证明每一项承诺的行为，而不只是一个层级数字：

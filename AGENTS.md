@@ -48,6 +48,7 @@ Each document owns a scope. A change landing in one of these scopes updates that
 | [`docs/panel-v2.md`](docs/panel-v2.md) | The three V2 decisions composed: what the expanded panel is made of, how big it is in every state, and the five places the three drafts contradicted one another |
 | [`docs/figma-design.md`](docs/figma-design.md) | Visual and interaction spec, Figma file structure, legal component variants |
 | [`docs/system-architecture.md`](docs/system-architecture.md) | The implementation **as it actually is**: refresh timing, responsibilities, rendering and performance boundaries, the architectural invariants |
+| [`docs/product-generalisation-plan.md`](docs/product-generalisation-plan.md) | Executable five-package generalisation plan, implementation status and handover acceptance cases |
 | [`docs/tech-design.md`](docs/tech-design.md) | Interfaces, protocols, data flow, failure recovery |
 | [`docs/integration-settings-behaviour.md`](docs/integration-settings-behaviour.md) | What the settings toggles actually do to the user's hook configuration |
 | [`docs/artifacts.md`](docs/artifacts.md) | Every file this app creates or edits, inside its container and outside it |
@@ -95,8 +96,8 @@ Read the existing implementation and its tests first. Nearly every simplificatio
 
 The full list lives in [`docs/system-architecture.md`](docs/system-architecture.md) §7 and is authoritative. These are the ones most easily violated without noticing:
 
-- **One orchestration centre per product.** Decisions spanning a product's data sources belong in that product's Provider: `HookProductProvider` for a product observed through its hooks alone, composed from the product's sources (Claude Code, Antigravity), and `LiveCodexMonitorService` for Codex, whose App Server is a second lifecycle beside its hooks. A source supplies evidence and decides nothing across sources; UI, file adapters and transport do not assemble state from each other.
-- **One Turn reducer.** Hook events enter only `HookEventRepository`. A second source (a `TurnEvidenceSource`, an admission list) may *retire* a Turn, but never open, name or describe one, and only inside that actor with its ordering guards.
+- **One orchestration centre per product.** Decisions spanning a product's data sources belong in that product's Provider: `ProductMonitoringRuntime` composed by `HookProductProvider` for a product observed through its hooks alone, or directly by another lifecycle source, with the product's sources (Claude Code, Antigravity), and `LiveCodexMonitorService` for Codex, whose App Server is a second lifecycle beside its hooks. A source supplies evidence and decides nothing across sources; UI, file adapters and transport do not assemble state from each other.
+- **One Turn reducer.** Live boundary adapters submit typed `MonitoringEvidence` only to `MonitoringRepository`; Hooks decode and project at `HookEvidenceBoundary`, never inside that reducer. Source queues preserve delivery order and observation epochs reject callbacks from a retired subscription. A second source (a `TurnEvidenceSource`, an admission list) may *retire* a Turn, but never open, name or describe one, and only inside that actor with its ordering guards.
 - **One UI data contract.** Layers above consume `MonitorSnapshot` and nothing else.
 - **Private dependencies stop at the boundary.** The `.codex-global-state.json` schema exists only inside the two read-only repositories; the domain layer sees Project resolution and an unread set tagged with its authority.
 - **The UI stays passive.** SwiftUI renders and emits user intent; it does not parse protocols or read files.

@@ -8,6 +8,10 @@ This file records only production features that depend on implementation details
 
 **One observation deliberately not registered, recorded so nobody re-derives it.** Measured 2026-08-20: the trust key in `config.toml` has the shape `<hooks.json path>:<snake_case event>:<group index>:<handler index>`, where the third and fourth segments are array indices. That is a private detail, but **no feature reads it**: this app's two merge rules (append at the tail, write nothing when the install is already correct) are correct whether or not the observation holds — knowing it only explains why they carry the user's own definitions ([ADR 0014](adr/0014-the-codex-hook-definition-is-never-rewritten.md)). Per `AGENTS.md` §8.1 there is no row to add. Reporting each definition's trust state exactly *would* mean reading that key, which is an ADR-level decision and would add a row here.
 
+## Internal evidence boundary migration (2026-09-12)
+
+[Generalisation package 1](product-generalisation-plan.md) moves the shared state machine to [MonitoringRepository.swift](../Notchline/Notchline/MonitoringRepository.swift) and [MonitoringState.swift](../Notchline/Notchline/MonitoringState.swift); the former `HookEventRepository` and state names remain compatibility aliases in [HookIntegration.swift](../Notchline/Notchline/HookIntegration.swift). Native decoding, projected requests, hook trust and held descriptors are owned by [HookEvidenceBoundary.swift](../Notchline/Notchline/HookEvidenceBoundary.swift). Rows below that name the old reducer refer to this same implementation through its alias. The private native fields, source discovery, write protocols and conservative degradation are unchanged; this is an internal boundary migration, not an added, removed or widened private integration. Existing native regression tests remain in their linked files; typed-source tests are in [MonitoringEvidenceConformanceTests.swift](../Notchline/NotchlineTests/MonitoringEvidenceConformanceTests.swift).
+
 ## Codex features
 
 | Feature | What it is | Why the public interfaces cannot do it | How it is implemented | Dependency level and failure signals | Code |

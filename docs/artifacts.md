@@ -1,5 +1,7 @@
 # Files this app creates, edits and leaves behind
 
+The 2026-09-12 [evidence-boundary refactor](product-generalisation-plan.md) creates no new production artifact and changes no managed path or registration bytes. `HookEvidenceBoundary` now owns the existing hook observation/trust writes; `MonitoringRepository` and a source using its typed entry alone create no configuration, helper, socket or persisted Turn state.
+
 ## 1. Files Notchline creates
 
 All under `~/Library/Application Support/Notchline/`, namespaced per product (`agents/codex/`, `agents/claudeCode/`), so uninstalling one product's integration cannot delete the other's socket:
