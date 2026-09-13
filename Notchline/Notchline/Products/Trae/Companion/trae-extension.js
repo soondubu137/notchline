@@ -91,7 +91,7 @@ exports.activate = async function(context) {
             !(q.retainedThreadIDs ?? []).every(id => /^[a-f0-9]{24}$/.test(id))) { client.destroy(); return; }
         retainedThreadIDs = q.retainedThreadIDs ?? [];
         subscribed = true; client.setTimeout(0); clients.add(client);
-        send(client, {type:'hello', schema:SCHEMA, version:VERSION, bridgeVersion:'1.1.0', pid:process.pid});
+        send(client, {type:'hello', schema:SCHEMA, version:VERSION, bridgeVersion:'1.2.0', pid:process.pid});
         void begin(moduleURL);
       } else if (q.op === 'read' && !subscribed && watching) {
         forward({op:'read'}, 800).then(message => {

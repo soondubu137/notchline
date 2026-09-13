@@ -10,6 +10,14 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 - **Trae completed Turns clear when their completion is displayed in the focused window.** Covers local IDE and IDE-hosted SOLO, including multiple main windows. Exact native Thread/Turn/message identity, visible completion controls, foreground and screen availability must agree. Running and pending requests remain. Continuously watched completions use the existing two-second settling interval. Requires companion 1.1.0 and reopened Trae windows; unavailable evidence retains the row. (`docs/trae-integration.md`.)
 
+### Fixed
+
+- **A Trae row now shows a prompt, live progress and a final answer, not just an occasional plan thought.** The companion previously read only a plan item's `thought`, which stays empty on most ordinary Turns and never carried the model's actual answer. It now also reads a step's own finish summary, the root message's streamed answer text, and — while nothing has streamed yet — the exact prompt that started the Turn, still never its reasoning. Requires companion 1.2.0 and reopened Trae windows. (`docs/trae-integration.md`.)
+
+- **A Trae companion removed outside Notchline no longer leaves the Trae Desktop switch stuck on with nothing that can reconnect it.** Notchline used to trust a marker it wrote itself; removing the companion by hand (Trae's Extensions view, deleting the folder) left that belief uncorrected, Settings said "Installed, reopen the Trae window" forever, and turning the switch off failed silently and snapped it back on. Installation state is now read from Trae's own extension list on every check, so a genuinely removed or wrong-version companion shows "Integration is off" or "Reinstall the companion" — off, and reinstallable. (`docs/trae-integration.md`, `docs/integration-settings-behaviour.md`.)
+
+- **Turning the Trae Desktop switch off now actually removes the companion, even with it installed and connected.** Trae 3.5.91's own `--uninstall-extension` crashes on any installed extension, not just this one; that crash was silently read as a failed removal and the switch snapped back on with no explanation. Removal now falls back to editing Trae's extension manifest directly — deleting the companion's own folder and its one manifest entry, every other installed extension left untouched — when the official command fails. Reopening Trae's windows afterward is required, as installation already asks. (`docs/trae-integration.md`, `docs/integration-settings-behaviour.md`, `docs/non-public-codex-integration-features.md`.)
+
 ## 0.4.1 Alpha — 2026-09-13
 
 **Settings is three toolbar panes, one size for all of them.** No new capability: what changed is how Settings is laid out, and that an open Settings window no longer redraws for work it does not show. (`docs/figma-design.md` §8.)

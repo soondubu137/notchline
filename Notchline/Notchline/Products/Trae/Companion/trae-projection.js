@@ -36,7 +36,7 @@
       !session.remoteProjectId && !session.isRalphLoop && !context.planMode &&
       !message?.userMessageContext?.is_in_plan_mode && !message?.userMessageContext?.is_in_spec_mode;
   }
-  function project(session, message, plans, context) {
+  function project(session, message, plans, context, userMessage) {
     if (!inScope(session, message, context)) return null;
     if (!message || !id(message.messageId) || !id(message.turnId)) return null; // temporary assistant
     if (message.sessionId !== session.sessionId || !id(message.replyToMessageId)) throw Error('Mismatched message');
@@ -49,7 +49,10 @@
       if (!object(p) || !id(p.id) || p.messageId !== message.messageId || !object(p.toolCallInfo)) throw Error('Mismatched plan');
       // A child's words/requests never become the root's. Never export reasoning.
       if (p.hide || (p.parentAgentRunIds?.length ?? 0) > 0 || p.agentId !== message.agentId) continue;
-      if (p.thought) preview = text(p.thought).slice(-4096);
+      // Trae's own preview rule for a step: its tool's finish summary, else its thought.
+      const summary = p.toolCallInfo?.params?.summary;
+      if (typeof summary === 'string' && summary.trim()) preview = text(summary).slice(-4096);
+      else if (p.thought) preview = text(p.thought).slice(-4096);
       if (terminal || (p.id !== context.permissionID && p.id !== context.questionID)) continue;
       const tool = p.toolCallInfo, c = p.confirmInfo;
       if (!c || c.confirm_status !== 'unconfirmed' || c.auto_confirm === true ||
@@ -74,6 +77,18 @@
       requests.push(request);
     }
     if (new Set(requests.map(r => r.id)).size !== requests.length) throw Error('Duplicate requests');
+    // The root's streamed answer text, never its reasoning. Read after plan items so a
+    // started answer supersedes an earlier, now-stale, step thought or summary.
+    const proposal = message.agentTaskContent?.proposal;
+    if (typeof proposal === 'string' && proposal.trim()) preview = text(proposal).slice(-4096);
+    // Nothing has streamed yet: show this Turn's own prompt rather than nothing. A
+    // mismatched or oversized read is silently skipped; this fallback is never load-bearing.
+    if (preview === null && object(userMessage) && id(userMessage.messageId) &&
+        userMessage.messageId === message.replyToMessageId && userMessage.sessionId === session.sessionId &&
+        typeof userMessage.content === 'string') {
+      const prompt = userMessage.content.trim();
+      if (prompt && prompt.length <= 32768) preview = prompt.slice(0, 4096);
+    }
     return {threadID:session.sessionId, turnID:message.turnId, messageID:message.messageId, userMessageID:message.replyToMessageId,
       title:text(session.name ?? '', 4096), folder:session.workspacePath || session.mainFolder || null,
       status:message.status, startedAt:time(message.chatStartTime ?? message.createdAt), endedAt:time(message.chatEndTime),

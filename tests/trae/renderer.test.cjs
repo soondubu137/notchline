@@ -38,6 +38,18 @@ test('queue overflow stops only this observer and reports unavailable',()=>{
  for(let i=0;i<129;i++)r.enqueue(batch(row('in_progress',[{id:String(i)}])));
  assert.equal(r.emitted.at(-1).type,'unavailable');assert.equal(r.pending.length,0);
 });
+test('capture reads this Turn\'s own prompt alongside its progress and threads both to the projector',()=>{
+ const r=reader();const enqueued=[];r.enqueue=b=>enqueued.push(b);
+ const session={sessionId:'000000000000000000000001',sessionType:'side_chat',name:'Title'};
+ const message={sessionId:session.sessionId,messageId:'000000000000000000000002',turnId:'000000000000000000000003',
+   replyToMessageId:'000000000000000000000004',status:'in_progress',agentId:'root',createdAt:1};
+ const userMessage={messageId:message.replyToMessageId,sessionId:session.sessionId,content:'Fix the bug'};
+ r.stores={eA:{allSessions:{get:()=>[session]},lastAgentMessage:{get:()=>message},lastUserMessage:{get:()=>userMessage},planMode:{get:()=>false}},
+   TO:{agentPlanItemsByMessageId:{get:()=>[]}}};
+ r.permission={get:()=>null};r.questions={get:()=>null};r.flags={getState:()=>({})};r.platform=()=>'trae-ide';
+ r.capture(true);
+ assert.equal(enqueued[0].rows[0].preview,'Fix the bug');
+});
 
 test('exact navigation requires both native selection and the owning window focus',async()=>{
  for(const focused of [true,false]) {

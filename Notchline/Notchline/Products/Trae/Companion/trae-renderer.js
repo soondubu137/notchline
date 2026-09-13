@@ -137,6 +137,7 @@
           const m = this.stores.eA.lastAgentMessage.get(s.sessionId);
           if (m?.status !== 'in_progress' && !this.last.has(s.sessionId) && !this.retained.has(s.sessionId)) continue;
           const plans = m ? this.stores.TO.agentPlanItemsByMessageId.get(m.messageId) : [];
+          const userMessage = m ? this.stores.eA.lastUserMessage.get(s.sessionId) : null;
           const context = {platform:this.platform(), planMode:this.stores.eA.planMode.get(s.sessionId),
             permissionID:this.permission.get(s.sessionId)?.id, questionID:this.questions.get(s.sessionId)?.id,
             omitDetail:!!this.flags.getState().disableAskUserQuestionOtherDetail, localize:this.localize};
@@ -146,7 +147,7 @@
             }
             continue;
           }
-          const row = P.project(s, m, plans, context);
+          const row = P.project(s, m, plans, context, userMessage);
           if (!row) continue;
           const encoded = JSON.stringify(row);
           if (this.last.get(row.threadID) === encoded) continue;

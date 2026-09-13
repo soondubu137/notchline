@@ -25,8 +25,11 @@ struct TraeProvider: AgentMonitoring, IntegrationConfiguring {
     func nextRefreshDeadline() async -> Date? { await runtime.nextRefreshDeadline() }
     func disconnect() async { await runtime.disconnect() }
     func setupStatus() async -> IntegrationSetupStatus {
-        guard source.installation.installed else { return .notInstalled }
-        return await source.transport.reading().0 ? .active : .reviewRequired
+        switch source.installation.registration {
+        case .absent: return .notInstalled
+        case .mismatched: return .repairRequired
+        case .current: return await source.transport.reading().0 ? .active : .reviewRequired
+        }
     }
     func installIntegration() async throws { try await source.installation.install() }
     func removeIntegration() async throws {
@@ -49,9 +52,16 @@ nonisolated final class TraeSource: MonitoringLifecycleSource, ProductSessionRea
         transport = TraeBridgeTransport(directory: installation.directory, repository: repository)
     }
     func gate(productName: String) async -> MonitoringSourceGate {
-        guard installation.installed else {
+        switch installation.registration {
+        case .absent:
             return .closed(availability: .setupRequired, setupStatus: .notInstalled,
                            diagnostic: "Switch Trae on to install its companion extension.")
+        case .mismatched:
+            return .closed(availability: .setupRequired, setupStatus: .repairRequired,
+                           diagnostic: "Trae has a different version of the companion installed. "
+                               + "Turn the switch off, then on, to reinstall it.")
+        case .current:
+            break
         }
         guard installation.compatible else {
             return .closed(availability: .unsupportedVersion, setupStatus: .reviewRequired,

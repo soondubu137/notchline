@@ -146,10 +146,18 @@ struct TraeConformanceTests {
         let active = ProductSettingsCopy(descriptor: descriptor, setup: .active, availability: .ready, diagnostic: nil)
         let incompatible = ProductSettingsCopy(descriptor: descriptor, setup: .reviewRequired, availability: .unsupportedVersion, diagnostic: nil)
         let waiting = ProductSettingsCopy(descriptor: descriptor, setup: .reviewRequired, availability: .disconnected, diagnostic: nil)
+        // A companion Trae's own manifest disagrees with -- removed by hand,
+        // or left at a version this build no longer installs -- reads the
+        // same recovery sentence the hooks-based products already have for a
+        // mismatched registration, not the message for a healthy but
+        // disconnected one.
+        let stale = ProductSettingsCopy(descriptor: descriptor, setup: .repairRequired, availability: .setupRequired, diagnostic: nil)
         #expect(off.status == "Integration is off")
         #expect(active.status == "Connected · companion installed")
         #expect(incompatible.status == "Version unsupported")
         #expect(waiting.status.contains("reopen"))
+        #expect(stale.status == "Reinstall the companion")
+        #expect(!IntegrationSetupStatus.repairRequired.isIntegrationEnabled)
     }
 
     @Test func packageContainsOnlyObserverAndNavigationCode() throws {
@@ -219,17 +227,82 @@ struct TraeConformanceTests {
         #expect(boundary.observedThreadIDs == [id(1)])
     }
 
-    @Test func absentCorruptAndIncompatibleInstallationMarkersAreNotInstalled() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("notchline-trae-marker-\(UUID().uuidString)")
+    @Test func registrationReadsTraesOwnManifestRatherThanARememberedBelief() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("notchline-trae-manifest-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        let installation = TraeInstallation(directory: root)
-        #expect(!installation.installed)
-        for value in ["{", "{}", #"{"version":"2.0.0"}"#] {
-            try Data(value.utf8).write(to: installation.marker); #expect(!installation.installed)
+        let manifest = root.appendingPathComponent("extensions.json")
+        let installation = TraeInstallation(directory: root, extensionsManifest: manifest)
+        // No manifest at all -- Trae has never listed anything -- and a
+        // corrupt or unrelated one all read the same as genuinely absent.
+        #expect(installation.registration == .absent)
+        for value in ["{", "[]", #"[{"identifier":{"id":"someone.else"},"version":"1.2.0"}]"#] {
+            try Data(value.utf8).write(to: manifest); #expect(installation.registration == .absent)
         }
-        try Data(#"{"version":"1.1.0"}"#.utf8).write(to: installation.marker)
-        #expect(installation.installed)
+        // Present, but not the version this build installs -- a companion
+        // manually removed and never replaced by an older Notchline, or
+        // upgraded past what this build writes.
+        try Data(#"[{"identifier":{"id":"notchline.trae-companion"},"version":"1.1.0"}]"#.utf8).write(to: manifest)
+        #expect(installation.registration == .mismatched)
+        // VSIX identifiers are lower-cased by Trae's own extension host; the
+        // read tolerates a different case rather than only its own constant.
+        try Data(#"[{"identifier":{"id":"NOTCHLINE.TRAE-COMPANION"},"version":"1.2.0"}]"#.utf8).write(to: manifest)
+        #expect(installation.registration == .current)
+    }
+
+    @Test func removalFallsBackToEditingTraesManifestWhenTheCLIFails() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("notchline-trae-fallback-\(UUID().uuidString)")
+        let extensionsDirectory = root.appendingPathComponent("extensions")
+        try FileManager.default.createDirectory(at: extensionsDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let manifest = extensionsDirectory.appendingPathComponent("extensions.json")
+        // A second, unrelated extension alongside the companion, carrying a
+        // field this app models nowhere (`metadata`) -- proving the removal
+        // rewrites the manifest as loose JSON rather than through a narrow
+        // Codable shape that would silently drop it.
+        let companionFolder = extensionsDirectory.appendingPathComponent("notchline.trae-companion-1.2.0")
+        let otherFolder = extensionsDirectory.appendingPathComponent("someone.else-9.9.9")
+        try FileManager.default.createDirectory(at: companionFolder, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
+        try Data(#"""
+        [
+          {"identifier":{"id":"notchline.trae-companion"},"version":"1.2.0","relativeLocation":"notchline.trae-companion-1.2.0"},
+          {"identifier":{"id":"someone.else"},"version":"9.9.9","relativeLocation":"someone.else-9.9.9","metadata":{"pinned":true}}
+        ]
+        """#.utf8).write(to: manifest)
+        let installation = TraeInstallation(
+            // Nonexistent, so the CLI branch fails and the fallback runs.
+            application: URL(fileURLWithPath: "/nonexistent/Trae.app"),
+            directory: root,
+            extensionsManifest: manifest
+        )
+        #expect(installation.registration == .current)
+        try await installation.remove()
+        #expect(installation.registration == .absent)
+        #expect(!FileManager.default.fileExists(atPath: companionFolder.path))
+        #expect(FileManager.default.fileExists(atPath: otherFolder.path))
+        let rewritten = try JSONSerialization.jsonObject(with: try Data(contentsOf: manifest)) as? [[String: Any]]
+        #expect(rewritten?.count == 1)
+        #expect((rewritten?.first?["identifier"] as? [String: Any])?["id"] as? String == "someone.else")
+        #expect((rewritten?.first?["metadata"] as? [String: Any])?["pinned"] as? Bool == true)
+    }
+
+    @Test func removingAnAlreadyAbsentCompanionSucceedsWithoutInvokingTraesCLI() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("notchline-trae-remove-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Trae's own CLI exits 1 for "is not installed" on an extension it
+        // has already lost -- manually removed, or never there. Removal must
+        // treat that as already done rather than a failure, or the switch
+        // can never be turned off. A path with nothing at it proves the CLI
+        // was never actually invoked: if it had been, this would throw
+        // instead of returning.
+        let installation = TraeInstallation(
+            application: URL(fileURLWithPath: "/nonexistent/Trae.app"),
+            directory: root,
+            extensionsManifest: root.appendingPathComponent("extensions.json")
+        )
+        try await installation.remove()
     }
 
     @Test func nativeRequestFormsFitTheActualReadingOnlyRow() throws {

@@ -10,7 +10,7 @@ function fixture() {
       toolCallInfo:{id:id(6),name:'RunCommand',params:{command:'printf test',command_type:'short_running_process',requires_approval:true,blocking:true},result:{status:'running'}}},
     context:{platform:'trae-ide',permissionID:id(5),questionID:null,planMode:false,omitDetail:false,localize:(_k,_a,s)=>s}};
 }
-function project(f) { return P.project(f.session,f.message,[f.plan],f.context); }
+function project(f) { return P.project(f.session,f.message,[f.plan],f.context,f.userMessage); }
 test('native IDE fields may omit remote-only mode and env',()=>{
  const f=fixture(),row=project(f);assert.equal(row.preview,'Displayed progress');assert.equal(row.requests[0].command,'printf test');
  assert.equal(JSON.stringify(row).includes('NEVER EXPORT'),false);assert.equal(row.requests[0].producer,'producer');
@@ -57,4 +57,36 @@ test('malformed or duplicate options decline the entire form',()=>{
 test('mismatched ownership and oversized data fail rather than resolving an existing wait',()=>{
  const f=fixture();f.plan.messageId=id(8);assert.throws(()=>project(f));f.plan.messageId=f.message.messageId;
  f.plan.thought='x'.repeat(32769);assert.throws(()=>project(f));
+});
+test('a streamed answer supersedes a stale plan thought but never exports reasoning',()=>{
+ const f=fixture();f.message.agentTaskContent={proposal:'Streamed answer',proposalReasoningContent:'NEVER EXPORT REASONING'};
+ const row=project(f);assert.equal(row.preview,'Streamed answer');
+ assert.equal(JSON.stringify(row).includes('NEVER EXPORT REASONING'),false);
+});
+test('an empty or missing answer leaves the plan thought as progress',()=>{
+ for(const proposal of [undefined,null,'','   ']){
+  const f=fixture();f.message.agentTaskContent={proposal};assert.equal(project(f).preview,'Displayed progress');
+ }
+});
+test('an oversized streamed answer fails rather than truncating silently',()=>{
+ const f=fixture();f.message.agentTaskContent={proposal:'x'.repeat(32769)};assert.throws(()=>project(f));
+});
+test("a step's finish summary wins over its own thought, but never a child's or hidden step's",()=>{
+ const finish = () => ({id:id(6),name:'ResponseToUser',params:{summary:'Finished the task'},result:{status:'success'}});
+ const f=fixture();f.plan.toolCallInfo=finish();assert.equal(project(f).preview,'Finished the task');
+ for(const mutate of [f=>f.plan.hide=true,f=>f.plan.parentAgentRunIds=['parent'],f=>f.plan.agentId='child']){
+  const g=fixture();g.plan.toolCallInfo=finish();mutate(g);assert.equal(project(g).preview,null);
+ }
+});
+test("this Turn's own prompt fills an otherwise empty preview, but never outranks a step or answer",()=>{
+ const f=fixture();delete f.plan.thought;f.userMessage={messageId:f.message.replyToMessageId,sessionId:f.session.sessionId,content:'Fix the bug'};
+ assert.equal(project(f).preview,'Fix the bug');
+ const g=fixture();g.userMessage={messageId:g.message.replyToMessageId,sessionId:g.session.sessionId,content:'Fix the bug'};
+ assert.equal(project(g).preview,'Displayed progress');
+});
+test("a prompt for a different Turn, session or an oversized one is silently skipped",()=>{
+ for(const mutate of [f=>f.userMessage.messageId=id(9),f=>f.userMessage.sessionId=id(9),f=>f.userMessage.content='x'.repeat(32769),f=>f.userMessage.content=42]){
+  const f=fixture();delete f.plan.thought;f.userMessage={messageId:f.message.replyToMessageId,sessionId:f.session.sessionId,content:'Fix the bug'};
+  mutate(f);assert.equal(project(f).preview,null);
+ }
 });
