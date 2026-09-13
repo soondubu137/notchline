@@ -195,6 +195,36 @@ struct RequestCollectionTests {
         #expect(try await turn(repository).status == .approvalNeeded)
     }
 
+    /// A question's own permission prompt is not a second request.
+    ///
+    /// Claude Code asks an `AskUserQuestion` twice over for one call: a
+    /// `PreToolUse` that opens the question, then a `PermissionRequest` that
+    /// files an approval about the same call and carries the answer's
+    /// connection. That is one thing a person is being asked, and a row that
+    /// listed both said `Request 1 of 2` with nothing to step to (reported on
+    /// Claude Desktop, 2026-09-12).
+    @Test func aQuestionsOwnPermissionPromptIsNotASecondRequest() async throws {
+        let repository = MonitoringRepository(policy: .explicit)
+        started(repository)
+        open(repository, .input, call: "ask", at: 1)
+        repository.submit(MonitoringEvidence(
+            signal: .approvalWaitInferred, threadID: "thread", observedAt: t0.addingTimeInterval(2),
+            turnID: "turn", toolName: "Bash",
+            request: AgentRequest(id: "", toolName: "Bash", form: .question("ask")),
+            answerHandle: AnswerHandle(ticket: 7), answerOperations: .questionAnswers
+        ), in: repository.observationEpoch)
+        var state = try await turn(repository)
+        #expect(state.status == .inputNeeded)
+        #expect(state.requestsAwaitingAnAnswer.map(\.id) == ["ask"])
+        #expect(state.requestAwaitingAnAnswer?.answerHandle == AnswerHandle(ticket: 7))
+        // An approval about some other call is still a request of its own.
+        open(repository, .approval, call: "other", at: 3)
+        #expect(try await turn(repository).requestsAwaitingAnAnswer.map(\.id) == ["ask", "other"])
+        close(repository, call: "ask", at: 4)
+        state = try await turn(repository)
+        #expect(state.requestsAwaitingAnAnswer.map(\.id) == ["other"])
+    }
+
     /// The same identity under two producers, and under two Threads, is
     /// three requests; resolving one touches only its own.
     @Test func identicalIdentitiesUnderDifferentProducersAndThreadsStayApart() async throws {

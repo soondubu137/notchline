@@ -31601,6 +31601,8 @@ for line in sys.stdin:
         let turn = try #require(waiting.turns.first)
         // The word on the mark is unchanged and is not what decides this.
         #expect(turn.status == .inputNeeded)
+        // One call asked one way: the approval about it is not a second request.
+        #expect(turn.requestsAwaitingAnAnswer.count == 1)
         let request = try #require(turn.requestAwaitingAnAnswer)
         guard case let .questions(asked) = request.form else {
             Issue.record("the row draws \(request.form) rather than a question")

@@ -732,9 +732,9 @@ actor MonitoringRepository {
                 // own `PreToolUse` and then raises this event for the **same
                 // call**, and this event is the only connection an answer can
                 // travel back on. The row draws the input wait's request --
-                // `transitioned(on:)` keeps the status at `Input needed` and
-                // ``MonitoredTurnState/requestAwaitingAnAnswer`` follows the status
-                // -- so leaving the ticket on the approval slot alone drew a
+                // ``MonitoredTurnState/requestsAwaitingAnAnswer`` lists the
+                // question and not the approval filed above about its call --
+                // so leaving the ticket on the approval slot alone drew a
                 // question in full and offered no way to answer it: §11's
                 // reading form on a request a person could have settled here.
                 //

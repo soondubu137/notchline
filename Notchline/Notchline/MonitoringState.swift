@@ -763,8 +763,19 @@ struct MonitoredTurnState: Sendable {
         let ownInputs = waits.inputs.enumerated().compactMap { index, wait in
             wait.request.map { Ranked(request: $0, order: Double(index), producer: "") }
         }
-        let ownApprovals = waits.approvals.enumerated().compactMap { index, wait in
-            wait.request.map { Ranked(request: $0, order: Double(index), producer: "") }
+        // **An approval about a call this turn is asking as a question is that
+        // question's own prompt, not a second request.** Claude Code's
+        // `AskUserQuestion` opens the question on `PreToolUse` and then files
+        // an approval about the same call on its `PermissionRequest`, whose
+        // connection the reducer copies onto the question. Listing both drew
+        // `Request 1 of 2` over a single question, with a second entry wearing
+        // the first one's identity and so nothing to step to (reported on
+        // Claude Desktop, 2026-09-12). The approval itself stays filed: it is
+        // what marks the call as already asked for the next id-less pairing.
+        let questionCalls = Set(waits.inputs.compactMap(\.toolUseID))
+        let ownApprovals = waits.approvals.enumerated().compactMap { index, wait -> Ranked? in
+            if let call = wait.toolUseID, questionCalls.contains(call) { return nil }
+            return wait.request.map { Ranked(request: $0, order: Double(index), producer: "") }
         }
         // A subagent's *question* is deliberately not offered, exactly as its
         // count is not drawn: whether one reaches a person at all is
