@@ -4,6 +4,20 @@
 
 本文是支持契约的简体中文版。该契约于 2026-09-12 采纳，取代了[Provider 架构探索](technical-explorations/multi-product-provider-architecture/tiered-support.md)中的旧三级定义。术语由术语表定义；本文负责定义层级要求、请求支持范围以及当前各产品的功能矩阵。
 
+## 当前支持速览
+
+文档于 **2026-09-13** 对照当前实现及保留的验收记录核对。此日期不代表当天重新实测了所有原生产品。以下等级仅适用于声明的范围；第 3 节逐项列出请求形态，第 5 节列出独立能力及使用条件。
+
+| 产品与范围 | 已声明等级 | 等级覆盖的功能 | 主要边界 |
+| --- | --- | --- | --- |
+| **Codex Desktop** | **L6 — 请求回答** | 生命周期、Project/标题、进展、审批/输入等待、请求阅读及普通审批决定 | 同步问题和 `request_permissions` 只读，异步问题仅预览；此声明不覆盖独立 Codex CLI |
+| **Claude Code — Desktop 与 CLI** | **L6 — 请求回答** | 生命周期、文件夹/标题、进展、审批/输入等待、工具和计划审批、问题集回答 | 回答取决于请求的实时连接及允许操作；宿主导航和已读后移除另有条件 |
+| **Antigravity — Desktop 与 CLI** | **L3 — 进展监测** | 已观察到的生命周期与经过时间、上下文及事件触发的进展更新 | 不识别审批/输入等待，不支持请求阅读或回答；Desktop 取消没有可观察的结束事件，长时间工具调用可能延迟进展更新 |
+| **Trae Desktop — 本地 IDE/V2 根 Thread** | **L5 — 请求阅读** | 生命周期、文件夹/标题、已显示的根 Thread 进展、普通手动命令审批及结构化问题 | 仅限已验证的 **3.5.91** 构建；须在 Trae 中回答请求 |
+| **Trae — IDE 内的 SOLO** | **未单独授予等级；不纳入已声明的 L5 范围** | 原生测试确认普通本地生命周期/上下文、并发 Thread、结构化问题阅读与解除、取消、观察器重连及单窗口内精确导航 | 样本 Turn 没有提供预览文本，未触发手动命令审批；问题可读不能证明累积满足 L5 |
+
+IDE 内的 SOLO 与**独立 SoloLite**不同，后者仍被排除。[SOLO 验收记录](technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md)分别列出原生观察、测试夹具验证和未测试项。当前没有产品支持恢复启动前的 Turn 状态。已读后移除、导航、最终答案预览、subagents、额度和 token 用量独立于等级，具体范围见第 5 节。
+
 ## 1. 如何确定支持层级
 
 支持分为六个累积层级：L1–L6。产品在其**声明的执行模式和请求形态**内满足某一层级的全部要求，才能获得该层级；最终层级取满足条件的最高一级。超出该层级的功能仍须单独列出。层级由实际覆盖范围推导，不代表产品排名、运行时状态，也不承诺支持 Notchline 的所有功能。
@@ -99,7 +113,7 @@ Notchline 不提供持久权限规则。请求形态、编码限制和交付语�
 
 Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/hooks.json`，因此一次注册即可观察两者，Settings 中也只有一个开关。其 live progress 由事件触发更新，并非 token 流式更新。CLI 的中断实验尚未确认 `Ctrl-C` 是否总会发出 `Stop`；已测量到 Desktop 的 **Stop execution** 不发出任何 `Stop`。缺少结束信号时，绝不因没有后续信号而合成结束事件，即使 Desktop 自身的摘要记录了会话转为空闲。[CLI 测量记录](technical-explorations/multi-product-provider-architecture/antigravity-cli.md)和 [Desktop 测量记录](technical-explorations/multi-product-provider-architecture/antigravity-desktop.md)列出了模式、延迟和保守的移除路径。这些限制属于其 L3 声明的一部分。
 
-Trae 固定到已验证的 3.5.91 应用文件指纹。支持本地 IDE/V2 中持久存在的根 Thread。IDE 内的 SOLO 仍不纳入已声明的 L5 覆盖，尽管[原生边界测试](technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md)已确认普通本地生命周期及结构化问题能力。它与独立 SoloLite 不同；后者、远程工作区、Plan/Spec 和子级活动仍被排除。初始快照不会准入历史或已经运行的 Turn。失去观察时隐藏监测行，不推断完成；不提供删除检测或已读后移除来源。[实现及原生验收记录](trae-integration.md)说明安装方式、来源限制和验证。
+Trae 固定到已验证的 3.5.91 应用文件指纹。支持本地 IDE/V2 中持久存在的根 Thread。IDE 内的 SOLO 仍不纳入已声明的 L5 覆盖，尽管[原生边界测试](technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md)已确认普通本地生命周期及结构化问题能力。捕获的 22 帧 SOLO 数据均没有预览文本：当前读取器没有投影测试中位于 `finish.params.summary` 的最终答案。无害命令直接在沙箱中执行，没有进入手动等待，因此 SOLO 命令审批的原生验收仍未完成。这是两项独立限制，不代表 SOLO 完全无法观察。它与独立 SoloLite 不同；后者、远程工作区、Plan/Spec 和子级活动仍被排除。初始快照不会准入历史或已经运行的 Turn。失去观察时隐藏监测行，不推断完成；不提供删除检测或已读后移除来源。[实现及原生验收记录](trae-integration.md)说明安装方式、来源限制和验证。
 
 ## 6. 实现与验证
 
@@ -127,6 +141,6 @@ Trae 固定到已验证的 3.5.91 应用文件指纹。支持本地 IDE/V2 中�
 覆盖范围变化时，须在同一次改动中更新此矩阵、定义发生变化的术语表、README、相关契约和 Settings 边界文案。明确记录支持的请求形态与执行模式。来源或写入路径发生变化时，检查[非公开集成登记表](non-public-codex-integration-features.md)。本次重新分级未新增、修改、迁移或移除任何生产环境中的非公开集成。
 
 
-泛化改造第五项增加了明确的无需配置类型、可选的来源生命周期与刷新时间组合，以及权限受限的分阶段补充证据接口。这些是共享实现能力，不代表原生产品支持等级提高。第二至第四项（请求集合、结构化回答及回答通道）仍待实施。
+泛化改造第五项增加了明确的无需配置类型、可选的来源生命周期与刷新时间组合，以及权限受限的分阶段补充证据接口。这些与上文已实现的第二至第四项一样，属于共享实现能力，不代表原生产品支持等级提高。
 
 泛化补齐后，只读问题集可浏览所有问题，同一行也可切换任一并发请求，浏览本身不提交答案。草稿和问题浏览位置按请求实例隔离；原生请求可以没有关联工具调用。可选定时读取在后台完成，以已持有的可信值参与当前刷新，不阻塞生命周期刷新。这些改动不增加原生事件来源、回答操作或产品支持等级。
