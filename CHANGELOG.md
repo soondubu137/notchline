@@ -4,13 +4,19 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
-## Unreleased
+## 0.4.1 Alpha — 2026-09-13
+
+**Settings is three toolbar panes, one size for all of them.** No new capability: what changed is how Settings is laid out, and that an open Settings window no longer redraws for work it does not show. (`docs/figma-design.md` §8.)
 
 ### Changed
 
 - **Settings is three toolbar panes: Products, Display and Quota.** The window is one size for every pane, with the version and Quit always in the same place, and it opens on the last pane used. Every caption is one line, with the rest in the row's tooltip. What a product watches, what it cannot show and its hooks file are behind an ⓘ. A reported failure still shows in the row. (`docs/figma-design.md` §8.)
 - **Finishing onboarding opens Settings in its own window** and closes the welcome window, rather than turning the welcome window into Settings.
 - **An open Settings window no longer redraws for changes it does not show.** Every update to a row, the quota or the hover used to re-lay out the whole window and hand an open ⓘ its content again: 14–18 ms of CPU each on a Release build. It now costs 1–2 ms, and a pane redraws only when something it shows changes.
+
+### Known limitations
+
+Everything listed under `0.4.0` and earlier still stands, unchanged.
 
 ## 0.4.0 Alpha — 2026-09-13
 
