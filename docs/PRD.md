@@ -451,3 +451,8 @@ If Project, unread membership or exact navigation cannot be met, V1 must not fak
 - Shared terminology is in [`CONTEXT.md`](../CONTEXT.md).
 - Scope, the unread lifecycle and Project identity are in [`docs/adr`](adr/).
 - Every dependency on undocumented or uncommitted implementation details, with its version risk, is in [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md). Official Hooks, the App Server and deep links do not enter that list merely for being a different kind of interface.
+
+
+### Source setup and shutdown
+
+A product requiring no setup is monitored without a configuration switch or file link. Observation availability remains independent of setup; unavailable evidence never claims successful registration. Existing managed Hooks switches retain their current file-editing semantics. Removing configuration or stopping observation stops owned readers/watchers and parks their refresh deadlines. Reconnection does not replay the previous observation's Turns. A transient source failure preserves trustworthy state and retries conservatively rather than inferring a Turn ended.

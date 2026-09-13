@@ -233,7 +233,7 @@ struct ClaudeCodeReadStateSnapshot: Equatable, Sendable {
 /// **Fail closed.** Every failure -- a missing tree, an unreadable file, a
 /// schema that no longer carries `cliSessionId` -- reports `unknown` for the
 /// sessions it could not speak for, which keeps their rows listed.
-actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
+actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding, ManagedMonitoringSource {
     private static let log = Logger(
         subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCodeDesktopReadState"
@@ -339,6 +339,7 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
     /// sessions the user has ever had.
     private var cachedRecords: [URL: (revision: FileRevision, record: Record?)] = [:]
     private var lastKnownGood: ClaudeCodeReadStateSnapshot?
+    private var monitoringPaused = false
 
     /// Claude Desktop's application-support root.
     ///
@@ -390,6 +391,9 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
         watcher.watch(paths: [stateDirectoryURL])
     }
 
+    func startMonitoring() { monitoringPaused = false; watcher.watch(paths: [stateDirectoryURL]) }
+    func stopMonitoring() { monitoringPaused = true; watcher.watch(paths: []) }
+
     nonisolated func changeEvents() -> AsyncStream<Void> {
         watcher.events()
     }
@@ -409,6 +413,7 @@ actor ClaudeCodeDesktopReadStateRepository: ClaudeCodeReadStateProviding {
     }
 
     private func currentSnapshot() -> ClaudeCodeReadStateSnapshot {
+        guard !monitoringPaused else { return .unavailable() }
         guard let accountDirectories = accountDirectories() else {
             // No tree at all. That is the ordinary state for a user who runs
             // Claude Code only from a terminal, so it carries no diagnostic:

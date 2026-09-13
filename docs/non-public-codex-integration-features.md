@@ -87,3 +87,8 @@ Verified on Antigravity CLI `1.2.2` (`agy`, arm64), `2026-09-11`, in print mode 
 - Never register something merely because it avoids the App Server: official Hooks, official deep links, public CLI/SDK interfaces and public macOS APIs are all permitted implementations.
 - Every row keeps at least the feature definition, the capability gap in the officially supported interfaces, the real implementation, the failure signals, and the code locations.
 - A private schema must have fixture tests, missing/corrupt tests and an explicit conservative degradation; a parse failure must never be interpreted as an empty set or as `Chats`.
+
+
+### Generalisation package 5 boundary update
+
+[CodexRolloutTurnEvidence.swift](../Notchline/Notchline/CodexRolloutTurnEvidence.swift) now returns phased values from [SupplementaryMonitoringEvidence.swift](../Notchline/Notchline/SupplementaryMonitoringEvidence.swift), applied by the shared repository. The Provider still supplies the same App Server rollout paths; identity confirmation still precedes abort reading. The Provider's explicit shutdown now also stops its existing Hooks/rollout sources, invalidates observation and parks deadlines; internal App Server reconnects keep their current recovery. This narrows internal authority and changes no private schema, source discovery, native write operation or conservative degradation. Existing native regression fixtures remain in [NotchlineTests.swift](../Notchline/NotchlineTests/NotchlineTests.swift); generic composition checks are in [MonitoringSourceCompositionTests.swift](../Notchline/NotchlineTests/MonitoringSourceCompositionTests.swift). No private feature was added, removed or widened.

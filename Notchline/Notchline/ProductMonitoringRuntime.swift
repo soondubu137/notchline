@@ -158,9 +158,10 @@ struct SeparateSessionReading: ProductSessionReading {
 /// which Turn a thread is on, and never open, name or describe one. Claude
 /// Code's is ``ClaudeCodeTurnEvidence``, Codex's ``CodexRolloutTurnEvidence``.
 protocol TurnEvidenceSource: Sendable {
-    /// Applies what the product's records say about these Turns, through the
-    /// reducer, and returns what it left.
-    func settle(_ state: MonitoringStateSnapshot, in reducer: MonitoringRepository) async -> MonitoringStateSnapshot
+    /// Ordered readings, allowing a record-confirmed held start to be applied
+    /// before asking about termination. Sources receive values, never a reducer.
+    nonisolated var phases: [TurnEvidencePhase] { get }
+    func observations(in state: MonitoringStateSnapshot, phase: TurnEvidencePhase) async -> TurnEvidenceBatch
     /// Points any watcher at the records of the Turns still open once the
     /// refresh has settled them, and at nothing else, so a Turn the refresh
     /// just ended stops being watched in the pass that ended it.
@@ -203,7 +204,7 @@ protocol RowContentSource: Sendable {
     ///   product whose vocabulary names a message event.
     func content(
         for turns: [MonitoredTurnState],
-        messages: MonitoringRepository
+        messages: TurnMessageReading
     ) async -> [String: RowContent]
 }
 
@@ -213,7 +214,7 @@ protocol RowContentSource: Sendable {
 struct WorkingDirectoryRowContent: RowContentSource {
     func content(
         for turns: [MonitoredTurnState],
-        messages: MonitoringRepository
+        messages: TurnMessageReading
     ) async -> [String: RowContent] {
         Dictionary(
             turns.map { turn in
@@ -251,6 +252,10 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents: AsyncStream<Void>
 
+    private let composition: MonitoringSourceComposition
+    private var isObserving = false
+    private var lifecycleRevision = 0
+    private var lastSetupStatus: IntegrationSetupStatus?
     private let lifecycle: any MonitoringLifecycleSource
     private let sessions: any ProductSessionReading
     /// What the product writes down about its Turns beyond the hooks, applied
@@ -308,8 +313,14 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
         self.footprint = footprint
         self.readGate = TerminalUnreadRowFilter(timing: timing)
         self.clock = clock
+        let sources: [any Sendable] = [lifecycle, sessions, rowContent]
+            + turnEvidence.map { $0 as any Sendable }
+            + (readEvidence.map { [$0 as any Sendable] } ?? [])
+            + (usage.map { [$0 as any Sendable] } ?? [])
+        let composition = MonitoringSourceComposition(sources, clock: clock)
+        self.composition = composition
         self.stateChangeEvents = DirectoryChangeWatcher.merged(
-            [lifecycle.repository.changeEvents()] + changeEvents
+            [lifecycle.repository.changeEvents()] + composition.changeEvents + changeEvents
                 // The display waking or the screen unlocking. A row waiting to
                 // be read books no re-check while neither is true, because
                 // every route that could retire it needs a screen somebody can
@@ -321,11 +332,16 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
     }
 
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
+        let revision = lifecycleRevision
         let status: IntegrationSetupStatus?
-        switch await lifecycle.gate(productName: agent.displayName) {
+        let gate = await lifecycle.gate(productName: agent.displayName)
+        guard revision == lifecycleRevision else { return stoppedSnapshot() }
+        switch gate {
         case let .open(openStatus):
             status = openStatus
+            lastSetupStatus = openStatus
         case let .closed(availability, closedStatus, diagnostic):
+            lastSetupStatus = closedStatus
             // Nothing is being monitored, so nothing is worth an edge, and
             // nothing is listed, so nothing is waiting to be read. Left
             // standing, a watcher would keep a descriptor open on the records
@@ -333,6 +349,10 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
             // gate's entries would go on booking a re-check a second for rows
             // nobody can see, and a session seen on a screen then would come
             // back still claiming it.
+            lifecycle.disconnect()
+            if availability == .setupRequired {
+                await lifecycle.repository.resetIntegrationObservation(clearTurns: true)
+            }
             await stopEverything()
             return snapshot(
                 availability: availability,
@@ -349,20 +369,31 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
             )
         }
 
+        guard revision == lifecycleRevision else { return stoppedSnapshot() }
+        isObserving = true
+        await composition.refresh(at: clock.now())
+        guard revision == lifecycleRevision else { return stoppedSnapshot() }
         var state = await lifecycle.repository.drainDeliveredEvents()
         let reading = await sessions.read(observing: state)
+        guard revision == lifecycleRevision else { return stoppedSnapshot() }
         let presence = reading.presence
         state = await lifecycle.repository.applying(reading.admission, to: state)
         for source in turnEvidence {
-            state = await source.settle(state, in: lifecycle.repository)
+            state = await SupplementaryEvidenceApplication.settle(source, from: state, in: lifecycle.repository)
+            guard revision == lifecycleRevision else { return stoppedSnapshot() }
         }
         // After the reduction, so a Turn this refresh just ended stops being
         // watched in the same pass that ended it.
         for source in turnEvidence {
             await source.watch(openTurnsIn: state)
+            guard revision == lifecycleRevision else {
+                if !isObserving { await source.stopWatching() }
+                return stoppedSnapshot()
+            }
         }
 
-        let content = await rowContent.content(for: state.turns, messages: lifecycle.repository)
+        let content = await rowContent.content(for: state.turns, messages: lifecycle.repository.messageReader)
+        guard revision == lifecycleRevision else { return stoppedSnapshot() }
         let candidates = state.turns.compactMap { turn -> ReadGateCandidate? in
             guard let content = content[turn.threadID] else { return nil }
             return ReadGateCandidate(
@@ -399,6 +430,10 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
         // no row is exactly the text that has nothing else to draw it -- and
         // the rows built rather than the rows shown, so a row the read gate
         // withheld keeps its words for the next refresh that asks.
+        guard revision == lifecycleRevision else {
+            if !isObserving { readGate.reset(); await readEvidence?.forget() }
+            return stoppedSnapshot()
+        }
         var retainedThreadIDs = Set(candidates.map(\.row.threadID))
         if case let .exactly(listed, _) = reading.admission {
             retainedThreadIDs.formUnion(listed)
@@ -417,6 +452,10 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
         // Whatever is known right now, with a read started behind it. Awaiting
         // the read here would make a hook event's row wait on it.
         await usage?.readIfStale()
+        let diagnostic = MonitorDiagnostics.combined(unwatchable, state.diagnostic, readDiagnostic,
+            await composition.diagnostic(), await usage?.quotaDiagnostic())
+        let quota = await usage?.currentQuota() ?? .noneReported
+        guard revision == lifecycleRevision else { return stoppedSnapshot() }
         return snapshot(
             availability: unwatchable == nil ? .ready : .disconnected,
             // A product that is not open contributes no rows.
@@ -431,16 +470,8 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
             // on working.
             sessions: presence.isOpen ? rows : [],
             setupStatus: status,
-            diagnostic: MonitorDiagnostics.combined(
-                unwatchable,
-                state.diagnostic,
-                readDiagnostic,
-                // Last, because it is the least urgent: the rows are all there
-                // and what is missing is the footer's lines. It is here at all
-                // because nothing else reports it.
-                await usage?.quotaDiagnostic()
-            ),
-            quota: await usage?.currentQuota() ?? .noneReported,
+            diagnostic: diagnostic,
+            quota: quota,
             // Not "has rows": a product open with nothing in flight is still
             // open. The list answers which sessions exist and the reducer what
             // they are doing.
@@ -450,6 +481,9 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
 
     /// Everything a closed integration stops.
     private func stopEverything() async {
+        lifecycleRevision += 1
+        isObserving = false
+        await composition.stop()
         readGate.reset()
         await readEvidence?.forget()
         await sessions.stopWatching()
@@ -512,7 +546,9 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
     /// costs nothing while no such row is listed, and nothing at all while the
     /// screen is one nobody could read it on.
     func nextRefreshDeadline() async -> Date? {
-        [
+        guard isObserving else { return nil }
+        return [
+            await composition.nextDeadline(),
             await usage?.nextReadDeadline(),
             readEvidence.flatMap {
                 readGate.nextDeadline(now: clock.now(), screenIsAvailable: $0.screen.isAvailable())
@@ -529,7 +565,16 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
     }
 
     func disconnect() async {
+        lifecycleRevision += 1
+        isObserving = false
         lifecycle.disconnect()
+        await lifecycle.repository.resetIntegrationObservation(clearTurns: true, preserveBoundaryObservation: true)
+        await stopEverything()
+    }
+
+    private func stoppedSnapshot() -> AgentSnapshot {
+        snapshot(availability: .disconnected, sessions: [], setupStatus: lastSetupStatus,
+                 diagnostic: nil, quota: usage == nil ? .noneReported : .unavailable, presence: .unknown)
     }
 
     private func row(for turn: MonitoredTurnState, content: RowContent) -> MonitoredSession {
@@ -582,9 +627,8 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
             // with no lines under it (`quota-footer-v2.md` §5).
             quota: quota,
             diagnostic: diagnostic,
-            // Legacy presentation value for a source with nothing to install.
-            // Package 5 generalises Settings; availability remains independent.
-            setupStatus: setupStatus ?? .active,
+            // No setup is distinct from installed and from channel readiness.
+            setupStatus: setupStatus ?? .notRequired,
             presence: presence
         )
     }

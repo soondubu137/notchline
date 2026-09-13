@@ -43,3 +43,6 @@ The Codex side leaves nothing equivalent: it reads quota over `codex app-server`
 `~/Library/Application Support/Notchline/current-activity.json` and `current-activity.lock`, both dated 14 August, are still in the support directory. **Nothing in the working tree reads or writes them**, and they are not in the `retiredArtifacts` deletion list (`HookIntegration.AgentPaths.retiredArtifacts`) — leftovers from an older build that neither install nor uninstall cleans up. They are small (258 bytes and 0 bytes), harmless, and survive uninstallation.
 
 Separately, `default.profraw` in the repository root is a coverage artefact from running an instrumented binary, not something the shipped app produces.
+
+
+Generalisation package 5 adds no production artifact, preference or native configuration path. The explicit no-setup case creates no hook registration or helper. Disconnect/removal releases owned watcher descriptors and cancels source reads; it does not delete product records, transcripts or user files. Existing managed-file backup and narrow-edit rules are unchanged.

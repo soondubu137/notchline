@@ -79,6 +79,7 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
     ] = [:]
     nonisolated(unsafe) private var pendingDelivery: DispatchWorkItem?
     nonisolated(unsafe) private var isFinished = false
+    nonisolated(unsafe) private var isPaused = false
     /// The last failed attach, so one path does not print the same line every
     /// refresh -- and so a path that starts failing a *different* way still
     /// prints. Keyed on the reason as well as the path because the reasons
@@ -109,7 +110,7 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
     @discardableResult
     nonisolated func attachIfNeeded() -> Bool {
         lock.lock()
-        guard !isFinished else {
+        guard !isFinished, !isPaused else {
             lock.unlock()
             return false
         }
@@ -177,6 +178,24 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
         // Resumed outside the lock: the handler takes the same lock.
         source.resume()
         return true
+    }
+
+    nonisolated func pause() {
+        lock.lock()
+        isPaused = true
+        let old = source
+        source = nil
+        pendingDelivery?.cancel()
+        pendingDelivery = nil
+        lock.unlock()
+        old?.cancel()
+    }
+
+    nonisolated func resume() {
+        lock.lock()
+        isPaused = false
+        lock.unlock()
+        attachIfNeeded()
     }
 
     nonisolated var isAttached: Bool {
@@ -276,7 +295,7 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
     // decision, so routing it through MonitorClock would buy nothing.
     nonisolated private func scheduleDelivery() {
         lock.lock()
-        guard !isFinished else {
+        guard !isFinished, !isPaused else {
             lock.unlock()
             return
         }
@@ -295,6 +314,7 @@ final class DirectoryChangeWatcher: @unchecked Sendable {
     nonisolated private func deliver() {
         lock.lock()
         pendingDelivery = nil
+        guard !isPaused, !isFinished else { lock.unlock(); return }
         // Counted before it is yielded, so no consumer can be woken by an edge
         // that ``changeCount`` does not already reflect.
         changeCounter &+= 1

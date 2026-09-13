@@ -96,7 +96,7 @@ Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/h
 
 ## 6. 实现与验证
 
-共享入口现在是提交到 `MonitoringRepository` 的有类型 `MonitoringEvidence`；`HookEvidenceBoundary` 在提交前解释原生 Hooks。`ProductMonitoringRuntime` 接受任意 `MonitoringLifecycleSource`，`HookProductProvider` 提供 Hooks 组合。[MonitoringEvidenceConformanceTests](../Notchline/NotchlineTests/MonitoringEvidenceConformanceTests.swift) 使用不依赖 Hooks、JSON 或 socket 的来源，验证生命周期、进展、等待投影与解除、subagent 隔离和旧观察周期事件拒绝。这不改变任何产品的支持范围：并发请求集合、结构化答案、与传输无关的回答句柄和结果，以及通用设置和来源调度，仍是[实施计划](product-generalisation-plan.md)中的独立工作项。
+共享入口现在是提交到 `MonitoringRepository` 的有类型 `MonitoringEvidence`；`HookEvidenceBoundary` 在提交前解释原生 Hooks。`ProductMonitoringRuntime` 接受任意 `MonitoringLifecycleSource`，`HookProductProvider` 提供 Hooks 组合。[MonitoringEvidenceConformanceTests](../Notchline/NotchlineTests/MonitoringEvidenceConformanceTests.swift) 使用不依赖 Hooks、JSON 或 socket 的来源，验证生命周期、进展、等待投影与解除、subagent 隔离和旧观察周期事件拒绝。这不改变任何产品的支持范围：并发请求集合、结构化答案、与传输无关的回答句柄和结果，仍是[实施计划](product-generalisation-plan.md)中的独立工作项。
 
 
 层级用于归类已有能力，不决定 reducer 的行为。`AgentMonitoring` 提供观察结果，`RowContentSource` 提供监测行内容，`AgentHookVocabulary` 提供受支持的事件和请求投影，`AnswerDelivering` 提供回答路径。已读证据、导航和用量保留各自的契约。不会仅为重复表达本文内容而实现层级字段或运行时能力矩阵。
@@ -116,3 +116,6 @@ Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/h
 通用的 [hook 一致性测试夹具](../Notchline/NotchlineTests/HookProductConformanceTests.swift)覆盖生命周期、上下文，以及独立的等待识别和请求阅读能力。其中的合成只读产品没有 live progress，因此不能证明累积满足 L5。[AntigravityConformanceTests](../Notchline/NotchlineTests/AntigravityConformanceTests.swift)覆盖该产品在两个界面上的 L1–L3 行为、终端与 Desktop 的已读条件以及界面路由，[AntigravityDesktopRecordsTests](../Notchline/NotchlineTests/AntigravityDesktopRecordsTests.swift)覆盖 Desktop 的 Project 与查看记录读取；请求与回答测试仍位于 [NotchlineTests.swift](../Notchline/NotchlineTests/NotchlineTests.swift)。运行时测量是独立证据，单元测试通过并不代表这些测量也已完成。
 
 覆盖范围变化时，须在同一次改动中更新此矩阵、定义发生变化的术语表、README、相关契约和 Settings 边界文案。明确记录支持的请求形态与执行模式。来源或写入路径发生变化时，检查[非公开集成登记表](non-public-codex-integration-features.md)。本次重新分级未新增、修改、迁移或移除任何生产环境中的非公开集成。
+
+
+泛化改造第五项增加了明确的无需配置类型、可选的来源生命周期与刷新时间组合，以及权限受限的分阶段补充证据接口。这些是共享实现能力，不代表原生产品支持等级提高。第二至第四项（请求集合、结构化回答及回答通道）仍待实施。

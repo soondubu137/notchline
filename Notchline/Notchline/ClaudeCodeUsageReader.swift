@@ -26,7 +26,7 @@ import os
 ///
 /// The one thing still read out of the answer is that shape, and only to say
 /// so. No figure comes off prose any more.
-actor ClaudeCodeUsageReader: UsageReading {
+actor ClaudeCodeUsageReader: UsageReading, ManagedMonitoringSource {
     private static let log = Logger(
         subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCodeUsageReader"
@@ -83,6 +83,10 @@ actor ClaudeCodeUsageReader: UsageReading {
     private var consecutiveFailures = 0
     private var tokensReadAt: Date?
     private var inFlight: Task<QuotaSnapshot, Never>?
+    nonisolated private let updates = MonitoringChangeBroadcast()
+    nonisolated var sourceChanges: [AsyncStream<Void>] { [updates.events()] }
+    private var readGeneration = 0
+    private var monitoringPaused = false
 
     /// - Parameters:
     ///   - freshness: How long an answer stands before the command is run
@@ -267,7 +271,7 @@ actor ClaudeCodeUsageReader: UsageReading {
     /// deadline left standing here is one the refresh *cannot* advance -- the
     /// exact shape of busy-wait the paragraph above is about.
     func nextReadDeadline() -> Date? {
-        guard inFlight == nil, screenIsAvailable() else { return nil }
+        guard !monitoringPaused, inFlight == nil, screenIsAvailable() else { return nil }
         let deadlines = [
             attemptedAt?.addingTimeInterval(currentInterval),
             tokensReadAt?.addingTimeInterval(tokensFreshness)
@@ -291,24 +295,34 @@ actor ClaudeCodeUsageReader: UsageReading {
     /// edge ``ClaudeCodeMonitorService/stateChangeEvents`` already carries, so
     /// the first thing that happens when the screen comes back is this reading.
     private func startReadIfStale() -> Task<QuotaSnapshot, Never>? {
-        guard inFlight == nil, screenIsAvailable() else { return nil }
+        guard !monitoringPaused, inFlight == nil, screenIsAvailable() else { return nil }
         let now = clock.now()
         let windowsAreStale = attemptedAt
             .map { now.timeIntervalSince($0) >= currentInterval } ?? true
         let tokensAreStale = tokensReadAt
             .map { now.timeIntervalSince($0) >= tokensFreshness } ?? true
         guard windowsAreStale || tokensAreStale else { return nil }
-        let task = Task { await self.performRead(readingWindows: windowsAreStale) }
+        let generation = readGeneration
+        let task = Task { await self.performRead(readingWindows: windowsAreStale, generation: generation) }
         inFlight = task
         Task { [onUpdate] in
             _ = await task.value
-            await self.readFinished()
-            onUpdate?()
+            if await self.readFinished(generation: generation) { self.updates.signal(); onUpdate?() }
         }
         return task
     }
 
-    private func readFinished() {
+    private func readFinished(generation: Int) -> Bool {
+        guard generation == readGeneration else { return false }
+        inFlight = nil
+        return true
+    }
+
+    func startMonitoring() { monitoringPaused = false }
+    func stopMonitoring() {
+        monitoringPaused = true
+        readGeneration += 1
+        inFlight?.cancel()
         inFlight = nil
     }
 
@@ -356,11 +370,12 @@ actor ClaudeCodeUsageReader: UsageReading {
         return min(escalated, freshness)
     }
 
-    private func performRead(readingWindows: Bool) async -> QuotaSnapshot {
+    private func performRead(readingWindows: Bool, generation: Int) async -> QuotaSnapshot {
         // Counted separately from the windows: the two come from different
         // places, on different clocks, and one failing must not blank the
         // other.
         let todayTokens = await tokens?.todayTokens()
+        guard generation == readGeneration, !Task.isCancelled else { return cached }
         tokensReadAt = clock.now()
 
         guard readingWindows else {
@@ -373,6 +388,7 @@ actor ClaudeCodeUsageReader: UsageReading {
         // below. Its text is only asked one question, and the answer to that
         // one is a sentence for the user rather than a figure.
         let output = await read()
+        guard generation == readGeneration, !Task.isCancelled else { return cached }
         let now = clock.now()
         attemptedAt = now
         consecutiveFailures = output == nil ? consecutiveFailures + 1 : 0

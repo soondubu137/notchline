@@ -4833,7 +4833,7 @@ final class MonitorStore: ObservableObject {
             let status = await configurer.setupStatus()
             setSetupStatus(status, for: agent)
             setSwitch(status.isIntegrationEnabled, for: agent)
-            lastIntegrationMessage = ProductRegistry.descriptor(for: agent).setup.installedMessage
+            lastIntegrationMessage = ProductRegistry.descriptor(for: agent).setup.managedHooks?.installedMessage ?? "Observation configured."
             return true
         } catch {
             lastIntegrationMessage = "Could not install the hooks: \(error.localizedDescription)"
@@ -4883,7 +4883,7 @@ final class MonitorStore: ObservableObject {
                 observedAt: clock.now()
             )
             setSwitch(false, for: agent)
-            lastIntegrationMessage = ProductRegistry.descriptor(for: agent).setup.removedMessage
+            lastIntegrationMessage = ProductRegistry.descriptor(for: agent).setup.managedHooks?.removedMessage ?? "Observation configuration removed."
             return true
         } catch {
             lastIntegrationMessage = "Could not remove the integration: \(error.localizedDescription)"

@@ -1,5 +1,17 @@
 import Foundation
 
+/// Native setup is optional and separate from observation availability.
+enum ProductSetup: Sendable {
+    case none
+    case managedHooks(SetupDescription)
+
+    var managedHooks: SetupDescription? {
+        guard case let .managedHooks(description) = self else { return nil }
+        return description
+    }
+}
+
+
 /// Everything the app needs to know about a product before it has built the
 /// product's Provider: what to call it, how its integration is set up, and how
 /// to make the Provider and its navigator.
@@ -19,7 +31,7 @@ struct ProductDescriptor: Sendable {
     /// The row's label in Settings and first run. The product's own name
     /// suffices for most; Codex is watched through its Desktop app and says so.
     let settingsTitle: String
-    let setup: SetupDescription
+    let setup: ProductSetup
     /// Builds the Provider and the navigator that answers a click on its rows,
     /// together, because the Codex navigator pre-flights a click against the
     /// Provider's own App Server connection.
@@ -37,7 +49,7 @@ struct ProductDescriptor: Sendable {
     init(
         kind: AgentKind,
         settingsTitle: String,
-        setup: SetupDescription,
+        setup: ProductSetup,
         declaredBoundary: String? = nil,
         make: @escaping @MainActor @Sendable () -> ProductModule
     ) {
@@ -135,12 +147,12 @@ enum ProductRegistry {
         ProductDescriptor(
             kind: .codex,
             settingsTitle: "Codex Desktop",
-            setup: SetupDescription(
+            setup: .managedHooks(SetupDescription(
                 configurationFileRelativeToHome: ".codex/hooks.json",
                 definitionCount: CodexHookVocabulary().managedDefinitions.count,
                 trustStep: "open /hooks in Codex and trust the new definitions",
                 connectedDetail: "compatible version"
-            ),
+            )),
             make: {
                 let service = LiveCodexMonitorService()
                 return ProductModule(
@@ -152,12 +164,12 @@ enum ProductRegistry {
         ProductDescriptor(
             kind: .claudeCode,
             settingsTitle: "Claude Code",
-            setup: SetupDescription(
+            setup: .managedHooks(SetupDescription(
                 configurationFileRelativeToHome: ".claude/settings.json",
                 definitionCount: ClaudeCodeHookVocabulary().managedDefinitions.count,
                 trustStep: nil,
                 connectedDetail: "hooks installed"
-            ),
+            )),
             make: {
                 let service = ClaudeCodeMonitorService()
                 return ProductModule(
@@ -174,12 +186,12 @@ enum ProductRegistry {
             // Desktop and the CLI, which read the one hooks file this switch
             // writes: a switch per surface could not be honest about it.
             settingsTitle: "Antigravity",
-            setup: SetupDescription(
+            setup: .managedHooks(SetupDescription(
                 configurationFileRelativeToHome: AntigravityHookVocabulary.hooksFileRelativeToHome,
                 definitionCount: AntigravityHookVocabulary().managedDefinitions.count,
                 trustStep: nil,
                 connectedDetail: "hooks installed"
-            ),
+            )),
             declaredBoundary: "Watches Antigravity Desktop and Antigravity CLI. Approvals and questions "
                 + "are not detected; an active Turn shows Working... until it ends, and a Turn stopped "
                 + "before it finished may keep showing it. Usage quota is not supported.",
@@ -242,7 +254,7 @@ enum ProductRegistry {
 
     /// The files the switches write, as one spoken list.
     static var spokenConfigurationFiles: String {
-        let paths = builtIn.map(\.setup.displayPath)
+        let paths = builtIn.compactMap { $0.setup.managedHooks?.displayPath }
         guard paths.count > 1, let last = paths.last else {
             return paths.joined()
         }

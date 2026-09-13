@@ -9455,7 +9455,7 @@ struct NotchlineTests {
             CodexHookVocabulary(), ClaudeCodeHookVocabulary(), AntigravityHookVocabulary()
         ]
         for vocabulary in vocabularies {
-            let setup = ProductRegistry.descriptor(for: vocabulary.agent).setup
+            let setup = ProductRegistry.descriptor(for: vocabulary.agent).setup.managedHooks!
             #expect(setup.definitionCount == vocabulary.managedDefinitions.count)
             #expect(setup.switchHelp.contains("\(vocabulary.managedDefinitions.count) lifecycle definitions"))
             #expect(setup.switchHelp.contains(setup.displayPath))
@@ -9466,9 +9466,9 @@ struct NotchlineTests {
                     .hasSuffix(setup.configurationFileRelativeToHome)
             )
         }
-        #expect(ProductRegistry.descriptor(for: .codex).setup.backupName == "hooks.json.notchline-backup")
-        #expect(ProductRegistry.descriptor(for: .claudeCode).setup.backupName == "settings.json.notchline-backup")
-        #expect(ProductRegistry.descriptor(for: .antigravity).setup.backupName == "hooks.json.notchline-backup")
+        #expect(ProductRegistry.descriptor(for: .codex).setup.managedHooks!.backupName == "hooks.json.notchline-backup")
+        #expect(ProductRegistry.descriptor(for: .claudeCode).setup.managedHooks!.backupName == "settings.json.notchline-backup")
+        #expect(ProductRegistry.descriptor(for: .antigravity).setup.managedHooks!.backupName == "hooks.json.notchline-backup")
         #expect(ProductRegistry.spokenNames == "Codex, Claude Code and Antigravity")
         #expect(
             ProductRegistry.spokenConfigurationFiles
@@ -11714,7 +11714,11 @@ struct NotchlineTests {
             completed: true
         )
         let methods = await client.requestedMethods()
+        let previousEpoch = restored.observationEpoch
         await service.disconnect()
+        #expect(restored.observationEpoch != previousEpoch)
+        #expect(await restored.observedState().hasObservedEvent, "disconnect does not revoke unchanged hook trust")
+        #expect(await service.nextRefreshDeadline() == nil)
 
         #expect(snapshot.setupStatus == .active)
         #expect(snapshot.availability == .ready)

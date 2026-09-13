@@ -12,7 +12,8 @@ import Foundation
 /// log of a permission dialog closing. It reads all of them off the session
 /// list the refresh has just taken (``ClaudeCodeSessionSource``), and owns the
 /// two watchers that bring a refresh round when one of those files changes.
-actor ClaudeCodeTurnEvidence: TurnEvidenceSource {
+actor ClaudeCodeTurnEvidence: TurnEvidenceSource, ManagedMonitoringSource {
+    private var watchGeneration = 0
     private let sessions: ClaudeCodeSessionSource
     private let transcripts: ClaudeCodeTranscriptReader
     /// When Claude Desktop last recorded a human answering one of its dialogs.
@@ -112,7 +113,10 @@ actor ClaudeCodeTurnEvidence: TurnEvidenceSource {
         ]
     }
 
-    func settle(_ state: HookStateSnapshot, in reducer: HookEventRepository) async -> HookStateSnapshot {
+    nonisolated var phases: [TurnEvidencePhase] { [.lifecycle, .afterLifecycle] }
+
+    func observations(in state: MonitoringStateSnapshot, phase: TurnEvidencePhase) async -> TurnEvidenceBatch {
+        if phase == .afterLifecycle { return await desktopAnswers(in: state) }
         let reading = await sessions.currentReading()
         let live = reading.sessions
         let liveByID = reading.sessionsByID
@@ -190,20 +194,10 @@ actor ClaudeCodeTurnEvidence: TurnEvidenceSource {
             )
         }
 
-        var hookState = state
-        if !stopped.isEmpty {
-            hookState = await reducer.endTurnsForStoppedSessions(stopped)
-        }
-        if !interruptions.isEmpty {
-            hookState = await reducer.endInterruptedTurns(interruptions)
-        }
-        // After both, and disjoint from `stopped` by construction: a session is
-        // either working or it is not. A turn those two just ended keeps no
-        // approval for this to clear, and a turn still running is exactly the
-        // one that has an answered dialog to forget.
-        if !working.isEmpty {
-            hookState = await reducer.endAnsweredApprovalWaits(working)
-        }
+        return TurnEvidenceBatch(stopped: stopped, interruptions: interruptions, answeredApprovals: working)
+    }
+
+    private func desktopAnswers(in hookState: MonitoringStateSnapshot) async -> TurnEvidenceBatch {
         // And the same sentence for the sessions that cannot say it themselves.
         // A desktop-hosted session publishes no status ever, so `working` above
         // is empty for it however long ago the user answered -- the same shape
@@ -239,14 +233,15 @@ actor ClaudeCodeTurnEvidence: TurnEvidenceSource {
                     uniquingKeysWith: { first, second in max(first, second) }
                 )
                 if !answeredByThread.isEmpty {
-                    hookState = await reducer.endAnsweredApprovalWaits(answeredByThread)
+                    return TurnEvidenceBatch(answeredApprovals: answeredByThread)
                 }
             }
         }
-        return hookState
+        return TurnEvidenceBatch()
     }
 
     func watch(openTurnsIn state: HookStateSnapshot) async {
+        let generation = watchGeneration
         let liveByID = await sessions.currentReading().sessionsByID
         // Claude Desktop's log, and only while its answer is what this app is
         // waiting for. Recomputed from the state the refresh left, so a wait
@@ -256,6 +251,7 @@ actor ClaudeCodeTurnEvidence: TurnEvidenceSource {
         // only place this evidence is needed: a terminal-hosted session's
         // `waiting` to `busy` flip already arrives on the record edge, and it
         // is the reading this app trusts first.
+        guard generation == watchGeneration else { return }
         let awaitsADesktopAnswer = state.turns.contains { turn in
             guard turn.pendingApproval != nil || turn.subagentsAwaitingApproval,
                   let session = liveByID[turn.threadID] else {
@@ -286,11 +282,16 @@ actor ClaudeCodeTurnEvidence: TurnEvidenceSource {
             }
             watchedTranscripts.insert(url)
         }
+        guard generation == watchGeneration else { return }
         transcriptWatcher.watch(paths: watchedTranscripts)
     }
 
     /// Nothing is being monitored, so neither file is worth an edge.
+    nonisolated var sourceChanges: [AsyncStream<Void>] { changeEvents }
+    func stopMonitoring() { stopWatching() }
+
     func stopWatching() {
+        watchGeneration += 1
         transcriptWatcher.watch(paths: [])
         permissionLogWatcher.watch(paths: [])
     }

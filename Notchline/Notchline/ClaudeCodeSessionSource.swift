@@ -17,7 +17,7 @@ import Foundation
 /// It owns the two edges the list is kept honest by -- the sessions directory
 /// and the records of the listed sessions -- because both do one thing: tell
 /// the registry its answer is out of date before anybody is woken to ask it.
-actor ClaudeCodeSessionSource: ProductSessionReading, SessionProcessLocating {
+actor ClaudeCodeSessionSource: ProductSessionReading, ManagedMonitoringSource, SessionProcessLocating {
     /// One reading of the list, and what every Claude Code source reads off it.
     nonisolated struct Reading: Sendable {
         let presence: AgentPresence
@@ -75,6 +75,7 @@ actor ClaudeCodeSessionSource: ProductSessionReading, SessionProcessLocating {
     private var wasWatchingSessionsDirectory: Bool
     /// The reading the current refresh took.
     private var latest = Reading.none
+    private var observationGeneration = 0
     /// The two edges, made once: a stream is consumed by whoever merges it.
     nonisolated let changeEvents: [AsyncStream<Void>]
 
@@ -141,6 +142,7 @@ actor ClaudeCodeSessionSource: ProductSessionReading, SessionProcessLocating {
     ///   drain. A Turn the list does not name, and that has moved since the
     ///   list was read, is the one reason to read again on the spot.
     func read(observing state: HookStateSnapshot) async -> SessionReading {
+        let generation = observationGeneration
         // `~/.claude/sessions` does not exist until Claude Code has run once,
         // so the attach made in `init` fails for a user who registered the
         // hooks first. Retried here, on work this refresh was doing anyway, for
@@ -229,6 +231,9 @@ actor ClaudeCodeSessionSource: ProductSessionReading, SessionProcessLocating {
             readStartedAt = await listing.listReadStartedAt()
         }
 
+        guard generation == observationGeneration else {
+            return SessionReading(presence: .unknown, admission: .unknown)
+        }
         latest = Reading(
             presence: presence,
             sessions: live,
@@ -323,6 +328,17 @@ actor ClaudeCodeSessionSource: ProductSessionReading, SessionProcessLocating {
     /// Nothing is being monitored, so nothing is worth an edge. Left alone, an
     /// integration switched off would keep a descriptor open on the record of
     /// whatever turn happened to be running when it was.
+    nonisolated var sourceChanges: [AsyncStream<Void>] { changeEvents }
+    func stopMonitoring() async {
+        observationGeneration += 1
+        stopWatching(); sessionsWatcher.pause()
+        await (listing as? any ManagedMonitoringSource)?.stopMonitoring()
+    }
+    func startMonitoring() async {
+        await (listing as? any ManagedMonitoringSource)?.startMonitoring()
+        sessionsWatcher.resume()
+    }
+
     func stopWatching() {
         recordWatcher.watch(processIdentifiers: [])
     }

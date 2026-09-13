@@ -15,7 +15,7 @@ struct ClaudeCodeRowContent: RowContentSource {
 
     func content(
         for turns: [HookTurnState],
-        messages: HookEventRepository
+        messages: TurnMessageReading
     ) async -> [String: RowContent] {
         let listed = await sessions.currentReading().sessionsByID
         // The titles the transcript reader holds, pruned to what this refresh's

@@ -230,6 +230,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// turns away.
     private var lastConnectFailure: (any Error)?
     private var lastTrustedSnapshot: AgentSnapshot?
+    private var observationStopped = false
     /// Keeps a finished row listed until Desktop no longer reports it unread
     /// (``TerminalUnreadRowFilter``, the rules every product shares).
     private var terminalUnreadMembershipGate: TerminalUnreadRowFilter
@@ -334,6 +335,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     }
 
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
+        observationStopped = false
         // The transport, before the status gate. A trusted definition can fire
         // before this app decides the registration is complete -- a Codex that
         // was already running has them loaded -- so the socket has to be bound
@@ -504,7 +506,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 // and before the rows are built, so an abort found here is a
                 // Completed row in this snapshot rather than in the next one.
                 await rolloutEvidence.hold(rolloutPaths: rolloutPaths(ofThreadsIn: hookState))
-                hookState = await rolloutEvidence.settle(hookState, in: hookEvents)
+                hookState = await SupplementaryEvidenceApplication.settle(rolloutEvidence, from: hookState, in: hookEvents)
                 // After the reduction, so a Turn this refresh just ended stops
                 // being watched in the same pass that ended it.
                 await rolloutEvidence.watch(openTurnsIn: hookState)
@@ -699,6 +701,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// monitor spins. So each entry mirrors the exact condition its scheduler
     /// tests, and a source with no pending work reports nothing at all.
     func nextRefreshDeadline() async -> Date? {
+        guard !observationStopped else { return nil }
         var deadlines: [Date] = []
         // Asked once. Two entries below consult it, and a deadline that
         // disagreed with the guard its scheduler tests is the busy-wait this
@@ -794,8 +797,14 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     }
 
     func disconnect() async {
+        observationStopped = true
+        hooks.disconnect()
+        await hookEvents.resetIntegrationObservation(clearTurns: true, preserveBoundaryObservation: true)
+        hookTrackedThreadIDs = []
+        observedDesktopProcessIdentifier = nil
+        lastTrustedSnapshot = nil
         stopThreadReadsWithNoConsumer()
-        rolloutWatcher.watch(paths: [])
+        await rolloutEvidence.stopMonitoring()
         // The text goes with the connection that answered for it. It is a fact
         // about a turn that is still running, and this call is the app deciding
         // it no longer knows what is running.
@@ -973,11 +982,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         await hookEvents.resetIntegrationObservation(clearTurns: true)
         hooks.disconnect()
         try await hooks.remove()
-        observedDesktopProcessIdentifier = nil
-        hookTrackedThreadIDs = []
-        stopThreadReadsWithNoConsumer()
-        lastTrustedSnapshot = nil
-        terminalUnreadMembershipGate.reset()
+        await disconnect()
     }
 
     nonisolated private func nanoseconds(_ seconds: TimeInterval) -> UInt64 {

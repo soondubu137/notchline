@@ -107,7 +107,11 @@ struct HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDeliv
     }
     func setupStatus() async -> IntegrationSetupStatus { await hooks.setupStatus() }
     func installIntegration() async throws { try await hooks.install() }
-    func removeIntegration() async throws { try await hooks.remove() }
+    func removeIntegration() async throws {
+        try await hooks.remove()
+        await hooks.repository.resetIntegrationObservation(clearTurns: true)
+        await runtime.disconnect()
+    }
     func diskFootprint() async -> AgentDiskFootprintReport { await runtime.diskFootprint() }
     nonisolated static func projectName(forWorkingDirectory path: String?) -> String {
         WorkingDirectoryRowContent.projectName(forWorkingDirectory: path)

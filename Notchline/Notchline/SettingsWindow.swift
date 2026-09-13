@@ -63,11 +63,8 @@ struct AppSettingsView: View {
 
     /// Every product is a row in one card, not a group of its own.
     ///
-    /// A third product costs a row, not a pane: the rows are drawn from
-    /// ``ProductRegistry/builtIn``, and every row carries a switch, because
-    /// ADR 0016 lets this app write `~/.claude/settings.json` the way it has
-    /// always written `~/.codex/hooks.json`, so there is no product whose
-    /// registration it can describe but not make.
+    /// Rows come from ``ProductRegistry/builtIn``. Only products declaring
+    /// managed setup carry a configuration switch and file-reveal action.
     private var productsGroup: some View {
         SettingsGroup(header: "Products") {
             ProductConnectionRows()
@@ -409,7 +406,8 @@ struct AppSettingsView: View {
 /// registered product.
 ///
 /// Shared by first run and Settings rather than drawn twice. Every row asks for
-/// the same thing in the same shape: one switch (ADR 0016). The rows used to be
+/// managed setup in the same shape: one switch (ADR 0016). No-setup products
+/// show observation status alone. The rows used to be
 /// two hand-written blocks, and the help text under one of them said "five"
 /// definitions for a product that writes seven; everything a row says about
 /// its product is now read off its ``ProductDescriptor``, so a third product is
@@ -440,28 +438,21 @@ struct ProductConnectionRows: View {
             caption: copy.diagnostic ?? descriptor.declaredBoundary,
             status: SettingsRowStatus(color: copy.color, text: copy.status)
         ) {
-            HStack(spacing: 10) {
-                Toggle(
-                    "\(descriptor.displayName) integration",
-                    isOn: integrationSelection(for: descriptor.kind)
-                )
-                .labelsHidden()
-                .toggleStyle(.switch)
-                .disabled(store.isIntegrationBusy(for: descriptor.kind))
-                .help(descriptor.setup.switchHelp)
+            if let setup = descriptor.setup.managedHooks {
+                HStack(spacing: 10) {
+                    Toggle(
+                        "\(descriptor.displayName) integration",
+                        isOn: integrationSelection(for: descriptor.kind)
+                    )
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(store.isIntegrationBusy(for: descriptor.kind))
+                    .help(setup.switchHelp)
 
-                ShowInFinderButton(target: hookConfigurationTarget(for: descriptor.kind))
+                    ShowInFinderButton(target: .revealing(setup.configurationFile(fileManager: .default)))
+                }
             }
         }
-    }
-
-    /// The folder that holds the file this product's hooks are registered in.
-    ///
-    /// Asked of ``HookIntegrationPaths`` rather than spelled here, so this
-    /// button and the writer that edits the file can never end up pointing at
-    /// two different places.
-    private func hookConfigurationTarget(for agent: AgentKind) -> FinderRevealTarget? {
-        .revealing(HookIntegrationPaths.live(for: agent).hooksConfiguration)
     }
 
     /// Read off that product's own answer, never the merged one. The Codex row
@@ -664,20 +655,34 @@ struct ProductSettingsCopy: Equatable {
         diagnostic: String?
     ) {
         self.diagnostic = diagnostic
+        if descriptor.setup.managedHooks == nil {
+            switch availability {
+            case .ready: status = "Connected"; color = MacOSWindowColor.statusHealthy
+            case .connecting, nil: status = "Connecting…"; color = MacOSWindowColor.statusPending
+            case .updateAgent: status = "Update \(descriptor.settingsTitle)"; color = MacOSWindowColor.statusBlocked
+            case .unsupportedVersion: status = "Version unsupported"; color = MacOSWindowColor.statusBlocked
+            case .setupRequired, .disconnected:
+                status = "Not watching \(descriptor.displayName)"; color = MacOSWindowColor.statusWarning
+            }
+            return
+        }
         switch setup {
+        case .notRequired:
+            status = "No setup required"
+            color = MacOSWindowColor.statusIdle
         case .repairRequired:
             status = "Registration is out of date · turn the switch on to rewrite it"
             color = MacOSWindowColor.statusWarning
         case .notInstalled:
             status = "Integration is off"
             color = MacOSWindowColor.statusIdle
-        case .reviewRequired where descriptor.setup.trustStep != nil:
-            status = "Installed · \(descriptor.setup.trustStep ?? "")"
+        case .reviewRequired where descriptor.setup.managedHooks?.trustStep != nil:
+            status = "Installed · \(descriptor.setup.managedHooks?.trustStep ?? "")"
             color = MacOSWindowColor.statusPending
         case .reviewRequired, .active:
             switch availability {
             case .ready:
-                status = "Connected · \(descriptor.setup.connectedDetail)"
+                status = "Connected · \(descriptor.setup.managedHooks?.connectedDetail ?? "")"
                 color = MacOSWindowColor.statusHealthy
             case .connecting, nil:
                 status = "Connecting…"

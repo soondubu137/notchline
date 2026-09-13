@@ -29,6 +29,7 @@ nonisolated enum HookRegistration: Sendable, Equatable {
 /// from a file this app can read; delivery comes from events arriving. They are
 /// projected here and nowhere else.
 enum IntegrationSetupStatus: Equatable, Sendable {
+    case notRequired
     case notInstalled
     case repairRequired
     case reviewRequired
@@ -51,7 +52,8 @@ enum IntegrationSetupStatus: Equatable, Sendable {
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
-        case (.notInstalled, .notInstalled),
+        case (.notRequired, .notRequired),
+             (.notInstalled, .notInstalled),
              (.repairRequired, .repairRequired),
              (.reviewRequired, .reviewRequired),
              (.active, .active):
@@ -63,6 +65,8 @@ enum IntegrationSetupStatus: Equatable, Sendable {
 
     var displayName: String {
         switch self {
+        case .notRequired:
+            "No setup required"
         case .notInstalled:
             "Not installed"
         case .repairRequired:
@@ -78,7 +82,7 @@ enum IntegrationSetupStatus: Equatable, Sendable {
         switch self {
         case .reviewRequired, .active:
             true
-        case .notInstalled, .repairRequired:
+        case .notRequired, .notInstalled, .repairRequired:
             false
         }
     }
@@ -221,7 +225,7 @@ nonisolated struct HookIntegrationPaths: Sendable {
     ) -> HookIntegrationPaths {
         HookIntegrationPaths(
             supportDirectory: supportDirectory(fileManager: fileManager),
-            hooksConfiguration: ProductRegistry.descriptor(for: agent).setup
+            hooksConfiguration: ProductRegistry.descriptor(for: agent).setup.managedHooks!
                 .configurationFile(fileManager: fileManager),
             agent: agent
         )

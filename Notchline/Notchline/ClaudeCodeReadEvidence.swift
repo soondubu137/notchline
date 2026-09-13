@@ -75,9 +75,9 @@ import Foundation
 /// the other half; ``isOnScreen(_:)`` reads it as a veto over the records,
 /// which is what keeps a log this app cannot parse from changing any
 /// verdict at all.
-actor ClaudeCodeReadEvidence: ReadEvidenceSource {
+actor ClaudeCodeReadEvidence: ReadEvidenceSource, ManagedMonitoringSource {
     /// Which sessions the user has already read, when anything can say.
-    private let readState: any ClaudeCodeReadStateProviding
+    nonisolated private let readState: any ClaudeCodeReadStateProviding
     /// When Claude Desktop last came to the front.
     ///
     /// The second of the two routes to "read", and the one that covers the
@@ -87,7 +87,7 @@ actor ClaudeCodeReadEvidence: ReadEvidenceSource {
     /// when its window regains focus over a session already there -- measured
     /// 2026-08-19 across the whole application-support tree, zero files touched
     /// -- so the file alone can never see that reading happen.
-    private let activations: any DesktopActivationReporting
+    nonisolated private let activations: any DesktopActivationReporting
     /// Whether Claude Desktop is in front of the user right now.
     ///
     /// The third route, and the one that covers a session that was *already* on
@@ -137,6 +137,7 @@ actor ClaudeCodeReadEvidence: ReadEvidenceSource {
     /// anybody is in front of it or not. What retires the row is this plus a
     /// move only a person makes.
     private var sessionsSeenOnScreenSinceTheirTurnEnded: Set<String> = []
+    private var observationGeneration = 0
 
     /// Whether there is a screen the user could read a finished answer on.
     nonisolated var screen: any ScreenAvailabilityReporting { terminal.screen }
@@ -168,11 +169,24 @@ actor ClaudeCodeReadEvidence: ReadEvidenceSource {
     /// dropped its on-screen membership, so the membership goes; and a session
     /// that was on screen when the integration was switched off must not come
     /// back holding a claim to have been seen there.
+    nonisolated var sourceChanges: [AsyncStream<Void>] {
+        [readState.changeEvents(), activations.changeEvents()]
+    }
+    func startMonitoring() async {
+        await (readState as? any ManagedMonitoringSource)?.startMonitoring()
+    }
+    func stopMonitoring() async {
+        forget()
+        await (readState as? any ManagedMonitoringSource)?.stopMonitoring()
+    }
+
     func forget() {
+        observationGeneration += 1
         sessionsSeenOnScreenSinceTheirTurnEnded.removeAll()
     }
 
     func verdicts(for candidates: [ReadGateCandidate], now: Date) async -> ReadEvidenceJudgement {
+        let generation = observationGeneration
         let readState = await self.readState.snapshot()
         let activatedAt = await activations.lastActivation()
         let desktopIsInFrontOfTheUser = await reading.isInFrontOfTheUser()
@@ -400,6 +414,9 @@ actor ClaudeCodeReadEvidence: ReadEvidenceSource {
             terminalVerdictByThreadID[threadID] == .read
         }
 
+        guard generation == observationGeneration else {
+            return ReadEvidenceJudgement(verdicts: [:], diagnostic: nil)
+        }
         // Only rows the user has not taken off the list reach this, so none
         // of the reading above or below is spent on one (CR-Fable-003).
         for candidate in candidates {

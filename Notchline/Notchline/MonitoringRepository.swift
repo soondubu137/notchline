@@ -486,12 +486,14 @@ actor MonitoringRepository {
         return snapshot(didConsumeEvents: didConsumeEvents)
     }
 
-    func resetIntegrationObservation(clearTurns: Bool) {
+    /// A channel restart ends live observation without revoking facts about
+    /// unchanged native setup. Removal/repair also resets boundary bookkeeping.
+    func resetIntegrationObservation(clearTurns: Bool, preserveBoundaryObservation: Bool = false) {
         hasObservedLiveEvent = false
         didReduceSinceLastReport = false
         unplaceableEventCount = 0
         inbox.reset { previews.removeAll() }
-        boundary?.reset()
+        if !preserveBoundaryObservation { boundary?.reset() }
         if clearTurns { turnsByThreadID.removeAll() }
         reconcileAnswerHandles()
         signalledProjection = renderedProjection()

@@ -9,7 +9,7 @@ import Foundation
 /// the thread's metadata -- and hands the paths of the Turns it holds to this
 /// before each refresh settles them (``hold(rolloutPaths:)``); everything read
 /// out of those files, and the watcher on them, is here.
-actor CodexRolloutTurnEvidence: TurnEvidenceSource {
+actor CodexRolloutTurnEvidence: TurnEvidenceSource, ManagedMonitoringSource {
     /// Whether a Turn this app still holds open was stopped by the user, and
     /// which Turn that thread's rollout says it is on.
     ///
@@ -79,12 +79,24 @@ actor CodexRolloutTurnEvidence: TurnEvidenceSource {
     /// is the Turn the abort reading is asked about. The same rollout answers
     /// both, and the two questions are the two halves of ADR 0011 — which Turn
     /// this thread is on, and whether it is over.
-    func settle(_ state: HookStateSnapshot, in reducer: HookEventRepository) async -> HookStateSnapshot {
-        let adopted = await adoptTurnsOnRecord(in: state, reducer: reducer)
-        return await endAbortedTurns(in: adopted, reducer: reducer)
+    nonisolated var phases: [TurnEvidencePhase] { [.identity, .lifecycle] }
+
+    func observations(in state: MonitoringStateSnapshot, phase: TurnEvidencePhase) async -> TurnEvidenceBatch {
+        switch phase {
+        case .identity: return await adoptTurnsOnRecord(in: state)
+        case .lifecycle: return await endAbortedTurns(in: state)
+        case .afterLifecycle: return TurnEvidenceBatch()
+        }
     }
 
     /// Nothing is being monitored, so no rollout is worth an edge.
+    nonisolated var sourceChanges: [AsyncStream<Void>] { [rolloutWatcher.events()] }
+    func stopMonitoring() async {
+        stopWatching()
+        rolloutPathByThreadID.removeAll()
+        await turnAbort.retain(rolloutPaths: [])
+    }
+
     func stopWatching() {
         rolloutWatcher.watch(paths: [])
     }
@@ -118,9 +130,8 @@ actor CodexRolloutTurnEvidence: TurnEvidenceSource {
     /// exists to open. A hold left on a finished Turn costs one `lstat`: its
     /// rollout has stopped changing, so the reader answers from its cache.
     private func adoptTurnsOnRecord(
-        in hookState: HookStateSnapshot,
-        reducer: HookEventRepository
-    ) async -> HookStateSnapshot {
+        in hookState: HookStateSnapshot
+    ) async -> TurnEvidenceBatch {
         var records: [TurnOnRecord] = []
         for turn in hookState.turns {
             guard let held = turn.heldTurnStart,
@@ -135,8 +146,7 @@ actor CodexRolloutTurnEvidence: TurnEvidenceSource {
                 TurnOnRecord(threadID: turn.threadID, turnID: held.turnID)
             )
         }
-        guard !records.isEmpty else { return hookState }
-        return await reducer.adoptTurnsOnRecord(records)
+        return TurnEvidenceBatch(onRecord: records)
     }
 
     /// Ends the Turns Codex recorded as aborted, and only those.
@@ -157,9 +167,8 @@ actor CodexRolloutTurnEvidence: TurnEvidenceSource {
     /// Server has handed over a path for -- a row this app cannot draw is not
     /// one worth reading a file for.
     private func endAbortedTurns(
-        in hookState: HookStateSnapshot,
-        reducer: HookEventRepository
-    ) async -> HookStateSnapshot {
+        in hookState: HookStateSnapshot
+    ) async -> TurnEvidenceBatch {
         var interruptions: [TurnInterruption] = []
         for turn in hookState.turns where turn.sessionStatus.keepsTiming {
             guard let rolloutPath = rolloutPath(ofThread: turn.threadID) else {
@@ -187,8 +196,7 @@ actor CodexRolloutTurnEvidence: TurnEvidenceSource {
                 )
             )
         }
-        guard !interruptions.isEmpty else { return hookState }
-        return await reducer.endInterruptedTurns(interruptions)
+        return TurnEvidenceBatch(interruptions: interruptions)
     }
 
     /// Watches the rollouts of the Turns that are still going, and no others.

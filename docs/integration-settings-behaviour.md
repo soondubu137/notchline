@@ -76,3 +76,10 @@ It is simply `.ready`'s label — there is no separate version probe. The meanin
 | Extra grey text beneath the status | `latestByAgent[agent]?.diagnostic` — what that product reported this refresh; absent when nothing is wrong |
 | The switch's own position | After every refresh `applyIntegrationHealth` re-derives it from `setupStatus.isIntegrationEnabled` — on for `active` / `reviewRequired`, off for `notInstalled` / `repairRequired` — except while a change is in flight. This is what makes "turn the switch on to rewrite it" coherent: with a stale registration the switch genuinely reads as off |
 | `Recheck` | Calls `store.refreshNow()`; the Codex path first discards the cached registration read, because a deliberate re-check is one of the two moments registration health may have changed without this app doing it |
+
+
+## Products with no setup
+
+A product declares `.none` or `.managedHooks` in `ProductSetup`. With no setup, Settings and first run show observation status without an integration switch, Hooks copy or file-reveal action. A ready source says `Connected`; unavailable observation never says that registration exists. `.notRequired` is a setup fact, not a connectivity claim.
+
+All shipping products still use managed Hooks. Their switches continue to add/remove the same definitions with the same backups and trust requirements. Removing them now also stops the runtime's owned source work immediately. No independent observation toggle or new stored preference was introduced. Native configuration editing and starting/stopping in-process readers are separate interfaces.

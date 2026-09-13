@@ -121,12 +121,6 @@ nonisolated struct ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfigu
         )
         self.sessionSource = sessionSource
         let transcripts = transcripts ?? ClaudeCodeTranscriptReader()
-        // The quota's own edge. Nothing waits for the reading, so the reading
-        // has to say when it landed -- otherwise a figure read at second five
-        // would not be drawn until whatever happened to refresh next.
-        let (quotaUpdates, quotaLanded) = AsyncStream<Void>.makeStream(
-            bufferingPolicy: .bufferingNewest(1)
-        )
         // Pinned to a directory of its own, which is the only thing that
         // separates this reading from the user's own sessions -- `claude agents
         // --json` reports it as `kind: "interactive"` like any other.
@@ -141,8 +135,7 @@ nonisolated struct ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfigu
             workingDirectory: quotaDirectory,
             screenIsAvailable: screen.isAvailable,
             tokens: ClaudeCodeTokenCounter(clock: clock),
-            transcripts: ClaudeCodeUsageTranscripts(clock: clock),
-            onUpdate: { quotaLanded.yield() }
+            transcripts: ClaudeCodeUsageTranscripts(clock: clock)
         )
         let readState = readState ?? ClaudeCodeDesktopReadStateRepository(
             changeDebounceInterval: timing.unreadStateDebounceInterval
@@ -202,22 +195,7 @@ nonisolated struct ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfigu
             usage: usage,
             footprint: ClaudeCodeTranscriptFootprint(usage: usage),
             clock: clock,
-            timing: timing,
-            changeEvents: sessionSource.changeEvents + turnEvidence.changeEvents + [
-                // Claude Desktop writing a session's record. It is the
-                // low-latency half of retiring a finished row: the write that
-                // stamps a focus is an atomic replace inside the account folder,
-                // so this edge lands on the same gesture that reads the answer.
-                // Nothing here invalidates the session list -- that file says
-                // who has read what, not which sessions exist.
-                readState.changeEvents(),
-                // Claude Desktop coming to the front. It is an edge rather than
-                // a deadline for the same reason the record write is: a row
-                // waiting to be read should leave on the gesture that reads it,
-                // not on the next re-check after it.
-                activations.changeEvents(),
-                quotaUpdates
-            ]
+            timing: timing
         )
     }
 

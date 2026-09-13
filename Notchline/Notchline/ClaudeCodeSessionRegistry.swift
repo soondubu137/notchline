@@ -620,7 +620,7 @@ enum ClaudeCommand {
     }
 }
 
-actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
+actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing, ManagedMonitoringSource {
     private static let log = Logger(
         subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCodeSessionRegistry"
@@ -725,6 +725,7 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// Distinguishes the read this call started from a later one, so an
     /// earlier caller cannot clear somebody else's.
     private var readGeneration = 0
+    private var monitoringPaused = false
 
     /// - Parameters:
     ///   - freshness: How long before the command is run again, counted from
@@ -1063,6 +1064,7 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
     /// about a caller two types away.
     @discardableResult
     func refresh() async -> [ClaudeCodeSession] {
+        guard !monitoringPaused else { return cached }
         if let inFlight { return await inFlight.value }
         readGeneration += 1
         let generation = readGeneration
@@ -1071,13 +1073,21 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         return await task.value
     }
 
+    func startMonitoring() { monitoringPaused = false }
+    func stopMonitoring() {
+        monitoringPaused = true
+        readGeneration += 1
+        inFlight?.cancel()
+        inFlight = nil
+    }
+
     private func readClearingClaim(generation: Int) async -> [ClaudeCodeSession] {
-        let sessions = await performRead()
+        let sessions = await performRead(generation: generation)
         if readGeneration == generation { inFlight = nil }
         return sessions
     }
 
-    private func performRead() async -> [ClaudeCodeSession] {
+    private func performRead(generation: Int) async -> [ClaudeCodeSession] {
         // Taken immediately before the command goes out, so an edge that lands
         // while it is running survives it: that read cannot have seen what the
         // edge is reporting -- see ``invalidations``.
@@ -1087,6 +1097,7 @@ actor ClaudeCodeSessionRegistry: ClaudeCodeSessionListing {
         // report on the state that event describes. See ``ClaudeCodeActivity``.
         let observedAt = clock.now()
         let data = await read()
+        guard readGeneration == generation, !Task.isCancelled else { return cached }
         // Stamped whether or not there was an answer: this is what paces the
         // next attempt, and a failure that booked no time at all is what let
         // one failed read become a run of them.

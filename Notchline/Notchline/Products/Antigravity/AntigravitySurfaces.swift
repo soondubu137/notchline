@@ -159,7 +159,7 @@ struct AntigravityRowContent: RowContentSource {
 
     func content(
         for turns: [HookTurnState],
-        messages: HookEventRepository
+        messages: TurnMessageReading
     ) async -> [String: RowContent] {
         var content = await WorkingDirectoryRowContent().content(for: turns, messages: messages)
         for turn in turns where surfaces.surface(ofConversation: turn.threadID) == .desktop {
