@@ -137,7 +137,8 @@ struct TraeConformanceTests {
         #expect(descriptor.setup.isConfigurable)
         #expect(descriptor.setup.managedHooks == nil)
         #expect(descriptor.setup.installedMessage.contains("Reopen Trae"))
-        #expect(descriptor.declaredBoundary?.contains("3.5.91") == true)
+        #expect(descriptor.watches?.contains("3.5.91") == true)
+        #expect(descriptor.notShown?.contains("SOLO") == true)
     }
     @Test func companionSettingsDistinguishInstallationFromConnectionAndVersion() {
         let descriptor = ProductRegistry.descriptor(for: .trae)

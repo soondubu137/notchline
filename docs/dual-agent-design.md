@@ -205,7 +205,7 @@ This used to be the panel's one way to get stuck open. Hover reaches the app thr
 
 ## 6. Settings
 
-The settings window is a single panel with no sidebar ([`figma-design.md`](figma-design.md) §8.0). `Session list` is its last group, after `Products` and `Display`, holding one pop-up:
+The settings window ~~is a single panel with no sidebar~~ is three toolbar panes since 2026-09-13 ([`figma-design.md`](figma-design.md) §8.0). `Session list` is its last group, after `Products` and `Display`, holding one pop-up:
 
 | Label | `Distinguish products` |
 | --- | --- |

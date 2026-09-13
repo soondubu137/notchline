@@ -1,99 +1,170 @@
 // The Settings window, as redesigned for macOS 26. See `figma-design.md` §8.
 //
-// One pane, no source list. V1 carried a sidebar holding a single item, which
-// announced a navigation that does not exist and forced the content area to
-// repeat a `General` title the window title already said.
+// Three toolbar panes — Products, Display, Quota. It was one pane with no
+// source list while it held three groups, because a one-item sidebar announces
+// a navigation that does not exist; at fifteen rows doing three jobs it
+// measured 1,292 pt of content in a window capped at 860, so a third of it was
+// reachable only by scrolling, and every product added grew it twice.
 //
 // The shape of every group is the same: a small header, one rounded card, and
 // footnote text under it. The footnote replaced V1's blue callout — macOS
 // states a consequence in a footnote, and a tinted block inside a native window
-// only ever reads as a control nobody can click.
+// only ever reads as a control nobody can click. Every caption is one line;
+// the rest of what a row has to say is its tooltip or, for a product, its ⓘ
+// popover. A failure a product reported is the one line allowed to wrap.
 import AppKit
 import SwiftUI
 
+/// The three panes, in toolbar order.
+enum SettingsPane: String, CaseIterable {
+    case products
+    case display
+    case quota
+
+    /// Where the last pane used is remembered. Absent the first time, which
+    /// opens on Products: the pane somebody opens Settings to diagnose.
+    static let defaultsKey = "settingsPane"
+
+    /// The tab's label, which is also the window's title while it is selected.
+    var title: String {
+        switch self {
+        case .products: "Products"
+        case .display: "Display"
+        case .quota: "Quota"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .products: "puzzlepiece.extension"
+        case .display: "macbook"
+        case .quota: "gauge.with.needle"
+        }
+    }
+}
+
 struct AppSettingsView: View {
     @EnvironmentObject private var store: MonitorStore
+    @AppStorage(SettingsPane.defaultsKey) private var pane: SettingsPane = .products
+
+    var body: some View {
+        // A `TabView` inside the `Settings` scene is the toolbar-pane window
+        // macOS draws for every utility's settings: the tabs sit in the
+        // toolbar, the selected tab names the window, and the window takes
+        // each pane's own height as it changes, animating between them.
+        TabView(selection: $pane) {
+            Tab(SettingsPane.products.title, systemImage: SettingsPane.products.systemImage, value: .products) {
+                SettingsPaneLayout { ProductsSettingsPane() }
+            }
+            Tab(SettingsPane.display.title, systemImage: SettingsPane.display.systemImage, value: .display) {
+                SettingsPaneLayout { DisplaySettingsPane() }
+            }
+            Tab(SettingsPane.quota.title, systemImage: SettingsPane.quota.systemImage, value: .quota) {
+                SettingsPaneLayout { QuotaSettingsPane() }
+            }
+        }
+        .background(SettingsWindowChrome(title: pane.title))
+    }
+}
+
+/// One pane's content, its margins, and the window's closing row under it.
+///
+/// **Sized by what it holds, not by the screen.** The window used to be a
+/// fixed `860` pt scroll view whatever it showed; each pane is now its own
+/// height, so the window is exactly as tall as the pane in front. The scroll
+/// view stays only as the fallback for a screen shorter than a pane.
+///
+/// **The height is measured and then pinned, not left to the scroll view.** A
+/// `ScrollView` offered no height does report its content's, and a flexible
+/// `maxHeight` over it lays out correctly — but the `Settings` scene sizes its
+/// window from each tab once and never again from a flexible frame: measured,
+/// all three panes shared the window the first had opened at, `450` pt, so
+/// Products stood over a blank band and Quota scrolled. A fixed height is
+/// what the scene follows from tab to tab.
+struct SettingsPaneLayout<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    @State private var contentHeight: CGFloat?
 
     var body: some View {
         ScrollView(.vertical) {
-            contents
-        }
-        .frame(width: 580, height: min(860, max(420,
-            (NSScreen.screens.map { $0.visibleFrame.height }.min() ?? 940) - 80)))
-        .background(MacOSWindowColor.windowBackground)
-        .background(SettingsWindowChrome())
-    }
-
-    private var contents: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            productsGroup
-            displayGroup
-            quotaGroup
-
-            // The build version and the action that quits the app belong to
-            // the window rather than to a settings group.
-            //
-            // The two sit at opposite ends of the closing row rather than side
-            // by side on the left: a version is a fact to read and `Quit` is
-            // the one action this window offers, and macOS puts a window's
-            // action in its bottom trailing corner — beside the version it
-            // read as a second caption someone had made pressable. Baselines
-            // align rather than tops, so the version sits on the same line as
-            // the button's label instead of riding above it.
-            HStack(alignment: .firstTextBaseline, spacing: 16) {
-                AppVersionLine()
-
-                Spacer(minLength: 16)
-
-                // Red is in the label's ink, not in the bezel. `.tint` on
-                // macOS's `.bordered` style does nothing at all — measured, the
-                // capsule came back the standard grey — and `.borderedProminent`
-                // draws its fill from the accent, which a window loses the
-                // moment it stops being key: the red would leave every time the
-                // user clicked something else. The ink holds in every state.
-                Button {
-                    NSApp.terminate(nil)
-                } label: {
-                    Text("Quit")
-                        .foregroundStyle(MacOSWindowColor.destructiveAction)
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
-                .help("Quits Notchline and takes the component off the menu bar.")
+            VStack(alignment: .leading, spacing: 22) {
+                content()
+                SettingsClosingRow()
             }
+            .padding(.horizontal, 24)
+            .padding(.top, 6)
+            .padding(.bottom, 20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // Grows with the pane as well as settling it: a diagnostic line
+            // arriving under a product row makes the window a line taller.
+            .onGeometryChange(for: CGFloat.self, of: \.size.height) { contentHeight = $0 }
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 20)
-        .padding(.bottom, 22)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .scrollBounceBehavior(.basedOnSize)
+        .frame(width: 580, height: contentHeight.map { min($0, Self.heightCap) })
         .background(MacOSWindowColor.windowBackground)
     }
 
-    // MARK: - Products
+    /// The tallest a pane is drawn before it scrolls: the shortest connected
+    /// screen, less the title bar and toolbar above the pane and a margin.
+    private static var heightCap: CGFloat {
+        let shortest = NSScreen.screens.map(\.visibleFrame.height).min() ?? 940
+        return max(320, shortest - 140)
+    }
+}
 
-    /// Every product is a row in one card, not a group of its own.
-    ///
-    /// Rows come from ``ProductRegistry/builtIn``. Only products declaring
-    /// managed setup carry a configuration switch and file-reveal action.
-    private var productsGroup: some View {
-        SettingsGroup(header: "Products") {
+/// The version and the action that quits the app, under every pane.
+///
+/// They belong to the window rather than to a settings group, so they sit in
+/// the same place whichever pane is in front.
+///
+/// The two sit at opposite ends of the row rather than side by side on the
+/// left: a version is a fact to read and `Quit` is the one action this window
+/// offers, and macOS puts a window's action in its bottom trailing corner —
+/// beside the version it read as a second caption someone had made pressable.
+/// Baselines align rather than tops, so the version sits on the same line as
+/// the button's label instead of riding above it.
+struct SettingsClosingRow: View {
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
+            AppVersionLine()
+
+            Spacer(minLength: 16)
+
+            // Red is in the label's ink, not in the bezel. `.tint` on macOS's
+            // `.bordered` style does nothing at all — measured, the capsule
+            // came back the standard grey — and `.borderedProminent` draws its
+            // fill from the accent, which a window loses the moment it stops
+            // being key: the red would leave every time the user clicked
+            // something else. The ink holds in every state.
+            Button {
+                NSApp.terminate(nil)
+            } label: {
+                Text("Quit")
+                    .foregroundStyle(MacOSWindowColor.destructiveAction)
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
+            .help("Quits Notchline and takes the component off the menu bar.")
+        }
+    }
+}
+
+// MARK: - Products
+
+/// Every product is a row in one card, not a group of its own, and the card
+/// needs no header: the pane's name is the header.
+///
+/// Rows come from ``ProductRegistry/builtIn``. Four products or ten, it is one
+/// card of one-line rows; what a product cannot do is behind its ⓘ.
+struct ProductsSettingsPane: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    var body: some View {
+        SettingsGroup {
             ProductConnectionRows()
-
-            // Only the products that leave anything have a key here; the
-            // presence of the key is what decides whether the row is drawn
-            // (CC-020), so this is not a filter on the value.
-            ForEach(store.diskFootprints.keys.sorted(), id: \.self) { agent in
-                if let report = store.diskFootprints[agent] {
-                    SettingsSeparator()
-                    transcriptRow(report, for: agent)
-                }
-            }
         } footnote: {
-            SettingsFootnote(
-                "Trae uses a companion extension; reopen its windows after installation. "
-                    + "The other switches manage Notchline’s hooks and preserve your own settings. "
-                    + "Existing hook files are copied to .notchline-backup before changes."
-            ) {
+            SettingsFootnote(SettingsCaption.productsFootnote) {
                 Button("Recheck") {
                     store.refreshNow()
                 }
@@ -102,203 +173,115 @@ struct AppSettingsView: View {
             }
         }
     }
+}
 
-    /// What reading the quota costs on disk, and a way to go and look.
-    ///
-    /// Shown rather than tidied away. Each reading is a real Claude Code
-    /// session and leaves a transcript behind; the folder they go to belongs to
-    /// Claude Code and can hold the user's own sessions as well, so this app
-    /// reports the size and opens the door rather than deleting anything on
-    /// somebody's behalf.
-    ///
-    /// The row is drawn from the first refresh, before there is a figure to put
-    /// in it. Locating the folder means waiting for a quota reading to finish —
-    /// several seconds of subprocess — and while the row waited for that, the
-    /// card grew a line under whoever had just opened the window. So the state
-    /// is drawn instead of the row being withheld: `Calculating…` where the
-    /// figure will go, and a button that is plainly not ready rather than one
-    /// that would reveal nowhere (CC-020).
-    ///
-    /// `Calculating…` only while a reading is actually out. A machine with no
-    /// Claude Code on it never starts one — the refresh stops at the setup gate
-    /// — so the row there reads `Unavailable` from the first refresh rather
-    /// than claiming progress on work that is never going to begin.
-    private func transcriptRow(_ report: AgentDiskFootprintReport, for agent: AgentKind) -> some View {
-        SettingsRow(
-            title: "Quota reading transcripts",
-            caption: "Each reading leaves one in \(agent.displayName)'s project folder. "
-                + "Notchline never deletes them."
-        ) {
-            HStack(spacing: 10) {
-                // Beside the button rather than in the status slot: that slot
-                // draws a health dot, and a number of megabytes is not a health.
-                Text(report.summary)
-                    .font(.system(size: 11))
-                    .foregroundStyle(MacOSWindowColor.secondaryText)
-                    .monospacedDigit()
+// MARK: - Display
 
-                ShowInFinderButton(target: report.directory.map(FinderRevealTarget.select))
-            }
-        }
-    }
+/// Three cards: the screen itself, the collapsed component, the expanded
+/// panel. The group names do the explaining the captions' second sentences
+/// used to — `Collapsed` says where a preference shows before the row says
+/// what it does.
+///
+/// No footnote. Each row's own caption already names the consequence for the
+/// display that is actually selected; a standing sentence about cut-outs and
+/// pills only said the same thing in the abstract.
+struct DisplaySettingsPane: View {
+    @EnvironmentObject private var store: MonitorStore
 
-    // MARK: - Display
-
-    /// Not on the redesign board, which shows the three confirmed groups only.
-    ///
-    /// It is a control that already exists and has nowhere else to live: the
-    /// component appears on exactly one display and the user picks which. Kept
-    /// in the same shape rather than dropped, and recorded in `figma-design.md`
-    /// §8.4 so the board and the window can be reconciled deliberately.
-    ///
-    /// No footnote. Each row's own caption already names the consequence for
-    /// the display that is actually selected — its geometry and menu bar
-    /// height, or why the wings cannot be given up on it; a standing sentence
-    /// about cut-outs and pills only said the same thing in the abstract.
-    private var displayGroup: some View {
-        SettingsGroup(header: "Display") {
-            SettingsRow(
-                title: "Show Notchline on",
-                caption: selectedDisplayDescription
-            ) {
-                if store.displays.isEmpty {
-                    Text("No display available")
-                        .font(.system(size: 11))
-                        .foregroundStyle(MacOSWindowColor.secondaryText)
-                } else {
-                    Picker("Display for Notchline", selection: displaySelection) {
-                        ForEach(store.displays) { display in
-                            Text(display.pickerTitle).tag(display.id)
-                        }
-                    }
-                    .labelsHidden()
-                    .pickerStyle(.menu)
-                    .fixedSize()
-                }
-            }
-
+    var body: some View {
+        SettingsGroup {
+            showOnRow
             SettingsSeparator()
-
             privacyModeRow
-
             SettingsSeparator()
-
-            hideWingsRow
-
-            SettingsSeparator()
-
-            nameWorkRow
-
-            SettingsSeparator()
-
             outlineRow
+        }
 
+        SettingsGroup(header: "Collapsed") {
+            hideWingsRow
             SettingsSeparator()
+            nameWorkRow
+        }
 
+        SettingsGroup(header: "Expanded") {
             groupByProductRow
         }
     }
 
-    /// One block per product on the live list, or one list.
-    ///
-    /// Beside `Outline the panel` because it is the same kind of preference —
-    /// what the surface draws, decided by the person looking at it — and it
-    /// needs nothing of the display. On, each product's rows stand under a
-    /// heading that names them once, and every heading stays on screen
-    /// however far the list is scrolled (`expanded-panel-v2.md` §4.6). Off,
-    /// the rows keep one order across products and each names its product
-    /// with its own badge. Either way the Recent queue is one list, and
-    /// either way the viewport shows four rows.
-    private var groupByProductRow: some View {
+    /// Which display the component appears on — the first card's subject, so
+    /// it stands first.
+    private var showOnRow: some View {
         SettingsRow(
-            title: "Group by product",
-            caption: "One block per product, each headed by its badge. "
-                + "Off, one list, with a badge on every row."
+            title: "Show Notchline on",
+            caption: selectedDisplayDescription,
+            help: "Notchline appears on one display at a time. The caption gives "
+                + "that display's shape and the height of the band the component "
+                + "is drawn in."
         ) {
-            Toggle("Group by product", isOn: $store.groupsSessionsByProduct)
+            if store.displays.isEmpty {
+                Text("No display available")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MacOSWindowColor.secondaryText)
+            } else {
+                Picker("Display for Notchline", selection: displaySelection) {
+                    ForEach(store.displays) { display in
+                        Text(display.pickerTitle).tag(display.id)
+                    }
+                }
                 .labelsHidden()
-                .toggleStyle(.switch)
-                .help(
-                    "Stands each product's sessions under a heading that names "
-                        + "them once, and keeps every heading on screen while "
-                        + "the list scrolls — the block you are in at the top, "
-                        + "the ones you have passed beside it, the ones still "
-                        + "to come at the foot. Off, the list is one list in "
-                        + "order of urgency, and every row carries its own badge."
-                )
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
         }
     }
 
     /// Cover every word the component draws (`cover-the-words.md`).
     ///
-    /// **Second in the group, straight after the display picker.** It is the
-    /// only row here somebody opens this window in a hurry to find —
-    /// everything under it is taste, answered once and left — and the picker
-    /// stays first because it is the group's subject.
+    /// **Straight after the display picker.** It is the only row here somebody
+    /// opens this window in a hurry to find — everything under it is taste,
+    /// answered once and left — and the picker stays first because it is the
+    /// card's subject.
     ///
-    /// **Never greyed, and it needs nothing of the display.** Unlike its two
-    /// neighbours there is no display that cannot honour it: the panel is
-    /// covered on any screen, notched or not. What differs by display is only
-    /// how much of it is visible, and that is not a reason to gate a switch.
+    /// **Never greyed, and it needs nothing of the display.** The panel is
+    /// covered on any screen, notched or not.
     ///
     /// **The caption names the gesture**, which is how macOS teaches one. A
     /// secondary press on the component does this without the window, which is
     /// the form that matters — opening Settings mid-call is itself a thing on
-    /// the shared screen.
+    /// the shared screen, and that is why a pane deeper than before is enough.
     private var privacyModeRow: some View {
         SettingsRow(
             title: "Privacy Mode",
-            caption: "Every name, title and line is drawn as a bar, and the "
-                + "pill stops naming the work. The mark, the counts and the "
-                + "clock stay, and the panel waits for a click instead of "
-                + "opening on hover. Secondary-click the component to turn it "
-                + "on and off."
+            caption: SettingsCaption.privacyMode,
+            help: "Covers every word Notchline draws while somebody else is "
+                + "looking at the screen: each row's project, title and latest "
+                + "line becomes a bar, and the collapsed pill stops naming the "
+                + "work. The mark, the counts and the clock stay. Opening a row "
+                + "uncovers that row, and the panel waits for a click instead of "
+                + "opening when the pointer merely crosses it."
         ) {
             Toggle("Privacy Mode", isOn: $store.privacyMode)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .help(
-                    "Covers every word Notchline draws while somebody else is "
-                        + "looking at the screen: each row's project, title "
-                        + "and latest line becomes a bar, and the collapsed "
-                        + "pill stops naming the work. Opening a row uncovers "
-                        + "that row. The panel stops expanding when the "
-                        + "pointer merely crosses it."
-                )
         }
     }
 
-    /// Name the work between the pill's two ends.
+    /// Give the black surface an edge of its own.
     ///
-    /// **Live on a notched display too, where it has nothing to do yet** — the
-    /// mirror of `Hide the wings`, and settable for the same reason: the person
-    /// who wants it is setting it on the machine it does not apply to, and a
-    /// preference is a standing answer rather than a command for right now.
-    private var nameWorkRow: some View {
+    /// In the first card rather than under `Collapsed` or `Expanded`, because
+    /// it draws the same edge in both. Never greyed: any surface has an edge,
+    /// notched or not.
+    private var outlineRow: some View {
         SettingsRow(
-            title: "Name the work",
-            caption: nameWorkDescription
+            title: "Outline the panel",
+            caption: SettingsCaption.outline,
+            help: "Traces the sides and lower corners in a grey just off "
+                + "Notchline's own black, collapsed and expanded alike."
         ) {
-            Toggle("Name the work", isOn: $store.namesWorkOnPill)
+            Toggle("Outline the panel", isOn: $store.drawsSurfaceOutline)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .help(
-                    "Names each project with a live turn in the middle of the "
-                        + "collapsed component, five seconds apiece. Takes "
-                        + "effect on a display without a notch — on a notched "
-                        + "one the cut-out is where the name would stand."
-                )
         }
-    }
-
-    /// What the row says, which is the consequence on *this* display.
-    private var nameWorkDescription: String {
-        guard store.canNameWorkOnPill else {
-            return "On this display the cut-out stands where the name would "
-                + "go, so this waits for one without a notch."
-        }
-        return "Each project with a live turn, named in turn between the "
-            + "counts and the clock. The component keeps its width either way."
     }
 
     /// Give the cut-out back, and draw nothing beside it until something is
@@ -306,86 +289,75 @@ struct AppSettingsView: View {
     ///
     /// **Always drawn, and always settable — including where it cannot apply
     /// yet.** A switch that appears only on a notched display is one nobody
-    /// finds: the person who would want it is looking for it on the laptop they
-    /// have just plugged an external monitor into, which is exactly the moment
-    /// it would be missing. That argument was answered by drawing the row and
-    /// greying out the switch, which fixed the finding and broke the setting —
-    /// the display that cannot honour a preference is precisely the display
-    /// somebody is sitting at when they decide what they want, and a greyed
-    /// switch makes them come back later, on the right screen, to say it.
-    ///
-    /// **A preference is a standing answer, not a command for right now.** This
-    /// one already survives the display that cannot honour it — the store keeps
-    /// `hidesCompactWings` and asks `canHideCompactWings` separately, so the
-    /// wings come back on the external monitor and go again on the built-in
-    /// screen without the setting moving. Blocking the switch never protected
-    /// anything; it only stopped the answer being given. What the row owes the
-    /// user instead is the truth about *this* screen, which the caption says.
+    /// finds, and a greyed one makes the person sitting at the wrong screen
+    /// come back later, on the right one, to say what they want. The store
+    /// keeps `hidesCompactWings` and asks `canHideCompactWings` separately, so
+    /// the setting waits for a screen that can honour it (§8.4.1). What the row
+    /// owes the user instead is the truth about *this* screen, which the
+    /// caption says in one line and the tooltip explains.
     private var hideWingsRow: some View {
         SettingsRow(
             title: "Hide the wings",
-            caption: hideWingsDescription
+            caption: SettingsCaption.hideWings(
+                canHide: store.canHideCompactWings,
+                geometry: store.geometry
+            ),
+            help: "Leaves the collapsed component as the cut-out alone, with no "
+                + "clock beside it. The mark and its counts slide out while a "
+                + "turn is waiting on approval, on an answer, or to be read, and "
+                + "go back when it is dealt with; hovering still opens the panel. "
+                + "Takes effect on a display whose cut-out Notchline can measure "
+                + "— not on a display without a notch, nor on one that reports a "
+                + "notch but not where it is."
         ) {
             Toggle("Hide the wings", isOn: $store.hidesCompactWings)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .help(
-                    "Leaves the collapsed component as the cut-out alone, with "
-                        + "no clock beside it. The mark and its counts slide "
-                        + "out while a turn is waiting on approval, on an "
-                        + "answer, or to be read, and go back when it is dealt "
-                        + "with. Takes effect on a display whose cut-out "
-                        + "Notchline can measure."
-                )
         }
     }
 
-    /// Give the black surface an edge of its own.
+    /// Name the work between the pill's two ends.
     ///
-    /// Beside `Hide the wings` because it is the same kind of preference —
-    /// what the surface draws, decided by the person looking at it — and the
-    /// two answer the same wallpaper from opposite ends: one gives the notch
-    /// back, the other makes the panel visible where the wallpaper is as dark
-    /// as it is.
-    ///
-    /// Never greyed. It needs nothing of the display: any surface has an edge,
-    /// notched or not, collapsed or expanded.
-    private var outlineRow: some View {
+    /// **Live on a notched display too, where it has nothing to do yet** — the
+    /// mirror of `Hide the wings`, and settable for the same reason.
+    private var nameWorkRow: some View {
         SettingsRow(
-            title: "Outline the panel",
-            caption: "A hairline edge, for dark wallpapers."
+            title: "Name the work",
+            caption: SettingsCaption.nameWork(canName: store.canNameWorkOnPill),
+            help: "Names each project with a live turn in the middle of the "
+                + "collapsed component, five seconds apiece; the component keeps "
+                + "its width either way. Takes effect on a display without a "
+                + "notch — on a notched one the cut-out is where the name would "
+                + "stand."
         ) {
-            Toggle("Outline the panel", isOn: $store.drawsSurfaceOutline)
+            Toggle("Name the work", isOn: $store.namesWorkOnPill)
                 .labelsHidden()
                 .toggleStyle(.switch)
-                .help(
-                    "Traces the sides and lower corners in a grey just off "
-                        + "Notchline's own black, collapsed and expanded alike."
-                )
         }
     }
 
-    /// What the row says, which is the consequence on *this* display.
+    /// One block per product on the live list, or one list.
     ///
-    /// Where the display cannot honour it, the caption says why and says the
-    /// setting is waiting rather than refused. The two ways a display can fail
-    /// to qualify are named apart rather than merged into one sentence about
-    /// cut-outs: a laptop's built-in screen reporting a notch it cannot place
-    /// is a different situation from an external monitor, and a user reading
-    /// `Needs a notched display` on a MacBook would reasonably conclude the app
-    /// was broken.
-    private var hideWingsDescription: String {
-        guard store.canHideCompactWings else {
-            guard store.geometry == .notched else {
-                return "This display has no cut-out to hide behind, so this "
-                    + "waits for one that has."
-            }
-            return "This display reports a notch but not where it is, so this "
-                + "waits for one Notchline can measure."
+    /// On, each product's rows stand under a heading that names them once, and
+    /// every heading stays on screen however far the list is scrolled
+    /// (`expanded-panel-v2.md` §4.6). Off, the rows keep one order across
+    /// products and each names its product with its own badge. Either way the
+    /// Recent queue is one list, and either way the viewport shows four rows.
+    private var groupByProductRow: some View {
+        SettingsRow(
+            title: "Group by product",
+            caption: SettingsCaption.groupByProduct,
+            help: "Stands each product's sessions under a heading that names "
+                + "them once, and keeps every heading on screen while the list "
+                + "scrolls — the block you are in at the top, the ones you have "
+                + "passed beside it, the ones still to come at the foot. Off, the "
+                + "list is one list in order of urgency, and every row carries "
+                + "its own badge."
+        ) {
+            Toggle("Group by product", isOn: $store.groupsSessionsByProduct)
+                .labelsHidden()
+                .toggleStyle(.switch)
         }
-        return "Collapsed, Notchline is the cut-out and nothing else — until a "
-            + "turn needs you, when the mark and its counts slide out. "
-            + "Hovering still opens the panel."
     }
 
     private var selectedDisplayDescription: String {
@@ -409,31 +381,64 @@ struct AppSettingsView: View {
             set: { store.selectDisplay(id: $0) }
         )
     }
+}
 
-    // MARK: - Quota
+// MARK: - Quota
+
+/// The quota table's choices, and the transcripts its readings leave.
+///
+/// The transcripts row used to sit in the Products card, where it was the one
+/// row about something other than connecting a product; it stands here beside
+/// the readings that leave it.
+struct QuotaSettingsPane: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    var body: some View {
+        quotaTableGroup
+
+        // Only the products that leave anything have a key; the presence of the
+        // key is what decides whether the row is drawn (CC-020), so this is not
+        // a filter on the value, and a machine where nothing does has no group.
+        if !store.diskFootprints.isEmpty {
+            SettingsGroup(header: "Quota readings") {
+                ForEach(Array(store.diskFootprints.keys.sorted().enumerated()), id: \.element) { index, agent in
+                    if let report = store.diskFootprints[agent] {
+                        if index > 0 {
+                            SettingsSeparator()
+                        }
+                        transcriptRow(report, for: agent)
+                    }
+                }
+            }
+        }
+    }
 
     /// Which products get a block in the quota table (`quota-footer-v2.md` §13).
     ///
     /// **A card of switches, one per registered product**, in the order the
     /// table draws them — not a pop-up of checkmarks. A menu closes on every
     /// choice, so choosing two products out of four is four trips into it, and
-    /// its closed label can only summarise what a card simply shows. The
-    /// Products card above already holds one row per product, so this one
-    /// grows with the registry by the same rule.
+    /// its closed label can only summarise what a card simply shows.
     ///
     /// **Every product is listed, connected or not.** The choice is a standing
     /// answer about what the table should hold, and the moment somebody wants
     /// to leave a product out is not necessarily a moment it is open.
     ///
     /// The footnote says the one thing a switch cannot: today's total counts
-    /// every product whatever is on here.
-    private var quotaGroup: some View {
+    /// every product whatever is on here. What a switch does is its tooltip.
+    private var quotaTableGroup: some View {
         SettingsGroup(header: "Quota table") {
             ForEach(Array(ProductRegistry.builtIn.enumerated()), id: \.element.kind) { index, descriptor in
                 if index > 0 {
                     SettingsSeparator()
                 }
-                SettingsRow(title: descriptor.displayName) {
+                SettingsRow(
+                    title: descriptor.displayName,
+                    help: "A product switched on gets its own block — its usage "
+                        + "today and its limits — in the table under today’s "
+                        + "total. With every product off, the footer shows the "
+                        + "total alone."
+                ) {
                     Toggle(
                         "Show \(descriptor.displayName) in the quota table",
                         isOn: quotaTableSelection(for: descriptor.kind)
@@ -443,12 +448,41 @@ struct AppSettingsView: View {
                 }
             }
         } footnote: {
-            SettingsFootnote(
-                "A product switched on gets its own block — its usage today "
-                    + "and its limits — in the table under today’s total. The "
-                    + "total counts every connected product either way. With "
-                    + "every product off, the footer shows the total alone."
-            )
+            SettingsFootnote(SettingsCaption.quotaTableFootnote)
+        }
+    }
+
+    /// What reading the quota costs on disk, and a way to go and look.
+    ///
+    /// Shown rather than tidied away. Each reading is a real Claude Code
+    /// session and leaves a transcript behind; the folder they go to belongs to
+    /// Claude Code and can hold the user's own sessions as well, so this app
+    /// reports the size and opens the door rather than deleting anything on
+    /// somebody's behalf.
+    ///
+    /// The row is drawn from the first refresh, before there is a figure to put
+    /// in it: `Calculating…` while a reading is actually out, `Unavailable`
+    /// where none will ever start, and a button that is plainly not ready
+    /// rather than one that would reveal nowhere (CC-020).
+    private func transcriptRow(_ report: AgentDiskFootprintReport, for agent: AgentKind) -> some View {
+        SettingsRow(
+            title: "Quota reading transcripts",
+            caption: SettingsCaption.quotaTranscripts(for: agent),
+            help: "Each quota reading is a real \(agent.displayName) session and "
+                + "leaves a transcript in \(agent.displayName)’s project folder, "
+                + "which can hold your own sessions too — so Notchline reports "
+                + "the size and opens the folder, and deletes nothing."
+        ) {
+            HStack(spacing: 10) {
+                // Beside the button rather than in the status slot: that slot
+                // draws a health dot, and a number of megabytes is not a health.
+                Text(report.summary)
+                    .font(.system(size: 11))
+                    .foregroundStyle(MacOSWindowColor.secondaryText)
+                    .monospacedDigit()
+
+                ShowInFinderButton(target: report.directory.map(FinderRevealTarget.select))
+            }
         }
     }
 
@@ -460,20 +494,72 @@ struct AppSettingsView: View {
     }
 }
 
+/// Every caption and footnote a pane draws that does not come off a product's
+/// own state, held apart from the views so a test can hold each to one line.
+///
+/// A caption says what the control does on this screen in one line at `580`
+/// pt; anything longer is an explanation and belongs in the row's tooltip.
+enum SettingsCaption {
+    static let productsFootnote = "Switches edit only Notchline’s hooks, after a .notchline-backup copy."
+    static let privacyMode = "Draws every name and line as a bar. Secondary-click Notchline to toggle."
+    static let outline = "A hairline edge, for dark wallpapers."
+    static let groupByProduct = "One block per product, each headed by its badge."
+    static let quotaTableFootnote = "Today’s total counts every connected product, whatever is on here."
+
+    /// What `Hide the wings` does on *this* display. The two ways a display
+    /// can fail to qualify are named apart: a laptop's built-in screen
+    /// reporting a notch it cannot place is a different situation from an
+    /// external monitor, and a user reading `Needs a notched display` on a
+    /// MacBook would reasonably conclude the app was broken.
+    static func hideWings(canHide: Bool, geometry: DisplayGeometry) -> String {
+        guard canHide else {
+            guard geometry == .notched else {
+                return "Waits for a display with a cut-out."
+            }
+            return "Waits for a display Notchline can measure."
+        }
+        return "Only the cut-out, until a turn needs you."
+    }
+
+    /// What `Name the work` does on *this* display.
+    static func nameWork(canName: Bool) -> String {
+        guard canName else {
+            return "Waits for a display without a notch."
+        }
+        return "Names each live project between the counts and the clock."
+    }
+
+    static func quotaTranscripts(for agent: AgentKind) -> String {
+        "Kept in \(agent.displayName)’s project folder. Notchline never deletes them."
+    }
+
+    /// Every caption a pane can draw, for the test that holds them to one line.
+    static var all: [String] {
+        [productsFootnote, privacyMode, outline, groupByProduct, quotaTableFootnote,
+         nameWork(canName: true), nameWork(canName: false)]
+            + [true, false].flatMap { canHide in
+                DisplayGeometry.allCases.map { hideWings(canHide: canHide, geometry: $0) }
+            }
+            + AgentKind.allCases.map(quotaTranscripts(for:))
+    }
+}
+
 /// The connections the app needs, as the rows that ask for them — one per
 /// registered product.
 ///
 /// Shared by first run and Settings rather than drawn twice. Every row asks for
 /// managed setup in the same shape: one switch (ADR 0016). No-setup products
-/// show observation status alone. The rows used to be
-/// two hand-written blocks, and the help text under one of them said "five"
-/// definitions for a product that writes seven; everything a row says about
-/// its product is now read off its ``ProductDescriptor``, so a third product is
-/// an element in the registry and nothing here.
+/// show observation status alone. Everything a row says about its product is
+/// read off its ``ProductDescriptor``, so a new product is an element in the
+/// registry and nothing here.
 ///
-/// What is left of the difference between products is in the footnote each
-/// window draws under this view, because the switches write different files
-/// and only some of them are followed by a trust step.
+/// **Status and the switch, one line each, then ⓘ.** What a product watches,
+/// what it will never show, its hooks file and its trust step are explanation
+/// rather than state, and moved into ``ProductInfoPopover``. Every product has
+/// one, so the column of ⓘ is straight down the card. A failure the product
+/// reported never moves there (CR-029): it is the one line in this window that
+/// exists to report something going wrong, and a click to find it is a failure
+/// nobody sees.
 struct ProductConnectionRows: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -490,14 +576,11 @@ struct ProductConnectionRows: View {
         let copy = copy(for: descriptor)
         return SettingsRow(
             title: descriptor.settingsTitle,
-            // A failure the product reported, or else what the product's rows
-            // will never say; never both, and the failure wins because it is
-            // the one that is happening.
-            caption: copy.diagnostic ?? descriptor.declaredBoundary,
-            status: SettingsRowStatus(color: copy.color, text: copy.status)
+            status: SettingsRowStatus(color: copy.color, text: copy.status),
+            diagnostic: copy.diagnostic
         ) {
-            if descriptor.setup.isConfigurable {
-                HStack(spacing: 10) {
+            HStack(spacing: 6) {
+                if descriptor.setup.isConfigurable {
                     Toggle(
                         "\(descriptor.displayName) integration",
                         isOn: integrationSelection(for: descriptor.kind)
@@ -506,11 +589,9 @@ struct ProductConnectionRows: View {
                     .toggleStyle(.switch)
                     .disabled(store.isIntegrationBusy(for: descriptor.kind))
                     .help(descriptor.setup.switchHelp)
-
-                    if let setup = descriptor.setup.managedHooks {
-                        ShowInFinderButton(target: .revealing(setup.configurationFile(fileManager: .default)))
-                    }
                 }
+
+                ProductInfoButton(content: ProductInfoContent(descriptor: descriptor))
             }
         }
     }
@@ -536,15 +617,172 @@ struct ProductConnectionRows: View {
     }
 }
 
+/// What a product's ⓘ popover says, read off its descriptor.
+///
+/// A value for ``ProductSettingsCopy``'s reason: the popover is where a
+/// product's declared boundary now lives, and a value can be asserted by a
+/// test where a `body` cannot.
+struct ProductInfoContent: Equatable {
+    struct Paragraph: Equatable {
+        let heading: String
+        let text: String
+    }
+
+    struct HooksFile: Equatable {
+        /// `~/.codex/hooks.json`, as the user knows it.
+        let displayPath: String
+        let url: URL
+    }
+
+    let title: String
+    /// `Watches` and `Not shown`: what the product's rows can and cannot say.
+    let boundary: [Paragraph]
+    /// What setting the product up asks of the user beyond the switch — Codex's
+    /// trust step, Trae's reopened windows.
+    let setup: [Paragraph]
+    /// The file this product's switch writes.
+    let hooksFile: HooksFile?
+
+    init(descriptor: ProductDescriptor) {
+        title = descriptor.settingsTitle
+        boundary = [
+            descriptor.watches.map { Paragraph(heading: "Watches", text: $0) },
+            descriptor.notShown.map { Paragraph(heading: "Not shown", text: $0) }
+        ].compactMap { $0 }
+
+        switch descriptor.setup {
+        case .none:
+            setup = [Paragraph(heading: "Setup", text: "This product needs no setup.")]
+            hooksFile = nil
+        case let .managedHooks(description):
+            // The trust step is phrased to follow a semicolon in the installed
+            // message, so it gains a capital and a full stop to stand alone.
+            setup = description.trustStep.map {
+                [Paragraph(heading: "After turning it on", text: $0.prefix(1).uppercased() + $0.dropFirst() + ".")]
+            } ?? []
+            hooksFile = HooksFile(
+                displayPath: description.displayPath,
+                url: description.configurationFile(fileManager: .default)
+            )
+        case .companionExtension:
+            setup = [Paragraph(
+                heading: "Companion",
+                text: "The switch installs a companion extension in Trae. Reopen Trae’s windows afterwards to connect."
+            )]
+            hooksFile = nil
+        }
+    }
+}
+
+/// The ⓘ at the end of a product's row.
+///
+/// Drawn like ``ShowInFinderButton`` — a `14` pt glyph in a `22 × 22` target,
+/// with a ground only under the pointer — and for its reason: a bordered shape
+/// here would compete with the switch beside it. The ground also stays while
+/// the popover is open, so it is plain which row the popover belongs to.
+struct ProductInfoButton: View {
+    let content: ProductInfoContent
+
+    @State private var isPresented = false
+    @State private var isHovering = false
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            Image(systemName: "info.circle")
+                .resizable()
+                .scaledToFit()
+                .frame(width: 14, height: 14)
+                .foregroundStyle(MacOSWindowColor.secondaryText)
+                .frame(width: 22, height: 22)
+                .background(
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(isHovering || isPresented ? MacOSWindowColor.hoverBackground : .clear)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityLabel("About \(content.title)")
+        .help("About \(content.title)")
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            ProductInfoPopover(content: content)
+        }
+    }
+}
+
+/// What a product's row used to say in three or four lines, on demand.
+struct ProductInfoPopover: View {
+    let content: ProductInfoContent
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(content.title)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(MacOSWindowColor.primaryText)
+
+            ForEach(content.boundary, id: \.heading) { paragraph($0) }
+
+            if !content.boundary.isEmpty, !content.setup.isEmpty || content.hooksFile != nil {
+                SettingsSeparator()
+            }
+
+            ForEach(content.setup, id: \.heading) { paragraph($0) }
+
+            if let hooksFile = content.hooksFile {
+                VStack(alignment: .leading, spacing: 3) {
+                    heading("Hooks file")
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(hooksFile.displayPath)
+                            .font(.system(size: 11.5, design: .monospaced))
+                            .foregroundStyle(MacOSWindowColor.primaryText)
+                            .textSelection(.enabled)
+
+                        Button("Show in Finder") {
+                            FinderRevealTarget.revealing(hooksFile.url)?.reveal()
+                        }
+                        .buttonStyle(.bordered)
+                        .buttonBorderShape(.capsule)
+                        // Same rule as the glyph it replaced: a button with
+                        // nowhere to go is greyed rather than silently inert.
+                        .disabled(FinderRevealTarget.revealing(hooksFile.url) == nil)
+                    }
+                }
+            }
+        }
+        .padding(.top, 14)
+        .padding([.horizontal, .bottom], 16)
+        .frame(width: 300, alignment: .leading)
+    }
+
+    private func paragraph(_ paragraph: ProductInfoContent.Paragraph) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            heading(paragraph.heading)
+            Text(paragraph.text)
+                .font(.system(size: 12))
+                .foregroundStyle(MacOSWindowColor.primaryText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func heading(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(MacOSWindowColor.secondaryText)
+    }
+}
+
+
 /// The one-glyph way into a folder a row is about.
 ///
-/// **A glyph rather than the words, because there are now three of them.** Each
-/// row in the Products card names a place on disk — the file each product's
-/// hooks are registered in, and the folder this app's quota readings leave
-/// transcripts in — and a capsule reading `Reveal in Finder` on all three is
-/// the same sentence written out three times down one card, beside the switch
-/// that is what each product row is actually about. The folder glyph carries
-/// the same action in a quarter of the width, and the words move to the tooltip.
+/// **A glyph rather than the words.** It was one of three down the Products
+/// card — the file each product's hooks are registered in, and the folder the
+/// quota readings leave transcripts in — where a capsule reading `Reveal in
+/// Finder` on each was one sentence written out three times beside the
+/// switches. The product rows' copies moved into their ⓘ popovers, where a
+/// sentence has room and the capsule is back; the glyph stays on the
+/// transcripts row, which has no popover to put it in.
 ///
 /// They also stay in the accessibility label — `.accessibilityLabel` on the
 /// glyph — so VoiceOver reads `Show in Finder` and not the name of an SF
@@ -558,11 +796,7 @@ struct ProductConnectionRows: View {
 /// square is the click target rather than the drawing: the glyph is `12 × 12`
 /// measured, and a target the size of the drawing would be a thing you aim at.
 ///
-/// **Last in the row, after the switch.** Every row in the Products card ends
-/// with one, so they line up on the trailing edge in a single column — which
-/// only works if nothing else follows them. It puts the switches a fixed step
-/// inboard of that edge; they stay a column of their own, and a glyph with no
-/// border of its own is not the thing that reads as the row's control.
+/// **Last in the row**, on the trailing edge, as the product rows' ⓘ is.
 struct ShowInFinderButton: View {
     /// Where a press goes, and `nil` when there is nowhere for it to go —
     /// which is what greys the button out. Same rule the `Reveal in Finder`
@@ -784,21 +1018,36 @@ struct ProductSettingsCopy: Equatable {
 
 /// A header, one card, and a footnote — the macOS 26 grouped-row shape.
 ///
+/// The header is optional. A pane's first card can go without one, because the
+/// pane's own name, in the toolbar and the title bar, already heads it.
+///
 /// The card is drawn here rather than taken from `Form`/`Section`, because §8
 /// pins the metrics (`12` radius, `14 × 11` rows, `22` between groups) and a
 /// grouped `Form` reaches none of them. The controls *inside* it are native, so
 /// the switch, the popup and the capsule buttons are the real Tahoe shapes
 /// rather than approximations of them.
 struct SettingsGroup<Content: View, Footnote: View>: View {
-    let header: String
+    let header: String?
     @ViewBuilder let content: () -> Content
     @ViewBuilder let footnote: () -> Footnote
 
+    init(
+        header: String? = nil,
+        @ViewBuilder content: @escaping () -> Content,
+        @ViewBuilder footnote: @escaping () -> Footnote
+    ) {
+        self.header = header
+        self.content = content
+        self.footnote = footnote
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(header)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(MacOSWindowColor.primaryText)
+            if let header {
+                Text(header)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(MacOSWindowColor.primaryText)
+            }
 
             VStack(spacing: 0) {
                 content()
@@ -827,7 +1076,7 @@ struct SettingsGroup<Content: View, Footnote: View>: View {
 /// `EmptyView` is dropped from the stack rather than laid out, so the group
 /// closes at the card and the `22` between groups is the only gap under it.
 extension SettingsGroup where Footnote == EmptyView {
-    init(header: String, @ViewBuilder content: @escaping () -> Content) {
+    init(header: String? = nil, @ViewBuilder content: @escaping () -> Content) {
         self.init(header: header, content: content, footnote: { EmptyView() })
     }
 }
@@ -842,10 +1091,20 @@ struct SettingsRowStatus {
 /// The status dot starts the caption line rather than standing left of the
 /// product name, so every primary label in the window shares one indent and
 /// there is a single column to read down.
+///
+/// **The status and the caption are one line each.** A caption says what the
+/// control does on this screen; anything longer is an explanation, and the
+/// row's `help` holds it — over the whole row, not only the control, since the
+/// words it continues are on the left. **The diagnostic is the exception and
+/// has no limit**: a failure the product reported is drawn in primary ink under
+/// a warning glyph and wraps if it must, because a truncated failure is a
+/// failure nobody reads (CR-029).
 struct SettingsRow<Control: View>: View {
     let title: String
     var caption: String?
     var status: SettingsRowStatus?
+    var diagnostic: String?
+    var help: String?
     @ViewBuilder let control: () -> Control
 
     var body: some View {
@@ -867,20 +1126,54 @@ struct SettingsRow<Control: View>: View {
                 if let caption {
                     captionText(caption)
                 }
+
+                if let diagnostic {
+                    HStack(alignment: .firstTextBaseline, spacing: 5) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .font(.system(size: 10))
+                            .foregroundStyle(MacOSWindowColor.statusWarning)
+                            .accessibilityLabel("Warning")
+                        Text(diagnostic)
+                            .font(.system(size: 11))
+                            .foregroundStyle(MacOSWindowColor.primaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.top, 1)
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
             control()
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 11)
+        // A title alone sits in a shorter row, as the quota table's do: the
+        // `11` that clears a caption line leaves a bare title floating.
+        .padding(.vertical, caption == nil && status == nil && diagnostic == nil ? 9 : 11)
+        // The row's empty middle takes the pointer too, so the tooltip is
+        // there wherever the row is, not only over its words.
+        .contentShape(Rectangle())
+        .modifier(RowHelp(text: help))
     }
 
     private func captionText(_ text: String) -> some View {
         Text(text)
             .font(.system(size: 11))
             .foregroundStyle(MacOSWindowColor.secondaryText)
-            .fixedSize(horizontal: false, vertical: true)
+            .lineLimit(1)
+            .truncationMode(.tail)
+    }
+}
+
+/// A row's tooltip, or no tooltip at all rather than an empty one.
+private struct RowHelp: ViewModifier {
+    let text: String?
+
+    func body(content: Content) -> some View {
+        if let text {
+            content.help(text)
+        } else {
+            content
+        }
     }
 }
 
@@ -903,7 +1196,9 @@ struct SettingsFootnote<Accessory: View>: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
+        // Baselines rather than tops, so a one-line footnote reads on the
+        // line of its capsule's label instead of riding above it.
+        HStack(alignment: .firstTextBaseline, spacing: 16) {
             Text(text)
                 .settingsFootnote(MacOSWindowColor.secondaryText)
             accessory()

@@ -65,27 +65,40 @@ struct ProductDescriptor: Sendable {
     /// together, because the Codex navigator pre-flights a click against the
     /// Provider's own App Server connection.
     let make: @MainActor @Sendable () -> ProductModule
-    /// What this product's rows will never say, stated where the switch is.
+    /// What Notchline watches of this product, in the product's own surfaces
+    /// and modes: the `Watches` paragraph of the row's ⓘ popover.
+    ///
+    /// Nil where the product's name already says it. Neither this nor
+    /// ``notShown`` claims every request form or independent capability is
+    /// supported; `docs/product-support.md` holds the complete coverage matrix.
+    let watches: String?
+    /// What this product's rows will never say: the `Not shown` paragraph of the
+    /// popover.
     ///
     /// A product without wait detection draws an active Turn as `Running`,
-    /// with the same mark as every other — the row carries one mark and it is the timer — and
-    /// says here, once, that a wait is not among the things it can show
-    /// (`docs/product-support.md` §2). Nil when no broad wait-detection
-    /// boundary is needed; this does not claim every request form or independent capability is supported.
-    /// `docs/product-support.md` holds the complete coverage matrix.
-    let declaredBoundary: String?
+    /// with the same mark as every other — the row carries one mark and it is
+    /// the timer — and says here, once, that a wait is not among the things it
+    /// can show (`docs/product-support.md` §2). Nil when no broad boundary needs
+    /// declaring.
+    ///
+    /// Two fields rather than the one sentence the row's caption used to carry,
+    /// because the popover heads them apart and a caption is one line now
+    /// (`figma-design.md` §8.1).
+    let notShown: String?
 
     init(
         kind: AgentKind,
         settingsTitle: String,
         setup: ProductSetup,
-        declaredBoundary: String? = nil,
+        watches: String? = nil,
+        notShown: String? = nil,
         make: @escaping @MainActor @Sendable () -> ProductModule
     ) {
         self.kind = kind
         self.settingsTitle = settingsTitle
         self.setup = setup
-        self.declaredBoundary = declaredBoundary
+        self.watches = watches
+        self.notShown = notShown
         self.make = make
     }
 
@@ -221,9 +234,9 @@ enum ProductRegistry {
                 trustStep: nil,
                 connectedDetail: "hooks installed"
             )),
-            declaredBoundary: "Watches Antigravity Desktop and Antigravity CLI. Approvals and questions "
-                + "are not detected; an active Turn shows Working... until it ends, and a Turn stopped "
-                + "before it finished may keep showing it. Usage quota is not supported.",
+            watches: "Antigravity Desktop and Antigravity CLI.",
+            notShown: "Approvals and questions. An active Turn reads Working... until it ends, "
+                + "and a Turn stopped early may keep reading it. Usage quota.",
             make: {
                 // Which surface a conversation is on is what its events' transcript
                 // path says, recorded once by the translator and read by every
@@ -265,7 +278,9 @@ enum ProductRegistry {
         ),
         ProductDescriptor(
             kind: .trae, settingsTitle: "Trae Desktop", setup: .companionExtension,
-            declaredBoundary: "Watches Trae 3.5.91 in local IDE mode. Read command approvals and questions here; answer them in Trae. SOLO, Plan/Spec, remote work, read removal and usage quota are not supported.",
+            watches: "Trae 3.5.91 in local IDE mode. Command approvals and questions are read here "
+                + "and answered in Trae.",
+            notShown: "SOLO, Plan/Spec, remote work, read removal and usage quota.",
             make: {
                 let service = TraeProvider()
                 return ProductModule(service: service, navigator: TraeNavigator(transport: service.source.transport))

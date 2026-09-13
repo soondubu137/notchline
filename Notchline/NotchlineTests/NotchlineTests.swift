@@ -9659,6 +9659,85 @@ struct NotchlineTests {
         }
     }
 
+    /// What a product's row used to say in three or four lines is its ⓘ
+    /// popover now, and every product has one with something in it — so the
+    /// column of ⓘ is straight, and no popover opens on a title alone.
+    @Test @MainActor
+    func everyProductsInfoPopoverSaysWhatItsRowNoLongerDoes() {
+        for descriptor in ProductRegistry.builtIn {
+            let content = ProductInfoContent(descriptor: descriptor)
+            #expect(content.title == descriptor.settingsTitle)
+            #expect(!content.boundary.isEmpty || !content.setup.isEmpty || content.hooksFile != nil)
+            // The hooks file is the one the switch writes, not a second
+            // spelling of it.
+            if let setup = descriptor.setup.managedHooks {
+                #expect(content.hooksFile?.displayPath == setup.displayPath)
+                #expect(content.hooksFile?.url.path.hasSuffix(setup.configurationFileRelativeToHome) == true)
+            } else {
+                #expect(content.hooksFile == nil)
+            }
+        }
+
+        let antigravity = ProductInfoContent(descriptor: ProductRegistry.descriptor(for: .antigravity))
+        #expect(antigravity.boundary.map(\.heading) == ["Watches", "Not shown"])
+
+        // The trust step was phrased to follow a semicolon; standing alone it
+        // gets a capital and a stop.
+        let codex = ProductInfoContent(descriptor: ProductRegistry.descriptor(for: .codex))
+        #expect(codex.boundary.isEmpty)
+        #expect(codex.setup == [.init(
+            heading: "After turning it on",
+            text: "Open /hooks in Codex and trust the new definitions."
+        )])
+
+        let claudeCode = ProductInfoContent(descriptor: ProductRegistry.descriptor(for: .claudeCode))
+        #expect(claudeCode.setup.isEmpty, "no trust step to state")
+
+        // The sentence the Products footnote used to carry about Trae.
+        let trae = ProductInfoContent(descriptor: ProductRegistry.descriptor(for: .trae))
+        #expect(trae.setup.map(\.heading) == ["Companion"])
+        #expect(trae.setup.first?.text.contains("Reopen Trae’s windows") == true)
+    }
+
+    /// Every caption is one line (`figma-design.md` §8.0). Measured against
+    /// the narrowest label column a caption stands in — the transcripts row,
+    /// whose readout and folder glyph take `94` pt of a `532` pt card — so a
+    /// sentence that grows past it fails here rather than truncating in the
+    /// window.
+    @Test @MainActor
+    func everySettingsCaptionFitsOnOneLine() {
+        let column: CGFloat = 532 - 2 * 14 - 12 - 94
+        let font = NSFont.systemFont(ofSize: 11)
+        for caption in SettingsCaption.all {
+            let width = (caption as NSString).size(withAttributes: [.font: font]).width
+            #expect(width <= column, "\(caption) is \(width) pt, past \(column)")
+        }
+    }
+
+    /// A caption is held to one line and a diagnostic is not: the failure a
+    /// product reported wraps rather than being cut off, because a truncated
+    /// failure is one nobody reads (CR-029).
+    @Test @MainActor
+    func aRowTruncatesItsCaptionButWrapsItsDiagnostic() {
+        func height(caption: String? = nil, diagnostic: String? = nil) -> CGFloat {
+            let row = SettingsRow(
+                title: "Claude Code",
+                caption: caption,
+                status: SettingsRowStatus(color: .orange, text: "Registered · not watching Claude Code"),
+                diagnostic: diagnostic
+            ) {
+                Toggle("Claude Code integration", isOn: .constant(true)).labelsHidden().toggleStyle(.switch)
+            }
+            let host = NSHostingView(rootView: row.frame(width: 532))
+            host.layoutSubtreeIfNeeded()
+            return host.fittingSize.height
+        }
+        let long = String(repeating: "Claude Code is not running the PreToolUse hook. ", count: 4)
+
+        #expect(height(caption: long) == height(caption: "Short."))
+        #expect(height(diagnostic: long) > height(diagnostic: "Short."))
+    }
+
     /// Availability only speaks for the aggregate while it is not ready.
     ///
     /// Naming this makes the early return a contract instead of an

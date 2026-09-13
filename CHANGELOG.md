@@ -4,6 +4,13 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## Unreleased
+
+### Changed
+
+- **Settings is three toolbar panes: Products, Display and Quota.** Each pane is its own height, so the window no longer scrolls, and it opens on the last pane used. Every caption is one line, with the rest in the row's tooltip. What a product watches, what it cannot show and its hooks file are behind an ⓘ. A reported failure still shows in the row. (`docs/figma-design.md` §8.)
+- **Finishing onboarding opens Settings in its own window** and closes the welcome window, rather than turning the welcome window into Settings.
+
 ## 0.4.0 Alpha — 2026-09-13
 
 **Notchline watches a fourth product, Trae Desktop, at L5.** In Trae 3.5.91's local IDE mode, a row shows each Turn with Trae's own title, the workspace folder and the text Trae is displaying. When Trae asks for a command approval or poses a question, the row shows the full request, to be answered in Trae. It is the first product watched without hooks, through a companion extension that Notchline installs. (`docs/product-support.md`, `docs/trae-integration.md`.)

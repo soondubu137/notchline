@@ -1,20 +1,45 @@
 // Three first-run pages in one stable macOS window. See `figma-design.md` §7.
-// The specimens use the product's own views with numbered keys. Settings
-// reuses the scene after onboarding completes, at its own content height.
+// The specimens use the product's own views with numbered keys. Finishing
+// onboarding closes this window and opens Settings in its own scene.
 import AppKit
 import SwiftUI
 
+/// First run, and the hand-over to Settings once it is done.
+///
+/// **This window used to become Settings**, by drawing ``AppSettingsView`` in
+/// place of onboarding. It cannot any more: Settings is three toolbar panes,
+/// and a `TabView` draws those only inside the `Settings` scene — in this
+/// `Window` the same view measured as a segmented control in the title bar,
+/// no pane name for a title, and the pane floating in the 840 pt the first-run
+/// pages had left. So finishing onboarding opens the one Settings window the
+/// gear opens too, and closes this one.
 struct ProductRootView: View {
     @EnvironmentObject private var store: MonitorStore
+    @Environment(\.openSettings) private var openSettings
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         Group {
             if store.hasCompletedOnboarding {
-                AppSettingsView()
+                MacOSWindowColor.windowBackground
+                    .frame(width: OnboardingLayout.width, height: OnboardingLayout.height)
             } else {
                 OnboardingView()
             }
         }
+        .onChange(of: store.hasCompletedOnboarding) { _, completed in
+            if completed { handOverToSettings() }
+        }
+        // The window is suppressed at launch once onboarding is done, so this
+        // is only a window restored against that; it goes the same way.
+        .onAppear {
+            if store.hasCompletedOnboarding { handOverToSettings() }
+        }
+    }
+
+    private func handOverToSettings() {
+        SettingsWindowPresenter.present { openSettings() }
+        dismiss()
     }
 }
 
