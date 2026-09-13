@@ -4,6 +4,12 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## Unreleased
+
+### Added
+
+- **Trae completed Turns clear when their completion is displayed in the focused window.** Covers local IDE and IDE-hosted SOLO, including multiple main windows. Exact native Thread/Turn/message identity, visible completion controls, foreground and screen availability must agree. Running and pending requests remain. Continuously watched completions use the existing two-second settling interval. Requires companion 1.1.0 and reopened Trae windows; unavailable evidence retains the row. (`docs/trae-integration.md`.)
+
 ## 0.4.1 Alpha — 2026-09-13
 
 **Settings is three toolbar panes, one size for all of them.** No new capability: what changed is how Settings is laid out, and that an open Settings window no longer redraws for work it does not show. (`docs/figma-design.md` §8.)

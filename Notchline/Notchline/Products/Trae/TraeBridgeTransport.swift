@@ -4,8 +4,9 @@ import Foundation
 
 /// Newline framing, connection lifetimes and boundary order live on this
 /// serial queue. Only typed evidence crosses into the reducer actor.
-nonisolated final class TraeBridgeTransport: @unchecked Sendable {
+nonisolated final class TraeBridgeTransport: TraeReadReporting, @unchecked Sendable {
     private final class Peer {
+        var identity = UUID()
         let fd: Int32
         let reader: DispatchSourceRead
         var bytes = Data()
@@ -68,6 +69,31 @@ nonisolated final class TraeBridgeTransport: @unchecked Sendable {
         await withCheckedContinuation { c in queue.async { [self] in
             let path = boundary.peer(for: threadID)
             c.resume(returning: path.flatMap { peers[$0]?.healthy == true ? $0 : nil })
+        } }
+    }
+    func readCompletions() async -> [TraeReadProof] {
+        let paths: [String: UUID] = await withCheckedContinuation { c in queue.async { [self] in
+            c.resume(returning: peers.filter { $0.value.healthy }.mapValues(\.identity))
+        } }
+        let requestedAt = Date()
+        let readings = await withTaskGroup(of: (String, TraeReadProof?).self) { group in
+            for path in paths.keys {
+                group.addTask { await Task.detached { (path, TraeReadQuery.read(path: path)) }.value }
+            }
+            var result: [String: TraeReadProof] = [:]
+            for await (path, proof) in group { if let proof { result[path] = proof } }
+            return result
+        }
+        return await withCheckedContinuation { c in queue.async { [self] in
+            let now = Date()
+            c.resume(returning: readings.compactMap { path, proof in
+                guard active, let peer = peers[path], peer.healthy, peer.identity == paths[path],
+                      let current = boundary.current[proof.threadID],
+                      proof.matches(current, requestedAt: requestedAt, receivedAt: now) else { return nil }
+                // Any healthy window may prove reading, regardless of which
+                // window first owned the lifecycle. This never transfers it.
+                return proof
+            })
         } }
     }
     private func discover() {
@@ -136,11 +162,13 @@ nonisolated final class TraeBridgeTransport: @unchecked Sendable {
                     case "snapshot":
                         guard peer.hello else { throw TraeBridgeError.schema }
                         try boundary.consume(frame, peer: path, repository: repository, epoch: epoch)
+                        if frame.baseline == true { peer.identity = UUID() }
                         let wasHealthy = peer.healthy; peer.healthy = true; lastDiagnostic = nil
                         if !wasHealthy || !(frame.rows?.isEmpty ?? true) || !(frame.excluded?.isEmpty ?? true) { changes.signal() }
                     case "heartbeat":
                         guard peer.hello, frame.schema == 1, frame.version == TraeInstallation.traeVersion else { throw TraeBridgeError.schema }
                     case "unavailable":
+                        peer.identity = UUID()
                         boundary.lost(peer: path)
                         if peer.healthy { peer.healthy = false; changes.signal() }
                         lastDiagnostic = TraeBridgeError.unavailable.localizedDescription

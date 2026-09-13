@@ -24,6 +24,12 @@
       if (!q || typeof q !== 'object') return;
       if (q.op === 'stop') { this.stop(); this.emit({requestId:q.requestId, ok:true}); return; }
       if (q.op === 'lease') { this.expires = Date.now() + 35000; this.emit({requestId:q.requestId, ok:!!this.unsubscribe}); return; }
+      if (q.op === 'read') {
+        // A failed optional reading never tears down lifecycle observation.
+        let reading = null;
+        try { reading = await this.readCompletion(); } catch {}
+        this.emit({requestId:q.requestId, ok:true, reading}); return;
+      }
       if (q.op === 'navigate') {
         let opened = false;
         try {
@@ -45,6 +51,8 @@
       const module = await import(q.moduleURL); if (generation !== this.generation) return;
       const r = module.__webpack_require__;
       const c = r(6493).m.getInstance(); this.api = c.resolve(r(21458).R).getClient(); this.v2 = r(10678).Ok;
+      try { this.nativeHost = r(20469).mc.getInstance().resolve(r(35007).k.INativeHostService); }
+      catch { this.nativeHost = null; } // Optional read evidence fails closed.
       this.stores = r(57419); this.store = r(22976).z.getStoreInstance();
       this.permission = r(71788).rT;
       // Read the same pure pending-question selector the form consumes.
@@ -63,6 +71,62 @@
       this.featureUnsubscribe = this.flags.subscribe(() => this.capture());
       this.lease = setInterval(() => { if (Date.now() > this.expires) this.stop(); }, 15000);
       this.capture(true);
+    }
+    completionVisible(messageID) {
+      if (!P.id(messageID)) return false;
+      const roots = document.querySelectorAll(`.turn__agent-message[data-message-id="${messageID}"]`);
+      if (roots.length !== 1) return false;
+      const e = roots[0].querySelector('.assistant-action-bar');
+      if (!e?.checkVisibility({checkOpacity:true,checkVisibilityCSS:true})) return false;
+      const b = e.getBoundingClientRect();
+      let left = Math.max(0,b.left), top = Math.max(0,b.top);
+      let right = Math.min(innerWidth,b.right), bottom = Math.min(innerHeight,b.bottom);
+      for (let p=e.parentElement; p; p=p.parentElement) {
+        const style = getComputedStyle(p), rect = p.getBoundingClientRect();
+        if (/auto|scroll|hidden|clip/.test(style.overflowX)) { left=Math.max(left,rect.left); right=Math.min(right,rect.right); }
+        if (/auto|scroll|hidden|clip/.test(style.overflowY)) { top=Math.max(top,rect.top); bottom=Math.min(bottom,rect.bottom); }
+      }
+      if (right-left < 1 || bottom-top < 1) return false;
+      const hit = document.elementFromPoint((left+right)/2,(top+bottom)/2);
+      return !!hit && (hit === e || e.contains(hit));
+    }
+    async readCompletion() {
+      const generation = this.generation, host = this.nativeHost;
+      if (!this.unsubscribe || !host || !document.hasFocus() || document.visibilityState !== 'visible') return null;
+      const windowID = host.windowId;
+      if (!Number.isSafeInteger(windowID) || windowID <= 0) return null;
+      const focused = async () => {
+        const active = await host.getActiveWindowId();
+        const counts = await host.getWindowCountByState({isFocused:true});
+        return active === windowID && counts?.focused === 1 && document.hasFocus();
+      };
+      if (!await focused()) return null;
+      const threadID = this.v2.getCurrentSession()?.sessionId;
+      if (!P.id(threadID)) return null;
+      const sessions = this.stores.eA.allSessions.get();
+      if (!Array.isArray(sessions) || sessions.length > 2048) return null;
+      const session = sessions.find(s => s.sessionId === threadID);
+      const message = this.stores.eA.lastAgentMessage.get(threadID);
+      if (!session || !message || message.sessionId !== threadID || !P.id(message.turnId) || !P.id(message.messageId) ||
+          !P.inScope(session,message,{platform:this.platform(),planMode:this.stores.eA.planMode.get(threadID)}) ||
+          !['completed','canceled','failed'].includes(message.status) ||
+          this.permission.get(threadID) || this.questions.get(threadID) || !this.completionVisible(message.messageId)) return null;
+      const {turnId:turnID,messageId:messageID,status} = message;
+      // Reading in another window does not transfer lifecycle ownership. Verify
+      // its native root independently, even if this peer never observed a start.
+      const native = await this.api.chat.getSession({chat_session_id:threadID});
+      if (native?.code !== 0 || native.data?.chat_session_id !== threadID || native.data.parent_session_id ||
+          native.data.session_type !== 'side_chat' || native.data.remote_project_id) return null;
+      if (!await focused() || generation !== this.generation || !this.unsubscribe ||
+          document.visibilityState !== 'visible' || this.v2.getCurrentSession()?.sessionId !== threadID) return null;
+      const current = this.stores.eA.lastAgentMessage.get(threadID);
+      const latestSessions = this.stores.eA.allSessions.get();
+      const latestSession = Array.isArray(latestSessions) && latestSessions.length <= 2048
+        ? latestSessions.find(s => s.sessionId === threadID) : null;
+      if (current?.sessionId !== threadID || current?.turnId !== turnID || current?.messageId !== messageID || current?.status !== status ||
+          !latestSession || !P.inScope(latestSession,current,{platform:this.platform(),planMode:this.stores.eA.planMode.get(threadID)}) ||
+          this.permission.get(threadID) || this.questions.get(threadID) || !this.completionVisible(messageID)) return null;
+      return {windowID, threadID, turnID, messageID, observedAt:Date.now()/1000};
     }
     capture(baseline = false) {
       try {

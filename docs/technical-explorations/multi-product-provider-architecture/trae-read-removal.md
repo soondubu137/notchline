@@ -1,14 +1,16 @@
 # Trae read-removal feasibility
 
+Implementation update — 2026-09-13: the bounded core below is implemented in companion 1.1.0. The current contract and validation results are in [Trae integration](../../trae-integration.md#read-removal--companion-110). Earlier observations and remaining native acceptance cases below are retained as research history; they do not replace the production contract.
+
 Investigated on 2026-09-13. **Research only: no production implementation or support claim.** Terminology follows [CONTEXT.md](../../../CONTEXT.md).
 
 ## Finding and scope
 
 The required signals are accessible in the installed Trae 3.5.91 renderer, in both IDE and IDE-hosted SOLO. A companion can associate the selected Thread with its exact native assistant message and Turn, observe completion and pending requests, and inspect whether the corresponding completion is displayed. Notchline can combine that evidence with macOS foreground and screen availability, then reuse its existing read-removal gate.
 
-This establishes a viable implementation route, not complete native acceptance. Multi-window ownership, continuous foreground completion, actual screen lock and several visibility boundaries still need controlled acceptance. Standalone SOLO/SoloLite was not exercised; these findings must not be extended to it. Read removal also does not establish SOLO progress or request-answering coverage.
+This establishes a viable implementation route, not complete native acceptance. The subsequent first-version scope in §7, corrected by the native window-identity validation in §8, includes multiple main windows and accepts conservative retention for unsupported visibility cases. Continuous foreground completion and actual screen lock remain implementation acceptance cases. Standalone SOLO/SoloLite was not exercised; these findings must not be extended to it. Read removal also does not establish SOLO progress or request-answering coverage.
 
-The inspected application is the build pinned by [the Trae integration record](../../trae-integration.md). Its chat module fingerprint was `1198074030bb24e4b79f349c06ffc67b20feda642a9e35836c7194ed4c0fe7ac`. The existing [TraeProvider](../../../Notchline/Notchline/Products/Trae/TraeProvider.swift) still supplies no `ReadEvidenceSource`.
+The inspected application is the build pinned by [the Trae integration record](../../trae-integration.md). Its chat module fingerprint was `1198074030bb24e4b79f349c06ffc67b20feda642a9e35836c7194ed4c0fe7ac`. At the start of this research, [TraeProvider](../../../Notchline/Notchline/Products/Trae/TraeProvider.swift) supplied no `ReadEvidenceSource`.
 
 ## Target rules and evidence
 
@@ -48,7 +50,7 @@ Renderer focus alone is insufficient evidence in this test environment. During U
 
 The reliable foreground/background comparison therefore used an on-demand renderer sample and separately read actual macOS Trae activation and screen availability. The localhost WebSocket was temporary diagnostic transport. No content-security setting was changed. The production transport should remain the existing companion channel.
 
-An event-only implementation has a gap: actual application activation can occur without a new renderer focus edge. Request a fresh snapshot on native activation, screen availability changes and the shared scheduled recheck. Do not relabel an old renderer event with the current time. Correlate the reply with a request, owning peer/window, observation epoch and exact Thread/Turn/message identity; recheck native focus after the asynchronous reply. A focus transition during the request invalidates that attempt. Multi-window focus must be verified before release; global application activation alone is never sufficient.
+An event-only implementation has a gap: actual application activation can occur without a new renderer focus edge. Request a fresh snapshot on native activation, screen availability changes and the shared scheduled recheck. Do not relabel an old renderer event with the current time. Correlate the reply with a request, owning peer/window, observation epoch and exact Thread/Turn/message identity; recheck native focus after the asynchronous reply. A focus transition during the request invalidates that attempt. The corrected first-version proposal uses native window identity and focus evidence (§8), not a single-window restriction; global application activation alone is still insufficient.
 
 There is also a settling trap. The [existing gate](../../../Notchline/Notchline/CodexDesktopUnreadState.swift) immediately removes a row when previously observed unread evidence becomes read. If the short gap between native completion and rendering is reported as **unread**, watching a Turn finish can bypass the normal two-second settling interval. Report incomplete render evidence as unavailable, without claiming unread; a positively observed different Thread, background state or hidden panel can establish unread. This distinction passed an isolated check against the unchanged production gate.
 
@@ -72,3 +74,92 @@ The live probe captured selected identities, statuses, pending IDs, visibility f
 No Release CPU or wake-up measurements were made. The broad diagnostic mutation observer is not an acceptable production performance result. Before declaring support, validate targeted observer cost in Release, two-window ownership, scrolling to older content, hidden/minimised surfaces, actual lock/wake, lost peers, old epochs, native activation during asynchronous reads, and continuous foreground completion. Unknown cases must retain the row.
 
 Both disposable Threads were deleted through Trae's native API and independently returned `chat session not found`. The original Thread and IDE presentation were restored. The temporary window was closed, observers unsubscribed, timers cleared, the diagnostic WebSocket closed and the probe global removed. Temporary captures and executables were discarded after recording these conclusions.
+
+## 7. Bounded first-version scope after additional validation
+
+The user accepted reduced edge-case coverage and asked to establish the useful core before implementation. This supersedes treating complete acceptance of the original table as a prerequisite to starting implementation. The initially proposed single-window restriction was subsequently rejected by the user and is withdrawn; the scope table below incorporates the additional multi-window validation in §8. Production code remains unchanged by this follow-up.
+
+### Additional native observations
+
+The follow-up used the already completed original Thread without submitting a prompt, reading its answer text into the probe, or changing any native Turn. Only selection/status metadata, DOM visibility booleans and window counts were returned. A temporary global held the read function; it created no persistent listener or background server.
+
+| Observation | Result |
+| --- | --- |
+| Native main-window inventory | `20469.mc.getInstance().resolve(35007.k.IHostService).getWindows({includeAuxiliaryWindows:false})` returned one main window, then two while a disposable second window was open, then one after it closed. The second window was still at its workspace trust prompt: detecting it did not depend on its companion being loaded or its folder being trusted. |
+| Completion visible in IDE | The selected native completed assistant matched exactly one DOM root; both that root and its completion action bar passed clipping and hit-testing checks. |
+| IDE scrolled to older content | The same selected completed assistant root still passed visibility, and its action bar still existed in the DOM, but the action bar failed visibility. Checking the root alone would have accepted this sample incorrectly. |
+| SOLO scrolled away from completion | The selected assistant and completion control remained identifiable, but neither passed visibility. |
+| SOLO returned to the bottom | The same selected completed assistant and completion control both passed visibility. |
+| Restore | The original Thread, IDE presentation and bottom reading position were restored. Native main-window count was one. The temporary window, timer, probe global and empty workspace were removed. |
+
+The completion check intersected the element rectangle with the viewport and each clipping ancestor, required positive remaining area and CSS visibility, then used `document.elementFromPoint` at the intersection's centre to require a hit on that element or its descendant. This detects the tested scrolling case and provides a conservative same-document obstruction check. It does not claim whole-answer reading or full macOS window occlusion detection. A missing, obscured or unrecognised completion control means retention.
+
+The initial window-count sample ran before the second window had finished opening and still returned one. A later sample was taken with the second window visibly open and returned two. The latter is the multi-window result; startup timing is not inferred from the first sample.
+
+### Proposed first version
+
+| Capability | Initial scope |
+| --- | --- |
+| Read removal | Local IDE and IDE-hosted SOLO, including multiple native Trae main windows. Require actual macOS foreground, an available screen, matching native activity and renderer window IDs, native and renderer focus, the correct selected native Thread/Turn/message, terminal state, no pending request, and a visible completion control. |
+| Return to a completed Thread | Remove on a fresh positive observation through the existing membership gate. |
+| Finish while in front | Use the existing two-second settling behaviour. Render-pending evidence remains unavailable; it must not fabricate an unread-to-read transition. |
+| Background, another Thread, hidden panel, older content, pending request | Retain. Completion visibility adds useful protection without requiring full window geometry. |
+| More than one native main window | Judge each candidate against the window actually displaying it. A different focused window cannot retire it; a focused window with a fresh matching completion may. An unavailable peer withholds only its proof, not every Trae reading. Window count is diagnostic, never a global veto. |
+| Lost route, timeout, changed schema, stale generation, mismatched identity, failed window query | Supply no positive proof. Retain the affected row. |
+| Unsupported completion rendering, unusual occlusion, minimisation and other Spaces | No additional coverage promise. Conservative retention is acceptable where the observed guards reject the surface. OS-level occlusion that leaves all guards positive remains an explicitly unverified limit. |
+
+Use **on-demand queries through the existing companion channel**, rather than adding a broad mutation observer. The current `ReadEvidenceSource` composition and `terminalUnreadRecheckInterval = 1` already provide rechecks while a relevant terminal row is listed. Query only terminal candidates, inspect the selected message rather than the whole history, bound request size and timeout, and discard replies after disconnect or generation change. Do not issue renderer queries when the screen is unavailable or Trae is in the background. Native activation events can improve latency but are not needed to establish the initial polling route's feasibility.
+
+The one-second value is the existing shared recheck setting, not a newly measured latency guarantee. This experiment measured neither production request round-trip latency nor Release CPU cost. Those belong to implementation validation using the actual companion path. No continuously running observer, new independent timer or SwiftUI animation is needed for this proposal.
+
+### Work ready for implementation
+
+1. Add a bounded, request-correlated read query to the companion, including native window identity/focus and the selected completion's visibility.
+2. Add the Trae read-evidence boundary/source and compose it with the existing runtime. Preserve exact candidate identity, observation generation, native foreground/screen checks, settling and immutable retirement of the same Turn.
+3. Test single- and multiple-main-window paths, background/different selection, scrolled/hidden completion, native window mismatch, active-status protection and stale/failed replies. Run full Swift tests and measure the actual query path in Release. Continuous foreground completion is an acceptance scenario for that vertical slice, not a reason for another broad preliminary investigation.
+4. Update the product capabilities and private-dependency record with per-window evidence and conservative fallbacks. Auxiliary editor windows, exhaustive OS occlusion and standalone SOLO remain outside the verified scope.
+
+## 8. Multiple main windows: native identity validation
+
+The user explicitly requires multiple main windows in the first version. Rejecting all readings merely because two windows exist is not an accepted fallback.
+
+### Native implementation and interfaces
+
+The installed main-process bundle defines `getActiveWindowId` using the focused main window, falling back to the last active main window when none is focused. `IHostService.hadLastFocus()` compares that result to the calling renderer's native window ID. This confirms why the latter cannot independently prove foreground reading, but also identifies the native per-window comparison missing from the earlier experiment.
+
+The following calls were verified live through the existing renderer container:
+
+- `20469.mc.getInstance().resolve(35007.k.INativeHostService).windowId`: the calling renderer's native window ID.
+- `INativeHostService.getActiveWindowId()`: focused-or-last-active main window ID.
+- `INativeHostService.getWindowCountByState({isFocused:true,isVisible:true})`: counts from Electron native window `isFocused()` / `isVisible()` state.
+- `IHostService.getWindows({includeAuxiliaryWindows:false})`: main-window IDs, used to verify both windows remained open during the experiment.
+
+The additional native implementation is in `out/main.js`, SHA-256 `90fda6a0e5b4851a8a060afe1ebef3dbe69403934ab8f5669c98539b95acdf8d`. Production use must register and validate this private dependency alongside the renderer dependencies; a method's presence alone is not a supported public contract.
+
+### Native observations
+
+A temporary bounded observer sampled only window IDs, focus booleans, selected Thread ID and mode. The original renderer was window `1`; a disposable second main window was `6`. Neither native Turn was started nor any answer submitted.
+
+| State observed from original window `1` | Open main windows | Native active ID | Native focused-window count | Original document focused |
+| --- | --- | --- | --- | --- |
+| Original IDE window active | `1` | `1` | `1` | `true` |
+| Second main window active | `1, 6` | `6` | `1` | `false` |
+| No native window focused | `1, 6` | `6` | `0` | `false` |
+| Returned to original IDE window, second still open | `1, 6` | `1` | `1` | `true` |
+| Original window switched to SOLO, second still open | `1, 6` | `1` | `1` | `true` |
+
+The selected Thread in the original renderer remained unchanged throughout. Thus the first window can lose and regain reading eligibility while two windows remain open; global refusal is unnecessary. The zero-focus sample also directly demonstrates the last-active fallback: ID `6` remained available with no native focused window and must not count as a reading.
+
+These observations validate the window-selection component. They are not a newly measured end-to-end row retirement or a simultaneous independent macOS-foreground recording; the separate macOS/screen gates and completion-visibility tests from earlier sections remain necessary.
+
+### Per-window first-version design
+
+Require a fresh sample whose renderer/native window ID equals the native active main-window ID, with native focus present and that renderer document focused. Also retain the independent macOS foreground/screen checks and exact Thread/Turn/message/completion-region checks. The main-window count does not affect eligibility. Unknown identity, no focus or mismatched identity produces no positive proof for that window.
+
+Keep lifecycle ownership separate from the place where a Thread is read. The existing lifecycle boundary pins one peer as owner to order Turn events; the read source must not assume that the lifecycle owner is the only window where the user can display that Thread. Read queries can inspect the selected completion in each healthy peer, within a bounded request budget, and accept a fresh native-confirmed match for an existing candidate from the focused peer. They must never admit a historical Thread, reopen a Turn or move lifecycle ownership merely to obtain read evidence.
+
+Correlate responses with the connection epoch and native window identity, not only the extension-host PID or socket path. Recheck focus after asynchronous work; conflicting or stale observations withhold the affected proof. Failure of an unrelated peer does not invalidate a positive, fully matched proof from the focused window.
+
+Implementation acceptance must exercise two ordinary companion-bearing windows with distinct Threads, switching between them and returning to a completed Thread; the same Thread displayed in another window needs an additional identity/routing test. This follow-up used an empty second window at its trust prompt to isolate native focus, so it does not claim that the not-yet-written multi-peer read transport has already passed those cases.
+
+The temporary observer and timers were removed, the second window was closed, and the original Thread and IDE mode were restored. The disposable workspace was deleted. No production code or installed companion changed.

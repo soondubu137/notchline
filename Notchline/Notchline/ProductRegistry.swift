@@ -278,9 +278,9 @@ enum ProductRegistry {
         ),
         ProductDescriptor(
             kind: .trae, settingsTitle: "Trae Desktop", setup: .companionExtension,
-            watches: "Trae 3.5.91 in local IDE mode. Command approvals and questions are read here "
-                + "and answered in Trae.",
-            notShown: "SOLO, Plan/Spec, remote work, read removal and usage quota.",
+            watches: "Trae 3.5.91 local IDE Threads. Requests are read here and answered in Trae. "
+                + "Visible completed Turns clear in IDE and IDE-hosted SOLO, including multiple windows.",
+            notShown: "Complete SOLO progress/approval coverage, standalone SOLO, Plan/Spec, remote work and usage quota.",
             make: {
                 let service = TraeProvider()
                 return ProductModule(service: service, navigator: TraeNavigator(transport: service.source.transport))

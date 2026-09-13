@@ -5,7 +5,7 @@ import Foundation
 /// application bundle or authentication files are edited by this integration.
 nonisolated struct TraeInstallation: Sendable {
     static let traeVersion = "3.5.91"
-    static let companionVersion = "1.0.0"
+    static let companionVersion = "1.1.0"
     static let extensionID = "notchline.trae-companion"
     let application: URL
     let directory: URL

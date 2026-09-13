@@ -2,8 +2,8 @@ import AppKit
 import Darwin
 import Foundation
 
-/// One composition centre for Trae, with no answer channel or read-removal
-/// evidence. The companion supplies lifecycle and displayed content only.
+/// One composition centre for Trae. Read evidence retires rows through the
+/// shared gate; navigation and the reading-only request surface stay separate.
 struct TraeProvider: AgentMonitoring, IntegrationConfiguring {
     nonisolated let agent = AgentKind.trae
     private let runtime: ProductMonitoringRuntime
@@ -13,8 +13,11 @@ struct TraeProvider: AgentMonitoring, IntegrationConfiguring {
     init(installation: TraeInstallation = TraeInstallation()) {
         let source = TraeSource(installation: installation)
         self.source = source
+        let readEvidence = TraeReadEvidence(screen: ScreenAvailabilityWatcher(),
+            foreground: DesktopReadingWatcher(bundleIdentifier: "com.trae.app"), transport: source.transport)
         runtime = ProductMonitoringRuntime(agent: .trae, lifecycle: source, sessions: source,
-                                           rowContent: source, changeEvents: [source.transport.changes.events()])
+                                           rowContent: source, readEvidence: readEvidence,
+                                           changeEvents: [source.transport.changes.events()])
     }
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         await runtime.fetchSnapshot(dismissedRowIDs: dismissedRowIDs)

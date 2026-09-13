@@ -7,6 +7,7 @@ const net = require('node:net');
 const crypto = require('node:crypto');
 const VERSION = '3.5.91', SCHEMA = 1, MAX_FRAME = 1024 * 1024;
 const fingerprints = {
+  'out/main.js':'90fda6a0e5b4851a8a060afe1ebef3dbe69403934ab8f5669c98539b95acdf8d',
   'modules/ai-agent/libai_agent.dylib':'2e93b706d711574a717a985bc84c329aa903d9a75b4bcde83e01ce84d2450f6f',
   'out/vs/workbench/workbench.desktop.main.js':'a7a826e8191a386eb7c73bc3f6926924ef981f377721486c4480f0917b24276d',
   'node_modules/@byted-icube/ai-modules-chat/dist/index.mjs':'1198074030bb24e4b79f349c06ffc67b20feda642a9e35836c7194ed4c0fe7ac'
@@ -25,11 +26,11 @@ function send(client, value) {
   if (Buffer.byteLength(bytes) > MAX_FRAME || client.writableLength > 2 * MAX_FRAME) { client.destroy(); return; }
   client.write(bytes);
 }
-function forward(q) {
+function forward(q, timeout = 8000) {
   if (!widget || stopping) return Promise.reject(Error('Companion unavailable'));
   return new Promise((resolve, reject) => {
     const requestId = crypto.randomUUID();
-    const timer = setTimeout(() => { pending.delete(requestId); reject(Error('Renderer did not respond')); }, 8000);
+    const timer = setTimeout(() => { pending.delete(requestId); reject(Error('Renderer did not respond')); }, timeout);
     pending.set(requestId, {resolve, reject, timer});
     widget.postMessage({...q, requestId}).then(sent => {
       if (!sent) { clearTimeout(timer); pending.delete(requestId); reject(Error('Renderer not attached')); }
@@ -90,8 +91,12 @@ exports.activate = async function(context) {
             !(q.retainedThreadIDs ?? []).every(id => /^[a-f0-9]{24}$/.test(id))) { client.destroy(); return; }
         retainedThreadIDs = q.retainedThreadIDs ?? [];
         subscribed = true; client.setTimeout(0); clients.add(client);
-        send(client, {type:'hello', schema:SCHEMA, version:VERSION, bridgeVersion:'1.0.0', pid:process.pid});
+        send(client, {type:'hello', schema:SCHEMA, version:VERSION, bridgeVersion:'1.1.0', pid:process.pid});
         void begin(moduleURL);
+      } else if (q.op === 'read' && !subscribed && watching) {
+        forward({op:'read'}, 800).then(message => {
+          send(client, {ok:true, schema:SCHEMA, version:VERSION, reading:message.reading ?? null}); client.end();
+        }, () => { send(client, {ok:false}); client.end(); });
       } else if (q.op === 'navigate' && !subscribed && /^[a-f0-9]{24}$/.test(q.threadID ?? '')) {
         forward({op:'navigate', threadID:q.threadID}).then(() => {
           send(client, {ok:true}); client.end();

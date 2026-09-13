@@ -99,7 +99,7 @@ Notchline 不提供持久权限规则。请求形态、编码限制和交付语�
 | 审批等待与输入等待 | 支持普通审批、`request_permissions` 和同步问题；过滤自动审核 | 支持第 3 节列出的形态 | 两者均不支持 | 普通手动 `RunCommand` 与 `AskUserQuestion`；排除自动审核和子级活动 |
 | 请求阅读与回答 | 普通审批可回答；`request_permissions` 和同步问题只读；异步问题仅预览 | 范围见第 3 节 | 两者均不支持 | 命令和问题集只读，保留选项、自定义文本限制及可选附加信息；不支持回答 |
 | 手动移除监测行 | 支持，适用于任意 Turn 状态 | 支持，适用于任意 Turn 状态 | 支持，适用于任意 Turn 状态 | 支持，适用于任意 Turn 状态 |
-| 已读后移除 | Desktop 按 Thread 提供的未读状态 | Desktop 记录和满足条件的前台证据；直接宿主终端中的操作 | Desktop：其按会话记录的查看时间，条件支持——用户离开该会话、在该会话上让 Desktop 窗口重新获得焦点或开始另一个会话时写入；一直看着 Turn 结束不会写入，直到上述操作发生。CLI：条件支持——Turn 结束后，在对应终端应用位于前台时键入或粘贴；仅返回标签页或移动指针不会清除监测行 | 不支持；导航不会将 Turn 标记为已读 |
+| 已读后移除 | Desktop 按 Thread 提供的未读状态 | Desktop 记录和满足条件的前台证据；直接宿主终端中的操作 | Desktop：其按会话记录的查看时间，条件支持——用户离开该会话、在该会话上让 Desktop 窗口重新获得焦点或开始另一个会话时写入；一直看着 Turn 结束不会写入，直到上述操作发生。CLI：条件支持——Turn 结束后，在对应终端应用位于前台时键入或粘贴；仅返回标签页或移动指针不会清除监测行 | 有条件支持 IDE 与 IDE 内 SOLO，包括多个主窗口：Trae 位于前台、屏幕可用，且新鲜的原生窗口焦点证据与可见完成区域匹配；仅导航成功不够 |
 | 导航 | 验证目标后，通过深链接打开确切的 Thread | 将 Desktop 或终端宿主置于前台；宿主支持身份匹配时选中终端标签页或 pane | Desktop：仅将应用置于前台；它唯一的深链接不能打开会话。CLI：将进程的宿主置于前台；支持时选中匹配的终端标签页或 pane | 通过所属窗口打开确切的已观察根 Thread，并核对选中结果；否则仅将 Trae 置于前台 |
 | 剩余额度、窗口时长与重置时间 | 支持所报告的主窗口 | 支持所报告的窗口，最多三个 | 全部不支持 | 不支持 |
 | 多个额度窗口 | 当前界面展示一个报告的窗口 | 最多三个 | 不支持 | 不支持 |
@@ -113,7 +113,7 @@ Notchline 不提供持久权限规则。请求形态、编码限制和交付语�
 
 Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/hooks.json`，因此一次注册即可观察两者，Settings 中也只有一个开关。其 live progress 由事件触发更新，并非 token 流式更新。CLI 的中断实验尚未确认 `Ctrl-C` 是否总会发出 `Stop`；已测量到 Desktop 的 **Stop execution** 不发出任何 `Stop`。缺少结束信号时，绝不因没有后续信号而合成结束事件，即使 Desktop 自身的摘要记录了会话转为空闲。[CLI 测量记录](technical-explorations/multi-product-provider-architecture/antigravity-cli.md)和 [Desktop 测量记录](technical-explorations/multi-product-provider-architecture/antigravity-desktop.md)列出了模式、延迟和保守的移除路径。这些限制属于其 L3 声明的一部分。
 
-Trae 固定到已验证的 3.5.91 应用文件指纹。支持本地 IDE/V2 中持久存在的根 Thread。IDE 内的 SOLO 仍不纳入已声明的 L5 覆盖，尽管[原生边界测试](technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md)已确认普通本地生命周期及结构化问题能力。捕获的 22 帧 SOLO 数据均没有预览文本：当前读取器没有投影测试中位于 `finish.params.summary` 的最终答案。无害命令直接在沙箱中执行，没有进入手动等待，因此 SOLO 命令审批的原生验收仍未完成。这是两项独立限制，不代表 SOLO 完全无法观察。它与独立 SoloLite 不同；后者、远程工作区、Plan/Spec 和子级活动仍被排除。初始快照不会准入历史或已经运行的 Turn。失去观察时隐藏监测行，不推断完成；不提供删除检测或已读后移除来源。[实现及原生验收记录](trae-integration.md)说明安装方式、来源限制和验证。
+Trae 固定到已验证的 3.5.91 应用文件指纹。支持本地 IDE/V2 中持久存在的根 Thread。IDE 内的 SOLO 仍不纳入已声明的 L5 覆盖，尽管[原生边界测试](technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md)已确认普通本地生命周期及结构化问题能力。捕获的 22 帧 SOLO 数据均没有预览文本：当前读取器没有投影测试中位于 `finish.params.summary` 的最终答案。无害命令直接在沙箱中执行，没有进入手动等待，因此 SOLO 命令审批的原生验收仍未完成。这是两项独立限制，不代表 SOLO 完全无法观察。它与独立 SoloLite 不同；后者、远程工作区、Plan/Spec 和子级活动仍被排除。初始快照不会准入历史或已经运行的 Turn。失去观察时隐藏监测行，不推断完成；删除不是移除来源。IDE 与 IDE 内 SOLO 的已读移除使用新鲜的逐窗口证据；完成控件无法确认或被遮挡时保留条目。辅助窗口及完整的操作系统遮挡检测仍未验证。[实现及原生验收记录](trae-integration.md)说明安装方式、来源限制和验证。
 
 ## 6. 实现与验证
 

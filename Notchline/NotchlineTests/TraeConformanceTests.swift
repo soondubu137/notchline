@@ -228,7 +228,7 @@ struct TraeConformanceTests {
         for value in ["{", "{}", #"{"version":"2.0.0"}"#] {
             try Data(value.utf8).write(to: installation.marker); #expect(!installation.installed)
         }
-        try Data(#"{"version":"1.0.0"}"#.utf8).write(to: installation.marker)
+        try Data(#"{"version":"1.1.0"}"#.utf8).write(to: installation.marker)
         #expect(installation.installed)
     }
 
