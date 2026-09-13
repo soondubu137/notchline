@@ -50,8 +50,7 @@ struct AppSettingsView: View {
     var body: some View {
         // A `TabView` inside the `Settings` scene is the toolbar-pane window
         // macOS draws for every utility's settings: the tabs sit in the
-        // toolbar, the selected tab names the window, and the window takes
-        // each pane's own height as it changes, animating between them.
+        // toolbar and the selected tab names the window.
         TabView(selection: $pane) {
             Tab(SettingsPane.products.title, systemImage: SettingsPane.products.systemImage, value: .products) {
                 SettingsPaneLayout { ProductsSettingsPane() }
@@ -67,49 +66,80 @@ struct AppSettingsView: View {
     }
 }
 
-/// One pane's content, its margins, and the window's closing row under it.
+/// The one size every pane is drawn at.
+enum SettingsWindowLayout {
+    static let width: CGFloat = 580
+
+    /// Everything under the toolbar: the pane's content and the closing row.
+    ///
+    /// **One height for every pane**, the tallest pane's — Display's three
+    /// cards. The window used to take each pane's own height, which moved the
+    /// version and `Quit` up and down the screen with every tab; they belong to
+    /// the window rather than to a pane, so they stay where they were. A test
+    /// holds every pane to this height.
+    static let paneHeight: CGFloat = 491
+
+    /// What a pane is drawn at on a screen too short for ``paneHeight``: the
+    /// shortest connected screen, less the title bar, toolbar and a margin.
+    @MainActor
+    static var fittedPaneHeight: CGFloat {
+        let shortest = NSScreen.screens.map(\.visibleFrame.height).min() ?? 940
+        return min(paneHeight, max(320, shortest - 140))
+    }
+}
+
+/// One pane: its content, scrolling if it must, and the closing row pinned
+/// under it.
 ///
-/// **Sized by what it holds, not by the screen.** The window used to be a
-/// fixed `860` pt scroll view whatever it showed; each pane is now its own
-/// height, so the window is exactly as tall as the pane in front. The scroll
-/// view stays only as the fallback for a screen shorter than a pane.
+/// **The closing row is outside the scroll view.** It is the same row in the
+/// same place under every pane, so a pane whose content runs long — a product
+/// row carrying a wrapped failure, a registry grown past what the card holds —
+/// scrolls its own content and never pushes the row off the window.
 ///
-/// **The height is measured and then pinned, not left to the scroll view.** A
-/// `ScrollView` offered no height does report its content's, and a flexible
-/// `maxHeight` over it lays out correctly — but the `Settings` scene sizes its
-/// window from each tab once and never again from a flexible frame: measured,
-/// all three panes shared the window the first had opened at, `450` pt, so
-/// Products stood over a blank band and Quota scrolled. A fixed height is
-/// what the scene follows from tab to tab.
+/// **The height is fixed, not measured.** The `Settings` scene sizes its window
+/// from a tab's fixed height and never from a flexible frame — measured, a
+/// `maxHeight` over the scroll view left all three panes in the first one's
+/// window — and a fixed height is what this window wants anyway.
 struct SettingsPaneLayout<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
-    @State private var contentHeight: CGFloat?
-
     var body: some View {
-        ScrollView(.vertical) {
-            VStack(alignment: .leading, spacing: 22) {
-                content()
-                SettingsClosingRow()
+        VStack(spacing: 0) {
+            ScrollView(.vertical) {
+                SettingsPaneContent(content: content)
             }
-            .padding(.horizontal, 24)
-            .padding(.top, 6)
-            .padding(.bottom, 20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            // Grows with the pane as well as settling it: a diagnostic line
-            // arriving under a product row makes the window a line taller.
-            .onGeometryChange(for: CGFloat.self, of: \.size.height) { contentHeight = $0 }
+            .scrollBounceBehavior(.basedOnSize)
+
+            SettingsClosingFooter()
         }
-        .scrollBounceBehavior(.basedOnSize)
-        .frame(width: 580, height: contentHeight.map { min($0, Self.heightCap) })
+        .frame(width: SettingsWindowLayout.width, height: SettingsWindowLayout.fittedPaneHeight)
         .background(MacOSWindowColor.windowBackground)
     }
+}
 
-    /// The tallest a pane is drawn before it scrolls: the shortest connected
-    /// screen, less the title bar and toolbar above the pane and a margin.
-    private static var heightCap: CGFloat {
-        let shortest = NSScreen.screens.map(\.visibleFrame.height).min() ?? 940
-        return max(320, shortest - 140)
+/// A pane's groups at the window's margins, top-aligned.
+struct SettingsPaneContent<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            content()
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 6)
+        // The `22` between groups, kept between the last group and the
+        // closing row that now sits outside this stack.
+        .padding(.bottom, 22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// The closing row at the window's margins.
+struct SettingsClosingFooter: View {
+    var body: some View {
+        SettingsClosingRow()
+            .padding(.horizontal, 24)
+            .padding(.bottom, 20)
     }
 }
 

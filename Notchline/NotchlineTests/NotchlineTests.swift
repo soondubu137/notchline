@@ -9714,6 +9714,31 @@ struct NotchlineTests {
         }
     }
 
+    /// Settings is one size whatever pane is in front, so the version and
+    /// `Quit` never move. That size is the tallest pane's: every pane fits in
+    /// it with its closing row, and Display — the tallest — fills it, so the
+    /// constant cannot drift into a band of empty window under every pane.
+    @Test @MainActor
+    func everySettingsPaneFitsTheOneWindowHeight() {
+        let store = MonitorStore(preferences: nil)
+        func height(_ view: some View) -> CGFloat {
+            let host = NSHostingView(rootView: view.environmentObject(store).frame(width: SettingsWindowLayout.width))
+            host.layoutSubtreeIfNeeded()
+            return host.fittingSize.height
+        }
+        let footer = height(SettingsClosingFooter())
+        let panes: [(String, CGFloat)] = [
+            ("Products", height(SettingsPaneContent { ProductsSettingsPane() })),
+            ("Display", height(SettingsPaneContent { DisplaySettingsPane() })),
+            ("Quota", height(SettingsPaneContent { QuotaSettingsPane() }))
+        ]
+        for (name, content) in panes {
+            #expect(content + footer <= SettingsWindowLayout.paneHeight, "\(name) is \(content) + \(footer)")
+        }
+        let display = panes[1].1 + footer
+        #expect(SettingsWindowLayout.paneHeight - display < 4, "Display is \(display)")
+    }
+
     /// A caption is held to one line and a diagnostic is not: the failure a
     /// product reported wraps rather than being cut off, because a truncated
     /// failure is one nobody reads (CR-029).
