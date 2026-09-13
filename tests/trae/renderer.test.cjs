@@ -43,7 +43,7 @@ test('capture reads this Turn\'s own prompt alongside its progress and threads b
  const session={sessionId:'000000000000000000000001',sessionType:'side_chat',name:'Title'};
  const message={sessionId:session.sessionId,messageId:'000000000000000000000002',turnId:'000000000000000000000003',
    replyToMessageId:'000000000000000000000004',status:'in_progress',agentId:'root',createdAt:1};
- const userMessage={messageId:message.replyToMessageId,sessionId:session.sessionId,content:'Fix the bug'};
+ const userMessage={messageId:message.replyToMessageId,sessionId:session.sessionId,content:[{type:'text',text_content:'Fix the bug'}]};
  r.stores={eA:{allSessions:{get:()=>[session]},lastAgentMessage:{get:()=>message},lastUserMessage:{get:()=>userMessage},planMode:{get:()=>false}},
    TO:{agentPlanItemsByMessageId:{get:()=>[]}}};
  r.permission={get:()=>null};r.questions={get:()=>null};r.flags={getState:()=>({})};r.platform=()=>'trae-ide';

@@ -246,7 +246,7 @@ struct TraeConformanceTests {
         #expect(installation.registration == .mismatched)
         // VSIX identifiers are lower-cased by Trae's own extension host; the
         // read tolerates a different case rather than only its own constant.
-        try Data(#"[{"identifier":{"id":"NOTCHLINE.TRAE-COMPANION"},"version":"1.2.0"}]"#.utf8).write(to: manifest)
+        try Data(#"[{"identifier":{"id":"NOTCHLINE.TRAE-COMPANION"},"version":"1.2.1"}]"#.utf8).write(to: manifest)
         #expect(installation.registration == .current)
     }
 
@@ -260,13 +260,13 @@ struct TraeConformanceTests {
         // field this app models nowhere (`metadata`) -- proving the removal
         // rewrites the manifest as loose JSON rather than through a narrow
         // Codable shape that would silently drop it.
-        let companionFolder = extensionsDirectory.appendingPathComponent("notchline.trae-companion-1.2.0")
+        let companionFolder = extensionsDirectory.appendingPathComponent("notchline.trae-companion-1.2.1")
         let otherFolder = extensionsDirectory.appendingPathComponent("someone.else-9.9.9")
         try FileManager.default.createDirectory(at: companionFolder, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
         try Data(#"""
         [
-          {"identifier":{"id":"notchline.trae-companion"},"version":"1.2.0","relativeLocation":"notchline.trae-companion-1.2.0"},
+          {"identifier":{"id":"notchline.trae-companion"},"version":"1.2.1","relativeLocation":"notchline.trae-companion-1.2.1"},
           {"identifier":{"id":"someone.else"},"version":"9.9.9","relativeLocation":"someone.else-9.9.9","metadata":{"pinned":true}}
         ]
         """#.utf8).write(to: manifest)

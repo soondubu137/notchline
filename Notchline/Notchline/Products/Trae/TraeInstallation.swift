@@ -42,7 +42,7 @@ nonisolated enum TraeCompanionRegistration: Sendable, Equatable {
 /// reinstalls.
 nonisolated struct TraeInstallation: Sendable {
     static let traeVersion = "3.5.91"
-    static let companionVersion = "1.2.0"
+    static let companionVersion = "1.2.1"
     static let extensionID = "notchline.trae-companion"
     let application: URL
     let directory: URL

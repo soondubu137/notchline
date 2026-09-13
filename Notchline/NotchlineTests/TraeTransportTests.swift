@@ -62,7 +62,7 @@ struct TraeTransportTests {
         c,_=s.accept();q=json.loads(c.makefile('rb').readline());assert q['op']=='watch' and q['schema']==1
         def emit(f):
           b=(json.dumps(f)+'\n').encode();c.sendall(b[:7]);time.sleep(.01);c.sendall(b[7:])
-        emit(dict(type='hello',schema=1,version='3.5.91',bridgeVersion='1.2.0',pid=os.getpid()))
+        emit(dict(type='hello',schema=1,version='3.5.91',bridgeVersion='1.2.1',pid=os.getpid()))
         now=time.time();sequence=1
         emit(dict(type='snapshot',schema=1,version='3.5.91',sequence=1,baseline=True,observedAt=now,rows=[]))
         for command in sys.stdin:

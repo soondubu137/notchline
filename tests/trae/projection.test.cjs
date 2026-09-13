@@ -79,14 +79,27 @@ test("a step's finish summary wins over its own thought, but never a child's or 
  }
 });
 test("this Turn's own prompt fills an otherwise empty preview, but never outranks a step or answer",()=>{
- const f=fixture();delete f.plan.thought;f.userMessage={messageId:f.message.replyToMessageId,sessionId:f.session.sessionId,content:'Fix the bug'};
+ const f=fixture();delete f.plan.thought;f.userMessage={messageId:f.message.replyToMessageId,sessionId:f.session.sessionId,content:[{type:'text',text_content:'Fix the bug'}]};
  assert.equal(project(f).preview,'Fix the bug');
- const g=fixture();g.userMessage={messageId:g.message.replyToMessageId,sessionId:g.session.sessionId,content:'Fix the bug'};
+ const g=fixture();g.userMessage={messageId:g.message.replyToMessageId,sessionId:g.session.sessionId,content:[{type:'text',text_content:'Fix the bug'}]};
  assert.equal(project(g).preview,'Displayed progress');
 });
+test("an ordinary chat message keeps its text in query, not content, and that reads too",()=>{
+ const f=fixture();delete f.plan.thought;
+ f.userMessage={messageId:f.message.replyToMessageId,sessionId:f.session.sessionId,content:[],query:[{type:'text',data:{content:'Fix the bug'}}]};
+ assert.equal(project(f).preview,'Fix the bug');
+});
+test("query wins when an agent mirrors the same words into content as well",()=>{
+ const f=fixture();delete f.plan.thought;
+ f.userMessage={messageId:f.message.replyToMessageId,sessionId:f.session.sessionId,
+   content:[{type:'text',text_content:'from content'}],query:[{type:'text',data:{content:'from query'}}]};
+ assert.equal(project(f).preview,'from query');
+});
 test("a prompt for a different Turn, session or an oversized one is silently skipped",()=>{
- for(const mutate of [f=>f.userMessage.messageId=id(9),f=>f.userMessage.sessionId=id(9),f=>f.userMessage.content='x'.repeat(32769),f=>f.userMessage.content=42]){
-  const f=fixture();delete f.plan.thought;f.userMessage={messageId:f.message.replyToMessageId,sessionId:f.session.sessionId,content:'Fix the bug'};
+ for(const mutate of [f=>f.userMessage.messageId=id(9),f=>f.userMessage.sessionId=id(9),
+   f=>f.userMessage.query[0].data.content='x'.repeat(32769),f=>f.userMessage.query=[{type:'text',data:{content:42}}],
+   f=>f.userMessage.query=null,f=>f.userMessage.query=[{type:'image'}]]){
+  const f=fixture();delete f.plan.thought;f.userMessage={messageId:f.message.replyToMessageId,sessionId:f.session.sessionId,content:[],query:[{type:'text',data:{content:'Fix the bug'}}]};
   mutate(f);assert.equal(project(f).preview,null);
  }
 });

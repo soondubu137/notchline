@@ -83,10 +83,16 @@
     if (typeof proposal === 'string' && proposal.trim()) preview = text(proposal).slice(-4096);
     // Nothing has streamed yet: show this Turn's own prompt rather than nothing. A
     // mismatched or oversized read is silently skipped; this fallback is never load-bearing.
+    // Native text never sits in a plain string: it is typed blocks, in `query` for an
+    // ordinary chat message and, only for some agents (e.g. solo_agent), mirrored into
+    // `content` too -- read `query` first since it is the one populated on every agent seen.
     if (preview === null && object(userMessage) && id(userMessage.messageId) &&
-        userMessage.messageId === message.replyToMessageId && userMessage.sessionId === session.sessionId &&
-        typeof userMessage.content === 'string') {
-      const prompt = userMessage.content.trim();
+        userMessage.messageId === message.replyToMessageId && userMessage.sessionId === session.sessionId) {
+      const blockText = blocks => Array.isArray(blocks) ? blocks
+        .filter(b => object(b) && b.type === 'text')
+        .map(b => typeof b.data?.content === 'string' ? b.data.content : (typeof b.text_content === 'string' ? b.text_content : null))
+        .filter(t => typeof t === 'string').join('\n') : '';
+      const prompt = (blockText(userMessage.query) || blockText(userMessage.content)).trim();
       if (prompt && prompt.length <= 32768) preview = prompt.slice(0, 4096);
     }
     return {threadID:session.sessionId, turnID:message.turnId, messageID:message.messageId, userMessageID:message.replyToMessageId,
