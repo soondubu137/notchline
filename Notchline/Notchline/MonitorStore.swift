@@ -3963,7 +3963,11 @@ final class MonitorStore: ObservableObject {
         case .affirmative:
             send(.grant, for: session, on: ticket, saying: shape.affirmativeNotice)
         case .refusal:
-            let note = answerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            // A form with no refusal has no refusal to take, and one whose
+            // refusal takes no words draws no field to have typed into.
+            guard shape.refusal != nil else { return }
+            let note = shape.placeholder == nil
+                ? "" : answerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             send(
                 .refuse(note.isEmpty ? nil : note),
                 for: session,
@@ -4127,8 +4131,17 @@ final class MonitorStore: ObservableObject {
 
     var canSubmitCurrentAnswer: Bool {
         guard let request = openSession?.request else { return false }
-        guard !request.askedQuestions.isEmpty else { return true }
-        return questionUsesTypedAnswer || questionHasASelection
+        let questions = request.askedQuestions
+        guard !questions.isEmpty else { return true }
+        guard let openRowID else { return false }
+        // The same gate that decides what finally goes back (§5.7 rule 06),
+        // asked of the question on screen: words count only where the
+        // question takes them, and a tick only on an option it still offers.
+        let position = min(max(openQuestionIndex, 0), questions.count - 1)
+        return Self.answer(
+            to: questions[position],
+            from: answerProgress[openRowID]?.draft(forQuestion: position) ?? AnswerProgress.Draft()
+        ) != nil
     }
 
     func toggleOptionDescription(_ id: Int) {
@@ -4237,18 +4250,29 @@ final class MonitorStore: ObservableObject {
     /// answer — the person who ticks a box after writing one has decided, and
     /// the tick is the decision.
     ///
-    /// Several labels join in the order the product listed them (§5.5).
+    /// **What travels is what was done, not how the product spells it**: the
+    /// chosen options by their identity in the set, in the order the product
+    /// listed them (§5.5), or the words typed. The product's own encoder joins
+    /// labels or keys by text (``ClaudeCodeRequestAnswering``), so an option
+    /// labelled `A, B`, two options wearing one label, and a person typing a
+    /// label rather than choosing it are all told apart until the last moment
+    /// the product's format allows.
+    ///
+    /// A tick on an option this question no longer offers is not an answer --
+    /// it was taken on a different set -- and words on a question that takes
+    /// none are not either. Neither can leave this function.
     private static func answer(
         to question: AgentQuestion,
         from draft: AnswerProgress.Draft
     ) -> AgentQuestionAnswer? {
+        let chosen = question.options.filter { draft.ticked.contains($0.id) }.map(\.id)
+        if !chosen.isEmpty {
+            let answer = AgentQuestionAnswer(question: question, selectedOptionIDs: chosen)
+            return answer.fitsItsQuestion ? answer : nil
+        }
         let typed = draft.text.trimmingCharacters(in: .whitespacesAndNewlines)
-        let chosen = question.options.filter { draft.ticked.contains($0.id) }.map(\.label)
-        guard !typed.isEmpty || !chosen.isEmpty else { return nil }
-        return AgentQuestionAnswer(
-            question: question.text,
-            answer: chosen.isEmpty ? typed : chosen.joined(separator: ", ")
-        )
+        guard question.acceptsFreeText, !typed.isEmpty else { return nil }
+        return AgentQuestionAnswer(question: question, text: typed)
     }
 
     /// Sends one answer, and turns what comes back into a row (§8).
@@ -4258,6 +4282,11 @@ final class MonitorStore: ObservableObject {
         on ticket: AnswerHandle,
         saying notice: String
     ) {
+        // What the row offers is derived from these operations, so this is
+        // ordinarily already true; it is checked here so that no caller of
+        // this method -- a key, a click, a specimen -- can send what the
+        // connection was never declared for. The boundary checks it again.
+        guard session.request?.operations.permits(answer) == true else { return }
         isAnswerInFlight = true
         let agent = session.agent
         let rowID = session.id
@@ -4324,9 +4353,9 @@ final class MonitorStore: ObservableObject {
 
     /// Opens one row, and starts the arrival its affirmative is armed by.
     private func openRow(_ id: String) {
-        let requestID = sessions.first(where: { $0.id == id })?.request?.id
-        if answerProgress[id]?.requestID != requestID {
-            answerProgress[id] = AnswerProgress(requestID: requestID)
+        let asked = sessions.first(where: { $0.id == id })?.request?.asked
+        if answerProgress[id]?.request != asked {
+            answerProgress[id] = AnswerProgress(request: asked)
             answerDraftGeneration &+= 1
         }
         openRowID = id
@@ -4385,8 +4414,10 @@ final class MonitorStore: ObservableObject {
     private func closeARowWhoseRequestHasGone() {
         guard let openRowID, !isAnswerInFlight else { return }
         if let request = sessions.first(where: { $0.id == openRowID })?.request {
-            if answerProgress[openRowID]?.requestID != request.id {
-                answerProgress[openRowID] = AnswerProgress(requestID: request.id)
+            // The same id wearing another body is another request: a tick
+            // taken on the old set does not travel onto the new one.
+            if answerProgress[openRowID]?.request != request.asked {
+                answerProgress[openRowID] = AnswerProgress(request: request.asked)
                 answerDraftGeneration &+= 1
                 answerRevision &+= 1
                 refreshAnswerGround()
@@ -5081,9 +5112,9 @@ final class MonitorStore: ObservableObject {
         let questions = request.askedQuestions
         let position = min(max(index, 0), max(questions.count - 1, 0))
 
-        var progress = answerProgress[openRowID] ?? AnswerProgress(requestID: request.id)
-        if progress.requestID != request.id {
-            progress = AnswerProgress(requestID: request.id)
+        var progress = answerProgress[openRowID] ?? AnswerProgress(request: request.asked)
+        if progress.request != request.asked {
+            progress = AnswerProgress(request: request.asked)
         }
         progress.questionIndex = position
         progress.furthestQuestionReached = max(progress.furthestQuestionReached, position)

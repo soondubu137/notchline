@@ -50,6 +50,8 @@ L6 仅适用于已支持的形态，不代表产品中的每个请求都能回�
 
 Notchline 不提供持久权限规则。请求形态、编码限制和交付语义仍以 [answer-in-notch.md](answer-in-notch.md) 为准。L6 分级不会扩大这些操作的范围。
 
+最后一列的操作按每个保持中的连接以 `AnswerOperations` 声明（2026-09-12）：接管 `PermissionRequest` 连接的词表声明该连接接受决定、带拒绝文本的决定，还是问题集的答案；承载答案的每一层——行、store、回复注册表——只提供并只发送这些操作。可读的形态若其连接不接受对应答案，无论连接是否保持，都只读。每个问题还声明是否接受自由文本和备注，并在产品发送时携带产品自身的问题标识；两个产品的对话框都接受自由文本，只有 Claude Code 接受备注。
+
 ## 4. 独立能力
 
 以下是相互独立的维度，不是 L7 及更高层级。须记录每项支持的指标或行为及其条件，不能用一个“完整支持”标签替代此表。
@@ -96,7 +98,9 @@ Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/h
 
 ## 6. 实现与验证
 
-共享入口现在是提交到 `MonitoringRepository` 的有类型 `MonitoringEvidence`；`HookEvidenceBoundary` 在提交前解释原生 Hooks。`ProductMonitoringRuntime` 接受任意 `MonitoringLifecycleSource`，`HookProductProvider` 提供 Hooks 组合。[MonitoringEvidenceConformanceTests](../Notchline/NotchlineTests/MonitoringEvidenceConformanceTests.swift) 使用不依赖 Hooks、JSON 或 socket 的来源，验证生命周期、进展、等待投影与解除、subagent 隔离和旧观察周期事件拒绝。这不改变任何产品的支持范围：并发请求集合、结构化答案、与传输无关的回答句柄和结果，仍是[实施计划](product-generalisation-plan.md)中的独立工作项。
+共享入口现在是提交到 `MonitoringRepository` 的有类型 `MonitoringEvidence`；`HookEvidenceBoundary` 在提交前解释原生 Hooks。`ProductMonitoringRuntime` 接受任意 `MonitoringLifecycleSource`，`HookProductProvider` 提供 Hooks 组合。[MonitoringEvidenceConformanceTests](../Notchline/NotchlineTests/MonitoringEvidenceConformanceTests.swift) 使用不依赖 Hooks、JSON 或 socket 的来源，验证生命周期、进展、等待投影与解除、subagent 隔离和旧观察周期事件拒绝。这不改变任何产品的支持范围：并发请求集合、与传输无关的回答句柄和结果，仍是[实施计划](product-generalisation-plan.md)中的独立工作项。
+
+工作包 3（2026-09-12）加入了有类型的问题答案、逐题约束和按连接声明的允许操作（`AnswerOperations`），并在 store 和回复注册表两层校验；其测试是 [StructuredAnswerTests](../Notchline/NotchlineTests/StructuredAnswerTests.swift)。这是共享实现能力，不是更高的原生支持级别；上表中任何产品的覆盖范围都没有改变。
 
 
 层级用于归类已有能力，不决定 reducer 的行为。`AgentMonitoring` 提供观察结果，`RowContentSource` 提供监测行内容，`AgentHookVocabulary` 提供受支持的事件和请求投影，`AnswerDelivering` 提供回答路径。已读证据、导航和用量保留各自的契约。不会仅为重复表达本文内容而实现层级字段或运行时能力矩阵。

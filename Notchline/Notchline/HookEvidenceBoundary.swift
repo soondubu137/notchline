@@ -109,13 +109,18 @@ extension MonitoringRepository {
         // A ticket that the reducer then does not attach to a wait is closed by
         // the reconciliation after the drain, so this cannot leak by admitting
         // too much.
-        var ticket: HookReplyRegistry.Ticket?
-        if let descriptor, eventName == vocabulary.answeringEventName {
-            ticket = hooks.replies.hold(descriptor, answering: payload.toolInput)
-        }
         // The old reducer normalised event names before vocabulary lookup.
         // Keep that interpretation here; raw transport framing is unchanged.
         let interpretedName = eventName.trimmingCharacters(in: .whitespacesAndNewlines)
+        var ticket: HookReplyRegistry.Ticket?
+        // What the product will act on down this connection, declared with
+        // the connection and carried on the evidence beside it. Nothing is
+        // declared where nothing is held.
+        var operations = AnswerOperations.readingOnly
+        if let descriptor, eventName == vocabulary.answeringEventName {
+            operations = vocabulary.answerOperations(forEvent: interpretedName, toolName: payload.toolName)
+            ticket = hooks.replies.hold(descriptor, answering: payload.toolInput, permitting: operations)
+        }
         let projected = vocabulary.carriesRequest(forEvent: interpretedName, toolName: payload.toolName)
             ? vocabulary.request(
             forEvent: interpretedName, toolName: payload.toolName,
@@ -133,6 +138,7 @@ extension MonitoringRepository {
             namesATranscript: payload.namesATranscript,
             pausesForBackgroundWork: payload.pausesForBackgroundWork,
             request: projected, answerHandle: ticket.map(AnswerHandle.init),
+            answerOperations: operations,
             sourceEvent: eventName
         ), in: epoch)
         if !admitted, let ticket { hooks.replies.release(ticket) }
@@ -140,8 +146,22 @@ extension MonitoringRepository {
     }
 
     /// Native output and socket writes stay outside the shared reducer.
+    ///
+    /// **The connection's declaration is checked here as well as on the
+    /// surface.** A row offers only what ``AgentRequest/operations`` permits,
+    /// but the row is not the only caller and a check that lives in one layer
+    /// is a check one layer can forget: an answer the connection was never
+    /// declared for is refused before any bytes are composed, and the
+    /// connection stays held for the answer it does accept.
     func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) -> Bool {
-        guard let hooks = boundary as? HookEvidenceBoundary,
+        guard let hooks = boundary as? HookEvidenceBoundary else { return false }
+        guard let permitted = hooks.replies.operations(for: ticket) else {
+            // Nothing is held under this ticket any more, so the request
+            // stops claiming a connection it does not have.
+            withdrawAnswerHandle(AnswerHandle(ticket: ticket))
+            return false
+        }
+        guard permitted.permits(answer),
               let body = hooks.vocabulary.answering?.hookOutput(
                 for: answer, updating: hooks.replies.input(for: ticket)
               ) else { return false }
@@ -191,6 +211,9 @@ nonisolated final class HookEvidenceBoundary: MonitoringBoundaryObserver, @unche
     }
 
     func didApply(_ evidence: MonitoringEvidence, accepted: Bool) {
+        // Applied, accepted or not, so the connection it arrived with is now
+        // the reducer's to keep or let go at the reconciliation that follows.
+        if let ticket = evidence.answerHandle?.ticket { replies.markReduced(ticket) }
         lock.lock()
         defer { lock.unlock() }
         // Delivery proves a definition fired even if its evidence cannot be placed.
@@ -208,6 +231,10 @@ nonisolated final class HookEvidenceBoundary: MonitoringBoundaryObserver, @unche
         HookInstallStateFile.update(at: paths.installState, fileManager: fileManager) {
             $0.lastEventAt = self.clock.now()
         }
+    }
+
+    func didDiscard(_ evidence: [MonitoringEvidence]) {
+        replies.release(evidence.compactMap { $0.answerHandle?.ticket })
     }
 
     func retainAnswerHandles(_ handles: Set<AnswerHandle>) {

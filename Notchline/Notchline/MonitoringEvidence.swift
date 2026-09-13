@@ -29,7 +29,22 @@ nonisolated struct MonitoringEvidence: Sendable {
     var pausesForBackgroundWork = false
     var request: AgentRequest? = nil
     var answerHandle: AnswerHandle? = nil
+    /// What an answer on `answerHandle` may do. Read only beside a handle:
+    /// evidence holding no connection declares nothing about one.
+    var answerOperations: AnswerOperations = .readingOnly
     var sourceEvent: String? = nil
+}
+
+extension AgentRequest {
+    /// This request filed on the connection one piece of evidence carries,
+    /// permitting what that evidence declares -- and left as it was where the
+    /// evidence carries no connection, so a body read off an event that holds
+    /// nothing keeps its form's own operations until the event that holds one
+    /// says otherwise.
+    nonisolated func answerable(by evidence: MonitoringEvidence) -> AgentRequest {
+        guard evidence.answerHandle != nil else { return self }
+        return answerable(on: evidence.answerHandle, permitting: evidence.answerOperations)
+    }
 }
 
 /// Content evidence has no lifecycle authority. A missing native Turn ID is
@@ -63,6 +78,10 @@ nonisolated struct MonitoringEpoch: Sendable, Equatable {
 nonisolated protocol MonitoringBoundaryObserver: Sendable {
     var hasObservedEvidence: Bool { get }
     func didApply(_ evidence: MonitoringEvidence, accepted: Bool)
+    /// Evidence an observation reset dropped before any drain took it; the
+    /// handles it carried will never be reconciled and are the boundary's to
+    /// let go.
+    func didDiscard(_ evidence: [MonitoringEvidence])
     func retainAnswerHandles(_ handles: Set<AnswerHandle>)
     func diagnostic(for statistics: MonitoringStatistics) -> String?
     func reset()
@@ -104,11 +123,16 @@ nonisolated final class MonitoringEvidenceInbox: @unchecked Sendable {
         return result
     }
 
-    func reset(clearingContent: () -> Void) {
+    /// Rotates the epoch and returns whatever was pending, so its handles can
+    /// be released rather than waiting on a drain that will never take them.
+    @discardableResult
+    func reset(clearingContent: () -> Void) -> [MonitoringEvidence] {
         lock.lock()
+        let dropped = pending
         pending.removeAll()
         currentEpoch = MonitoringEpoch()
         clearingContent()
         lock.unlock()
+        return dropped
     }
 }

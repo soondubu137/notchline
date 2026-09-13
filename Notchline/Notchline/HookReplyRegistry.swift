@@ -61,10 +61,28 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
         /// into the view, which parses no protocols; here their lifetime is the
         /// connection's, and `retain(only:)` frees them with it.
         let input: JSONValue?
+        /// What an answer down this connection may do, as the vocabulary
+        /// declared it when the connection was taken. Checked again at the
+        /// write, so a surface offering something the channel never accepted
+        /// is refused here before a byte is composed.
+        let operations: AnswerOperations
     }
 
     private let lock = NSLock()
     private var held: [Ticket: Connection] = [:]
+    /// The held connections whose evidence the reducer has taken.
+    ///
+    /// **Reconciliation may close only these.** A connection is held on the
+    /// listener's queue *before* its evidence is appended to the inbox, and a
+    /// drain kicked by the event before it can run in that gap: it would find
+    /// no live wait naming the new ticket and close a connection whose
+    /// request the reducer has not seen yet -- the person then answers into a
+    /// descriptor already gone and the row says *not sent*. Found on
+    /// 2026-09-12 by a test delivering three events back to back. So a
+    /// ticket becomes reconcilable only once ``markReduced(_:)`` has said its
+    /// evidence was applied, accepted or not; until then only an explicit
+    /// release or a shutdown lets it go.
+    private var reduced: Set<Ticket> = []
     private var nextTicket: Ticket = 1
 
     /// How many connections are being held right now.
@@ -78,13 +96,25 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
     ///
     /// Called on the listener's serial read queue and doing nothing that could
     /// block it: a dictionary insert under a lock nothing else holds for long.
-    func hold(_ descriptor: Int32, answering input: JSONValue?) -> Ticket {
+    func hold(
+        _ descriptor: Int32,
+        answering input: JSONValue?,
+        permitting operations: AnswerOperations
+    ) -> Ticket {
         lock.lock()
         defer { lock.unlock() }
         let ticket = nextTicket
         nextTicket += 1
-        held[ticket] = Connection(descriptor: descriptor, input: input)
+        held[ticket] = Connection(descriptor: descriptor, input: input, operations: operations)
         return ticket
+    }
+
+    /// What one held connection accepts, while it is still held; nil once it
+    /// is not, which is the answer a stale ticket gets.
+    func operations(for ticket: Ticket) -> AnswerOperations? {
+        lock.lock()
+        defer { lock.unlock() }
+        return held[ticket]?.operations
     }
 
     /// The `tool_input` one held request arrived with, while it is still held.
@@ -111,6 +141,7 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
             lock.unlock()
             return false
         }
+        reduced.remove(ticket)
         lock.unlock()
         defer { close(connection.descriptor) }
         return Self.write(body, to: connection.descriptor)
@@ -123,27 +154,52 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
     func release(_ ticket: Ticket) {
         lock.lock()
         let connection = held.removeValue(forKey: ticket)
+        reduced.remove(ticket)
         lock.unlock()
         if let connection { close(connection.descriptor) }
     }
 
-    /// Closes every connection no live wait still names.
+    /// The reducer has applied the evidence this connection arrived with, so
+    /// the connection is now the reducer's to keep or let go.
+    func markReduced(_ ticket: Ticket) {
+        lock.lock()
+        if held[ticket] != nil { reduced.insert(ticket) }
+        lock.unlock()
+    }
+
+    /// Closes every reconcilable connection no live wait still names.
     ///
     /// The reconciliation described above: called after every drain with the
     /// tickets the reducer is still holding, so a wait cleared by any of its
     /// seven paths releases its connection without any of those paths knowing
-    /// this type exists.
+    /// this type exists. A connection whose evidence no drain has taken yet is
+    /// not judged -- see ``reduced``.
     func retain(only tickets: Set<Ticket>) {
         lock.lock()
-        let departing = held.filter { !tickets.contains($0.key) }
-        for ticket in departing.keys { held.removeValue(forKey: ticket) }
+        let departing = held.filter { reduced.contains($0.key) && !tickets.contains($0.key) }
+        for ticket in departing.keys {
+            held.removeValue(forKey: ticket)
+            reduced.remove(ticket)
+        }
         lock.unlock()
         for connection in departing.values { close(connection.descriptor) }
     }
 
+    /// Closes the connections of evidence that was discarded before any
+    /// drain took it -- an observation reset emptying the inbox -- so they do
+    /// not wait on a reconciliation that will never see them.
+    func release(_ tickets: some Sequence<Ticket>) {
+        for ticket in tickets { release(ticket) }
+    }
+
     /// Closes everything, for a listener shutting down.
     func releaseAll() {
-        retain(only: [])
+        lock.lock()
+        let departing = held
+        held.removeAll()
+        reduced.removeAll()
+        lock.unlock()
+        for connection in departing.values { close(connection.descriptor) }
     }
 
     /// Writes the whole body, looping past short writes and signals.

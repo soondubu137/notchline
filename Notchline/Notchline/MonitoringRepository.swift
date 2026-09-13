@@ -492,7 +492,8 @@ actor MonitoringRepository {
         hasObservedLiveEvent = false
         didReduceSinceLastReport = false
         unplaceableEventCount = 0
-        inbox.reset { previews.removeAll() }
+        let dropped = inbox.reset { previews.removeAll() }
+        if !dropped.isEmpty { boundary?.didDiscard(dropped) }
         if !preserveBoundaryObservation { boundary?.reset() }
         if clearTurns { turnsByThreadID.removeAll() }
         reconcileAnswerHandles()
@@ -566,7 +567,7 @@ actor MonitoringRepository {
         let receivedAt = event.observedAt
         let infersDenials = policy.infersApprovalRefusalFromActivity
         let requestAsked: (String) -> AgentRequest? = { id in
-            event.request?.identified(by: id).answerable(on: event.answerHandle)
+            event.request?.identified(by: id).answerable(by: event)
         }
 
         switch signal {
@@ -721,7 +722,7 @@ actor MonitoringRepository {
                     request: requestAsked(openToolUse.id) ?? (
                         state.pendingApproval?.toolUseID == openToolUse.id
                             ? state.pendingApproval?.request?
-                                .answerable(on: event.answerHandle)
+                                .answerable(by: event)
                             : nil
                     )
                 )
@@ -750,7 +751,7 @@ actor MonitoringRepository {
                         // arrive must not blank the one the opening call
                         // already supplied.
                         request: requestAsked(waiting.toolUseID)
-                            ?? waiting.request?.answerable(on: event.answerHandle)
+                            ?? waiting.request?.answerable(by: event)
                     )
                 }
                 state.sessionStatus = state.sessionStatus
@@ -1113,14 +1114,14 @@ actor MonitoringRepository {
                 slots.pendingInput = PendingInput(
                     toolUseID: toolUseID,
                     openedAt: receivedAt,
-                    request: event.request?.identified(by: toolUseID).answerable(on: event.answerHandle)
+                    request: event.request?.identified(by: toolUseID).answerable(by: event)
                 )
             case .approvalWaitOpened:
                 slots.pendingApproval = PendingApproval(
                     toolUseID: toolUseID,
                     isInferred: false,
                     openedAt: receivedAt,
-                    request: event.request?.identified(by: toolUseID).answerable(on: event.answerHandle)
+                    request: event.request?.identified(by: toolUseID).answerable(by: event)
                 )
             default:
                 break
@@ -1143,9 +1144,9 @@ actor MonitoringRepository {
                 // Same rule as the turn's own borrowed approval: a request that
                 // did not arrive must not blank one the call that opened this
                 // wait already supplied, and must not travel to another call.
-                request: event.request?.identified(by: openToolUse.id).answerable(on: event.answerHandle) ?? (
+                request: event.request?.identified(by: openToolUse.id).answerable(by: event) ?? (
                     slots.pendingApproval?.toolUseID == openToolUse.id
-                        ? slots.pendingApproval?.request?.answerable(on: event.answerHandle)
+                        ? slots.pendingApproval?.request?.answerable(by: event)
                         : nil
                 )
             )

@@ -2242,23 +2242,29 @@ private struct AnswerRow: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            AnswerField(
-                identity: "\(session.id)#\(store.answerDraftGeneration)",
-                placeholder: shape.placeholder,
-                initialText: store.answerDraft,
-                // §8 state 01: an answer in flight stops taking keys as well as
-                // clicks. The caret goes with it, so nothing is typed into a
-                // row that has already been answered.
-                takesKeys: !store.isAnswerInFlight,
-                // §5.4, with the priority the other way round: a ticked option
-                // is the answer, so text it has overruled draws as overruled.
-                superseded: store.questionHasASelection,
-                onEdit: { store.answerDraftChanged(to: $0) },
-                onReturn: { store.takeAnswer(store.answerGround) },
-                onEscape: { store.closeOpenRow() }
-            )
-            .frame(maxWidth: .infinity)
-            .frame(height: PanelMetrics.answerRowHeight)
+            if let placeholder = shape.placeholder {
+                AnswerField(
+                    identity: "\(session.id)#\(store.answerDraftGeneration)",
+                    placeholder: placeholder,
+                    initialText: store.answerDraft,
+                    // §8 state 01: an answer in flight stops taking keys as well as
+                    // clicks. The caret goes with it, so nothing is typed into a
+                    // row that has already been answered.
+                    takesKeys: !store.isAnswerInFlight,
+                    // §5.4, with the priority the other way round: a ticked option
+                    // is the answer, so text it has overruled draws as overruled.
+                    superseded: store.questionHasASelection,
+                    onEdit: { store.answerDraftChanged(to: $0) },
+                    onReturn: { store.takeAnswer(store.answerGround) },
+                    onEscape: { store.closeOpenRow() }
+                )
+                .frame(maxWidth: .infinity)
+                .frame(height: PanelMetrics.answerRowHeight)
+            } else {
+                // A request that takes no words draws no field, and the
+                // controls keep the trailing edge §7 gives them.
+                Spacer(minLength: 0)
+            }
 
             // The question before this one, in the slot a set's absent refusal
             // already leaves free (§5.7, §7). It never holds the ground — it

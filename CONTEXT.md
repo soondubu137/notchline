@@ -133,5 +133,5 @@ Only the rules already asking that second question read it: summary status, prod
 **Answer** — What the person gave back: a grant, a refusal carrying what to do instead, or the answers to a question set. It travels on the hook connection the request arrived on and is written in that product's own schema ([ADR 0019](docs/adr/0019-the-helper-answers-on-the-stream-adr-0013-silenced.md)).
 *Avoid:* decision, response, permission grant, approval.
 
-**Answerable** — Said of one request, and true exactly when a connection is being held open for it. Not a property of a product, a status or a form: a request whose connection has closed is read, and the row says so.
+**Answerable** — Said of one request, and true exactly when a connection is being held open for it **and that connection was declared to accept what the form is answered by** (`AnswerOperations`: a decision, or a question set's answers). Not a property of a product, a status or a form: a request whose connection has closed is read, and the row says so — and so is a question drawn over a connection that takes only a decision, which is Codex's.
 *Avoid:* actionable, interactive, live.

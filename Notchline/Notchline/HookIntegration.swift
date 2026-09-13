@@ -645,6 +645,12 @@ protocol AgentHookVocabulary: Sendable {
     /// `docs/product-support.md` §2): the reducer then holds no connection for its
     /// requests and the row offers no affirmative.
     nonisolated var answering: (any RequestAnswering)? { get }
+    /// What an answer on the connection this event holds open may do
+    /// (``AnswerOperations``), asked only of ``answeringEventName``. The
+    /// capability half of ``answering``: that one spells an answer, this one
+    /// says which answers the product will act on for this call, so a form
+    /// the channel cannot answer is read here rather than offered and refused.
+    nonisolated func answerOperations(forEvent name: String, toolName: String?) -> AnswerOperations
     /// How this product's file arranges a registration, and how its helper
     /// is told what fired. ``HookRegistrationDialect/standard`` for a product
     /// whose file is `hooks` at the root and whose payload names its event.
@@ -687,6 +693,10 @@ protocol AgentHookVocabulary: Sendable {
 extension AgentHookVocabulary {
     nonisolated var registrationDialect: HookRegistrationDialect { .standard }
     nonisolated var payloadTranslator: (any HookPayloadTranslating)? { nil }
+    /// A product that answers nothing declares nothing.
+    nonisolated func answerOperations(forEvent name: String, toolName: String?) -> AnswerOperations {
+        .readingOnly
+    }
 
     /// The event whose connection an answer travels back on, if any.
     ///
@@ -757,6 +767,12 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     nonisolated static let answeringTimeout = 60 * 60
     nonisolated let answeringTimeoutSeconds = CodexHookVocabulary.answeringTimeout
     nonisolated let answering: (any RequestAnswering)? = CodexRequestAnswering()
+    /// A decision, and only a decision: `updatedInput` is reserved on this
+    /// product and fails the hook closed, so a question drawn over this
+    /// connection is read here and answered in Codex, whatever the form.
+    nonisolated func answerOperations(forEvent name: String, toolName: String?) -> AnswerOperations {
+        name == answeringEventName ? .decision : .readingOnly
+    }
     nonisolated let agent: AgentKind = .codex
     /// The Python helper the first builds registered.
     nonisolated static let legacyHelperMarker = "codex_in_notch_hook.py"
@@ -972,6 +988,14 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     nonisolated static let answeringTimeout = 24 * 60 * 60
     nonisolated let answeringTimeoutSeconds = ClaudeCodeHookVocabulary.answeringTimeout
     nonisolated let answering: (any RequestAnswering)? = ClaudeCodeRequestAnswering()
+    /// A decision on every `PermissionRequest` but the one `AskUserQuestion`
+    /// raises for its own call, which takes the question's answers through
+    /// `updatedInput` and nothing else: its dialogue offers no refusal, and a
+    /// `deny` there would block the tool rather than answer the person.
+    nonisolated func answerOperations(forEvent name: String, toolName: String?) -> AnswerOperations {
+        guard name == answeringEventName else { return .readingOnly }
+        return toolName == Self.inputToolName ? .questionAnswers : .decision
+    }
     nonisolated let agent: AgentKind = .claudeCode
     /// The path the pre-ADR-0013 `http` handlers posted to. Still recognised so
     /// an install strips the dead handler and a removal can prove it gone.
@@ -1247,7 +1271,8 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
         guard let toolInput else { return nil }
         let form: AgentRequest.Form? = switch toolName {
         case Self.inputToolName:
-            AgentRequestReading.questions(in: toolInput).map { .questions($0) }
+            // Notes are this product's `annotations`, keyed like its answers.
+            AgentRequestReading.questions(in: toolInput, acceptingNotes: true).map { .questions($0) }
                 ?? AgentRequestReading.arguments(of: toolInput).map { .command($0) }
         case Self.planToolName:
             // Fails closed **to the arguments, never to nothing**: a plan that

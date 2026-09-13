@@ -50,6 +50,8 @@ L6 is scoped to the supported forms; it does not mean every request in the produ
 
 Persistent permission rules are not offered by Notchline. For request shapes, encoding limits and delivery semantics, [answer-in-notch.md](answer-in-notch.md) remains authoritative. An L6 classification does not widen those operations.
 
+The operations in the last column are declared per held connection as `AnswerOperations` (2026-09-12): the vocabulary that takes a `PermissionRequest` connection says whether it accepts a decision, a decision with refusal text, or a question set's answers, and every layer that carries an answer — the row, the store, the reply registry — offers and sends only those. A readable form over a connection that does not accept its answers is reading-only, whatever is held. Each question also declares whether it takes free text and a note and carries the product's own question identifier where one is sent; both products' dialogues take free text, and only Claude Code takes notes.
+
 ## 4. Independent capabilities
 
 These are separate axes, not L7 and beyond. Record each supported measure or behaviour and its conditions; do not replace this table with a single “full support” label.
@@ -118,4 +120,4 @@ The generic [hook conformance fixtures](../Notchline/NotchlineTests/HookProductC
 When coverage changes, update this matrix, the glossary if its definitions change, README, relevant contracts and Settings boundary copy in the same change. Record supported request forms and execution modes explicitly. Check the [non-public integration registry](non-public-codex-integration-features.md) when a source or write path changes. This reclassification adds, modifies, migrates and removes no production non-public integration.
 
 
-Generalisation package 5 adds explicit no-setup configuration, optional source ownership and deadline composition, and restricted phased supplementary evidence. These are shared implementation capabilities, not a higher native support level. Packages 2–4 (request collections, structured answers and answer channels) remain planned.
+Generalisation package 5 adds explicit no-setup configuration, optional source ownership and deadline composition, and restricted phased supplementary evidence. Package 3 adds typed question answers, per-question constraints and per-connection permitted operations, validated at the store and at the reply registry, with [StructuredAnswerTests](../Notchline/NotchlineTests/StructuredAnswerTests.swift) as its fixture. These are shared implementation capabilities, not a higher native support level; no product's coverage above changed. Packages 2 and 4 (request collections and answer channels) remain planned.

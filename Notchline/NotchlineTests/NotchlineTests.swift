@@ -29564,6 +29564,46 @@ for line in sys.stdin:
         #expect(store.answerDraft == "")
     }
 
+    /// A tick taken on one question set does not travel onto a replacement
+    /// wearing the same id.
+    ///
+    /// Package 3's *stale selections after replacement*: the same request id
+    /// arriving with another body is another request (``AgentRequest/asked``),
+    /// so the drafts start empty rather than naming an option the new set may
+    /// not offer -- and even a tick that survived could not leave, because
+    /// ``MonitorStore/canSubmitCurrentAnswer`` asks the same gate the answer
+    /// finally passes through.
+    @Test @MainActor
+    func aTickDoesNotTravelOntoAReplacementWearingTheSameID() async throws {
+        let (store, service, row) = answeringStore(request: questionSet(count: 1), status: .inputNeeded)
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.option(1))
+        #expect(store.isOptionTicked(1))
+        #expect(store.canSubmitCurrentAnswer)
+
+        // The same id, one option fewer.
+        let replaced = AgentRequest(
+            id: "c-1", toolName: "AskUserQuestion",
+            form: .questions([
+                AgentQuestion(
+                    id: 0, header: "Store", text: "Which database?",
+                    options: [AgentQuestionOption(id: 0, label: "SQLite", description: nil)],
+                    allowsSeveralAnswers: false
+                )
+            ]),
+            answerHandle: AnswerHandle(ticket: 2)
+        )
+        await service.publish([answerableSession(status: .inputNeeded, request: replaced)])
+        store.refreshNow()
+        #expect(await eventually { store.openSession?.request == replaced })
+        #expect(store.openRowID == row.id, "the row still asks, so it stays open")
+        #expect(!store.isOptionTicked(1))
+        #expect(!store.canSubmitCurrentAnswer)
+        store.takeAnswer(.affirmative)
+        #expect(await service.answersTaken().isEmpty)
+    }
+
     /// A row whose Thread has gone closes too, and stops holding the keyboard.
     ///
     /// §8 state 04's other half. ``MonitorStore/openSession`` reads through the
@@ -29741,8 +29781,8 @@ for line in sys.stdin:
         #expect(
             await service.answersTaken() == [
                 .answers([
-                    AgentQuestionAnswer(question: "Which database?", answer: "Postgres"),
-                    AgentQuestionAnswer(question: "Which host?", answer: "Fly")
+                    AgentQuestionAnswer(question: asked(0), selectedOptionIDs: [1]),
+                    AgentQuestionAnswer(question: asked(1), selectedOptionIDs: [0])
                 ])
             ]
         )
@@ -29801,8 +29841,8 @@ for line in sys.stdin:
         #expect(
             await service.answersTaken() == [
                 .answers([
-                    AgentQuestionAnswer(question: "Which database?", answer: "SQLite"),
-                    AgentQuestionAnswer(question: "Which host?", answer: "Fly")
+                    AgentQuestionAnswer(question: asked(0), selectedOptionIDs: [0]),
+                    AgentQuestionAnswer(question: asked(1), selectedOptionIDs: [0])
                 ])
             ]
         )
@@ -29839,11 +29879,8 @@ for line in sys.stdin:
         #expect(
             await service.answersTaken() == [
                 .answers([
-                    AgentQuestionAnswer(
-                        question: "Which database?",
-                        answer: "neither, use SQLite"
-                    ),
-                    AgentQuestionAnswer(question: "Which host?", answer: "our own box")
+                    AgentQuestionAnswer(question: asked(0), text: "neither, use SQLite"),
+                    AgentQuestionAnswer(question: asked(1), text: "our own box")
                 ])
             ]
         )
@@ -30124,10 +30161,8 @@ for line in sys.stdin:
         #expect(
             await service.answersTaken() == [
                 .answers([
-                    AgentQuestionAnswer(
-                        question: "Which database?",
-                        answer: "SQLite"
-                    )
+                    // The tick travels, and the words it overruled do not.
+                    AgentQuestionAnswer(question: asked(0, count: 1), selectedOptionIDs: [0])
                 ])
             ]
         )
@@ -30171,8 +30206,8 @@ for line in sys.stdin:
             await service.answersTaken() == [
                 .answers([
                     AgentQuestionAnswer(
-                        question: "Which database?",
-                        answer: "SQLite, Postgres"
+                        question: asked(0, count: 1, allowsSeveralAnswers: true),
+                        selectedOptionIDs: [0, 1]
                     )
                 ])
             ]
@@ -30230,8 +30265,10 @@ for line in sys.stdin:
         store.answerDraftChanged(to: "  Use a different database  ")
         store.takeAnswer(.affirmative)
         #expect(await eventually { !(await service.answersTaken().isEmpty) })
-        let chosen = multiple ? "SQLite, Postgres" : "Postgres"
-        #expect(await service.answersTaken() == [.answers([AgentQuestionAnswer(question: "Which database?", answer: chosen)])])
+        let chosen = multiple ? [0, 1] : [1]
+        #expect(await service.answersTaken() == [.answers([
+            AgentQuestionAnswer(question: asked(0, count: 1, allowsSeveralAnswers: multiple), selectedOptionIDs: chosen)
+        ])])
     }
 
     /// Untick the one option a single choice has, and the field answers again.
@@ -30258,8 +30295,8 @@ for line in sys.stdin:
             await service.answersTaken() == [
                 .answers([
                     AgentQuestionAnswer(
-                        question: "Which database?",
-                        answer: "Use a different database"
+                        question: asked(0, count: 1, allowsSeveralAnswers: true),
+                        text: "Use a different database"
                     )
                 ])
             ]
@@ -30269,9 +30306,8 @@ for line in sys.stdin:
     @Test @MainActor
     func selectingAndReadingAnOptionDoNotSubmitOrAdvanceTheQuestion() async throws {
         let long = String(repeating: "Read this complete description before deciding. ", count: 30)
-        let request = AgentRequest(id: "reading", toolName: "AskUserQuestion", form: .questions([
-            AgentQuestion(id: 0, header: nil, text: "Which approach?", options: [AgentQuestionOption(id: 7, label: "Inspect first", description: long)], allowsSeveralAnswers: false)
-        ]), answerHandle: AnswerHandle(ticket: 1))
+        let question = AgentQuestion(id: 0, header: nil, text: "Which approach?", options: [AgentQuestionOption(id: 7, label: "Inspect first", description: long)], allowsSeveralAnswers: false)
+        let request = AgentRequest(id: "reading", toolName: "AskUserQuestion", form: .questions([question]), answerHandle: AnswerHandle(ticket: 1))
         let (store, service, row) = answeringStore(request: request, status: .inputNeeded)
         store.toggleOpenRow(row)
         #expect(await eventually { store.isAffirmativeArmed })
@@ -30289,7 +30325,7 @@ for line in sys.stdin:
         #expect(store.openRowBody?.contentHeight == before)
         store.takeAnswer(.affirmative)
         #expect(await eventually { !(await service.answersTaken().isEmpty) })
-        #expect(await service.answersTaken() == [.answers([AgentQuestionAnswer(question: "Which approach?", answer: "Inspect first")])])
+        #expect(await service.answersTaken() == [.answers([AgentQuestionAnswer(question: question, selectedOptionIDs: [7])])])
     }
 
     /// Drawing the next question resizes the panel, and that reaches the window.
@@ -30504,7 +30540,7 @@ for line in sys.stdin:
         #expect(
             await service.answersTaken() == [
                 .answers([
-                    AgentQuestionAnswer(question: "Which database?", answer: "Postgres")
+                    AgentQuestionAnswer(question: asked(0, count: 1), selectedOptionIDs: [1])
                 ])
             ]
         )
@@ -30572,7 +30608,7 @@ for line in sys.stdin:
         #expect(
             await service.answersTaken() == [
                 .answers([
-                    AgentQuestionAnswer(question: "Which database?", answer: "Postgres")
+                    AgentQuestionAnswer(question: asked(0, count: 1), selectedOptionIDs: [1])
                 ])
             ]
         )
@@ -31311,10 +31347,9 @@ for line in sys.stdin:
         #expect(
             await repository.answer(
                 .answers([
-                    AgentQuestionAnswer(
-                        question: "Which store should the probe write to?",
-                        answer: "SQLite"
-                    )
+                    // SQLite is the second option the call offered, chosen by
+                    // its position; the encoder spells the label.
+                    AgentQuestionAnswer(question: try #require(asked.first), selectedOptionIDs: [1])
                 ]),
                 on: ticket
             )
@@ -31434,7 +31469,13 @@ for line in sys.stdin:
             "somethingElse": .string("kept")
         ])
         let answers: AgentAnswer = .answers([
-            AgentQuestionAnswer(question: "Which one?", answer: "The first", note: "quickly")
+            AgentQuestionAnswer(
+                question: AgentQuestion(
+                    id: 0, header: nil, text: "Which one?", options: [],
+                    allowsSeveralAnswers: false, acceptsNote: true
+                ),
+                text: "The first", note: "quickly"
+            )
         ])
         let sent = try #require(claude.hookOutput(for: answers, updating: input))
         let root = try #require(
@@ -34136,6 +34177,17 @@ private func questionSet(
         ),
         answerHandle: AnswerHandle(ticket: 1)
     )
+}
+
+/// One question of ``questionSet(count:allowsSeveralAnswers:)``, as the store
+/// hands it back inside a typed answer.
+@MainActor
+private func asked(
+    _ index: Int,
+    count: Int = 2,
+    allowsSeveralAnswers: Bool = false
+) -> AgentQuestion {
+    questionSet(count: count, allowsSeveralAnswers: allowsSeveralAnswers).askedQuestions[index]
 }
 
 /// A store with one answerable row on it, and the provider its answer goes to.

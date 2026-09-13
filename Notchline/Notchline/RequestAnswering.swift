@@ -1,5 +1,74 @@
 import Foundation
 
+/// What a person may do with one request over the connection held for it.
+///
+/// **Capability data about one request, declared where the connection is
+/// held.** The vocabulary that holds a `PermissionRequest` open says what the
+/// product will act on down it — a decision on both products, a question's
+/// answers on Claude Code only — and every layer that carries an answer checks
+/// it: the row offers only what is here (``AgentRequest/answerRow(showing:)``),
+/// the store sends only what is here, and the boundary writes only what is
+/// here (``HookReplyRegistry``). It is not a support level and ranks nothing;
+/// `docs/product-support.md` §3 is where the coverage is stated.
+///
+/// A question's own constraints — its options, whether several may be taken,
+/// whether words are an answer, whether a note may travel beside one — live on
+/// the question (``AgentQuestion``), because they differ per question and this
+/// does not.
+nonisolated struct AnswerOperations: Sendable, Equatable, Hashable {
+    /// Grant the request as it was asked.
+    var grant = false
+    /// Refuse it.
+    var refuse = false
+    /// Whether a refusal may carry what to do instead.
+    var refusalCarriesText = false
+    /// Answer the questions it asks, each within its own constraints.
+    var answersQuestions = false
+
+    nonisolated init(
+        grant: Bool = false,
+        refuse: Bool = false,
+        refusalCarriesText: Bool = false,
+        answersQuestions: Bool = false
+    ) {
+        self.grant = grant
+        self.refuse = refuse
+        self.refusalCarriesText = refusalCarriesText
+        self.answersQuestions = answersQuestions
+    }
+
+    /// Nothing may be done here: the request is read here and answered in
+    /// the product. Not spelled `none`, which on an optional parameter is
+    /// Swift's `nil` and silently something else.
+    nonisolated static let readingOnly = AnswerOperations()
+    /// A decision, with a reason where it is a refusal — both products'
+    /// `PermissionRequest`.
+    nonisolated static let decision = AnswerOperations(
+        grant: true, refuse: true, refusalCarriesText: true
+    )
+    /// The answers to a question set — Claude Code's `AskUserQuestion`.
+    nonisolated static let questionAnswers = AnswerOperations(answersQuestions: true)
+
+    nonisolated var isEmpty: Bool { self == .readingOnly }
+    /// Whether a refusal both exists and takes words.
+    nonisolated var refusalTakesText: Bool { refuse && refusalCarriesText }
+
+    /// Whether this answer is one of the things the connection accepts.
+    ///
+    /// The shape only: whether a question's answers fit their questions is
+    /// the encoder's to check, since it has the questions in hand.
+    nonisolated func permits(_ answer: AgentAnswer) -> Bool {
+        switch answer {
+        case .grant:
+            grant
+        case let .refuse(message):
+            refuse && (message == nil || refusalCarriesText)
+        case .answers:
+            answersQuestions
+        }
+    }
+}
+
 /// What a person answered, in words no product owns.
 ///
 /// The same shape on both products, because the *question* is the same on both
@@ -21,19 +90,61 @@ nonisolated enum AgentAnswer: Sendable, Equatable {
 }
 
 /// One question out of a set, answered.
+///
+/// **Typed, so that nothing is lost between the tick and the wire.** This
+/// used to be the question's text and one string, with the chosen labels
+/// already joined by `", "` — which made an option labelled `A, B` the same
+/// answer as `A` and `B` both ticked, two options wearing one label the same
+/// answer as each other, and a person typing a label the same answer as a
+/// person choosing it. The store now hands over what was done: which options,
+/// by their identity in the set, or what was typed. The product's encoder
+/// performs the final conversion, in its own schema and with the question in
+/// hand (``ClaudeCodeRequestAnswering``), so the join lives with the product
+/// whose format it is.
 nonisolated struct AgentQuestionAnswer: Sendable, Equatable {
-    /// The question as the product asked it, which is the key its own tool
-    /// input is keyed by.
-    let question: String
-    /// What the person chose, or typed.
-    let answer: String
+    /// The question as it was asked: its position, its words, its options and
+    /// its constraints, so an encoder needs nothing beside this.
+    let question: AgentQuestion
+    /// The options chosen, by their ``AgentQuestionOption/id``, in the order
+    /// the product listed them. Empty where the person typed instead.
+    let selectedOptionIDs: [Int]
+    /// The person's own words, where nothing was chosen (§5.4).
+    let text: String?
     /// A note against this one question, where the person added one.
     let note: String?
 
-    nonisolated init(question: String, answer: String, note: String? = nil) {
+    nonisolated init(
+        question: AgentQuestion,
+        selectedOptionIDs: [Int] = [],
+        text: String? = nil,
+        note: String? = nil
+    ) {
         self.question = question
-        self.answer = answer
+        self.selectedOptionIDs = selectedOptionIDs
+        self.text = text
         self.note = note
+    }
+
+    /// The options chosen, in the product's order; nil where any chosen
+    /// position is not one this question offers.
+    nonisolated var selectedOptions: [AgentQuestionOption]? {
+        question.options(at: selectedOptionIDs)
+    }
+
+    /// Whether this answer fits its question: chosen options it offers, one
+    /// of them unless several are allowed, words only where words are taken,
+    /// a note only where one may travel, and something rather than nothing.
+    ///
+    /// The one check every encoder makes before composing anything, so a
+    /// stale tick or a word on a choices-only question is refused rather than
+    /// sent as a guess.
+    nonisolated var fitsItsQuestion: Bool {
+        guard let chosen = selectedOptions else { return false }
+        if chosen.count > 1, !question.allowsSeveralAnswers { return false }
+        let typed = text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !typed.isEmpty, !question.acceptsFreeText { return false }
+        if let note, !note.isEmpty, !question.acceptsNote { return false }
+        return !chosen.isEmpty || !typed.isEmpty
     }
 }
 
@@ -125,7 +236,11 @@ nonisolated struct AnswerProgress: Sendable, Equatable {
     /// makes the count on the caption line worth drawing: without it, an answer
     /// that appears to do nothing looks like a failure.
     private var perQuestion: [Int: Draft] = [:]
-    var requestID: String?
+    /// The request these drafts answer, stripped of its connection
+    /// (``AgentRequest/asked``): a replacement wearing the same id and another
+    /// body starts empty, because a tick taken on one question set is not an
+    /// answer to a different one.
+    var request: AgentRequest?
 
     /// One question's own three pieces of unsent state.
     ///
@@ -141,8 +256,8 @@ nonisolated struct AnswerProgress: Sendable, Equatable {
         var expandedOptions: Set<Int> = []
     }
 
-    nonisolated init(requestID: String? = nil) {
-        self.requestID = requestID
+    nonisolated init(request: AgentRequest? = nil) {
+        self.request = request
     }
 
     /// What was put into one question of the set, whether or not it answers it.
@@ -261,16 +376,33 @@ nonisolated struct ClaudeCodeRequestAnswering: RequestAnswering {
             // sending a fabricated one would drop every field the tool was
             // called with.
             guard case let .object(fields)? = input else { return nil }
+            // And refusing an answer that does not fit its question -- a tick
+            // naming an option the question no longer offers, words on a
+            // question that takes none -- rather than sending the part that
+            // did fit: half an answer is a different answer.
+            var spelled: [(String, String)] = []
+            for answered in answers {
+                guard answered.fitsItsQuestion, let text = Self.spelling(of: answered) else {
+                    return nil
+                }
+                spelled.append((answered.question.text, text))
+            }
             var updated = fields
+            // **Keyed by the question's text, because that is this product's
+            // own schema** -- `answers` is described as keyed by question text,
+            // and the tool reads it back that way. So two questions asked in
+            // the same words collapse to one key here, the later answer
+            // winning: a limitation of the product's format, recorded rather
+            // than papered over by inventing a key the tool would not read.
             updated[Self.answersKey] = .object(
                 Dictionary(
-                    answers.map { ($0.question, JSONValue.string($0.answer)) },
+                    spelled.map { ($0.0, JSONValue.string($0.1)) },
                     uniquingKeysWith: { _, last in last }
                 )
             )
             let notes = answers.compactMap { answered -> (String, JSONValue)? in
                 guard let note = answered.note, !note.isEmpty else { return nil }
-                return (answered.question, .object(["notes": .string(note)]))
+                return (answered.question.text, .object(["notes": .string(note)]))
             }
             if !notes.isEmpty {
                 updated[Self.annotationsKey] = .object(
@@ -282,6 +414,23 @@ nonisolated struct ClaudeCodeRequestAnswering: RequestAnswering {
                 "updatedInput": .object(updated)
             ])
         }
+    }
+
+    /// One answer as this product's `answers` field spells it: the chosen
+    /// labels joined with `", "` in the product's own order (§5.5), or the
+    /// person's words where nothing was chosen (§5.4).
+    ///
+    /// **The join is this product's and lives here.** It is what the tool
+    /// reads -- one string per question -- so an option labelled `A, B` and
+    /// the pair `A` and `B` spell the same here by the product's own design;
+    /// they are told apart everywhere before this line.
+    nonisolated static func spelling(of answered: AgentQuestionAnswer) -> String? {
+        guard let chosen = answered.selectedOptions else { return nil }
+        if !chosen.isEmpty {
+            return chosen.map(\.label).joined(separator: ", ")
+        }
+        let typed = answered.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return typed.isEmpty ? nil : typed
     }
 
     private static func encode(_ decision: [String: JSONValue]) -> Data? {

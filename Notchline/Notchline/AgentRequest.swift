@@ -85,7 +85,23 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// status happens to be `Approval needed`. Offering an affirmative the app
     /// cannot deliver is a promise made quietly (§11 rule 03), so the one fact
     /// that decides it is the one that would carry the answer.
-    nonisolated var canBeAnswered: Bool { answerHandle != nil }
+    nonisolated var canBeAnswered: Bool { answerHandle != nil && form.permits(operations) }
+
+    /// What an answer on the connection held for this request may do
+    /// (``AnswerOperations``).
+    ///
+    /// **Declared by the boundary that holds the connection, never inferred
+    /// from the form.** A question drawn over a Codex `PermissionRequest`
+    /// connection is a readable form on a channel that accepts only a
+    /// decision, and before this existed it was offered `Submit` and then
+    /// reported *not sent*. Now the form and the operations have to agree
+    /// before anything is offered: ``canBeAnswered`` asks ``Form/permits(_:)``,
+    /// and a form the channel cannot answer is read here and answered in the
+    /// product, whatever is held. A request built without a declaration takes
+    /// its form's own operations, which is what every fixture and every
+    /// request read off a `PreToolUse` — which holds no connection — carries
+    /// until the event that does hold one says otherwise.
+    let operations: AnswerOperations
 
     /// The way back to the connection this request arrived on, while it is
     /// still held (``AnswerHandle``).
@@ -106,7 +122,8 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
         form: Form,
         argumentFields: [ApprovalArgument] = [],
         offeredRules: [PermissionRuleOffer] = [],
-        answerHandle: AnswerHandle? = nil
+        answerHandle: AnswerHandle? = nil,
+        operations: AnswerOperations? = nil
     ) {
         self.id = id
         self.toolName = toolName
@@ -114,6 +131,7 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
         self.argumentFields = argumentFields
         self.offeredRules = offeredRules
         self.answerHandle = answerHandle
+        self.operations = operations ?? form.defaultOperations
     }
 
     /// The same request, filed against the connection it arrived on.
@@ -121,15 +139,38 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// The vocabulary reads the request out of the payload and knows nothing
     /// about descriptors; the reducer holds both. Rebuilding here rather than
     /// making the field `var` keeps the type a value the surface can only read.
+    ///
+    /// Keeps the operations this request already carries, for the paths that
+    /// only withdraw a handle; the connection that declares them files the
+    /// request through ``answerable(on:permitting:)``.
     nonisolated func answerable(on answerHandle: AnswerHandle?) -> AgentRequest {
+        answerable(on: answerHandle, permitting: operations)
+    }
+
+    /// The same request, filed against a connection and what that connection
+    /// was declared to accept.
+    nonisolated func answerable(
+        on answerHandle: AnswerHandle?,
+        permitting operations: AnswerOperations
+    ) -> AgentRequest {
         AgentRequest(
             id: id,
             toolName: toolName,
             form: form,
             argumentFields: argumentFields,
             offeredRules: offeredRules,
-            answerHandle: answerHandle
+            answerHandle: answerHandle,
+            operations: operations
         )
+    }
+
+    /// The request with nothing on it that changes as its connection does.
+    ///
+    /// What a draft is kept against (``AnswerProgress``): the same id wearing
+    /// a different body — other options, another question — is another
+    /// request, and a tick taken on the old one must not travel onto it.
+    nonisolated var asked: AgentRequest {
+        answerable(on: nil, permitting: .readingOnly)
     }
 
     /// Bind a boundary-projected body to the correlation identity established
@@ -138,7 +179,7 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
         AgentRequest(
             id: id, toolName: toolName, form: form,
             argumentFields: argumentFields, offeredRules: offeredRules,
-            answerHandle: answerHandle
+            answerHandle: answerHandle, operations: operations
         )
     }
 
@@ -173,6 +214,30 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
             case .questions: "questions"
             case .question: "question"
             case .unsupported: "unsupported"
+            }
+        }
+
+        /// The operations a request of this form is answered by, for a
+        /// request built with no declaration.
+        nonisolated var defaultOperations: AnswerOperations {
+            switch self {
+            case .command, .document: .decision
+            case .questions, .question: .questionAnswers
+            case .unsupported: .readingOnly
+            }
+        }
+
+        /// Whether these operations answer this form at all.
+        ///
+        /// A decision form needs a grant to draw an affirmative on; a question
+        /// form needs its answers taken. A refusal alone draws nothing, because
+        /// the affirmative ground is the return key made visible and a row
+        /// with nothing for the return key to do offers nothing (§11 rule 03).
+        nonisolated func permits(_ operations: AnswerOperations) -> Bool {
+            switch self {
+            case .command, .document: operations.grant
+            case .questions, .question: operations.answersQuestions
+            case .unsupported: false
             }
         }
     }
@@ -252,16 +317,16 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
         case .command:
             return AnswerRowShape(
                 affirmative: "Approve",
-                refusal: "Deny",
-                placeholder: "what to do instead…",
+                refusal: operations.refuse ? "Deny" : nil,
+                placeholder: operations.refusalTakesText ? "what to do instead…" : nil,
                 affirmativeNotice: "Approved",
                 refusalNotice: "Denied"
             )
         case .document:
             return AnswerRowShape(
                 affirmative: "Accept",
-                refusal: "Send it back",
-                placeholder: "or say what to change…",
+                refusal: operations.refuse ? "Send it back" : nil,
+                placeholder: operations.refusalTakesText ? "or say what to change…" : nil,
                 affirmativeNotice: "Accepted",
                 refusalNotice: "Sent back"
             )
@@ -280,10 +345,14 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
             // which is §5.2's argument for drawing `1/1`.
             let asked = askedQuestions
             let isLast = question >= asked.count - 1
+            let showing = asked.indices.contains(question) ? asked[question] : asked.first
             return AnswerRowShape(
                 affirmative: isLast ? "Submit" : "Next",
                 refusal: nil,
-                placeholder: "your answer…",
+                // A question that takes no words of its own draws no field:
+                // the options are the whole answer, and a field over them
+                // would be a promise the product did not make.
+                placeholder: showing?.acceptsFreeText == true ? "your answer…" : nil,
                 affirmativeNotice: "Answered",
                 refusalNotice: "Answered"
             )
@@ -319,11 +388,12 @@ nonisolated struct AnswerRowShape: Sendable, Equatable {
     let affirmative: String
     /// The answer that carries the text, where the form has one.
     let refusal: String?
-    /// What the empty field says it is for.
+    /// What the empty field says it is for, or nil where the row draws none.
     ///
     /// Its own words per form: a refusal's field asks what to do instead, and a
-    /// question's asks for the answer.
-    let placeholder: String
+    /// question's asks for the answer. Absent on a refusal the product takes
+    /// no words with, and on a question answered by its options alone.
+    let placeholder: String?
 
     /// What the row's preview line says once each of them has been sent (§8
     /// state 02).
@@ -363,6 +433,60 @@ nonisolated struct AgentQuestion: Identifiable, Sendable, Equatable {
     /// what `⏎` does on the one form where a person is most likely to press it
     /// twice.
     let allowsSeveralAnswers: Bool
+    /// The question's identifier as the product spelled it, where it spelled
+    /// one: Codex's `request_user_input` carries an `id` per question, and
+    /// Claude Code's `AskUserQuestion` keys its answers by the question's
+    /// text and carries none. ``id`` stays the position, which is what the
+    /// surface draws and the keys select by; this is what a product encoder
+    /// that answers by identifier reads instead of the text.
+    let nativeID: String?
+    /// Whether the person's own words are an answer to this question.
+    ///
+    /// Both shipping products take them — `AskUserQuestion`'s own dialogue
+    /// offers *Other*, and Codex's schema says options are suggestions — so
+    /// this is true on both, and the field is drawn. A question answered only
+    /// by choosing draws no field and refuses text at every layer that
+    /// carries an answer.
+    let acceptsFreeText: Bool
+    /// Whether a note may travel beside this question's answer.
+    ///
+    /// Claude Code's `annotations` field, keyed like its answers; nothing on
+    /// this surface composes one yet, and an encoder refuses one where the
+    /// product has nowhere to put it.
+    let acceptsNote: Bool
+
+    nonisolated init(
+        id: Int,
+        header: String?,
+        text: String,
+        options: [AgentQuestionOption],
+        allowsSeveralAnswers: Bool,
+        nativeID: String? = nil,
+        acceptsFreeText: Bool = true,
+        acceptsNote: Bool = false
+    ) {
+        self.id = id
+        self.header = header
+        self.text = text
+        self.options = options
+        self.allowsSeveralAnswers = allowsSeveralAnswers
+        self.nativeID = nativeID
+        self.acceptsFreeText = acceptsFreeText
+        self.acceptsNote = acceptsNote
+    }
+
+    /// The options these positions name, in the order the product listed
+    /// them; nil where any position names none.
+    ///
+    /// Product order rather than selection order (§5.5), and nil rather than
+    /// the ones that matched: an answer naming an option this question does
+    /// not offer is a stale answer, and half of one is not the person's.
+    nonisolated func options(at ids: [Int]) -> [AgentQuestionOption]? {
+        let wanted = Set(ids)
+        let found = options.filter { wanted.contains($0.id) }
+        guard Set(found.map(\.id)) == wanted else { return nil }
+        return found
+    }
 }
 
 /// One labelled answer a question offers.
@@ -374,6 +498,16 @@ nonisolated struct AgentQuestionOption: Identifiable, Sendable, Equatable {
     /// be recorded under.
     let label: String
     let description: String?
+    /// The option's identifier as the product spelled it, where it spelled
+    /// one. Neither shipping product does; see ``AgentQuestion/nativeID``.
+    let nativeID: String?
+
+    nonisolated init(id: Int, label: String, description: String?, nativeID: String? = nil) {
+        self.id = id
+        self.label = label
+        self.description = description
+        self.nativeID = nativeID
+    }
 }
 
 /// One persistent rule the product offered to write if this were granted.
@@ -645,7 +779,14 @@ nonisolated enum AgentRequestReading {
     /// *"Suggested answers, in display order… Omit options for a
     /// free-text-only question"*. One field, two spellings, so both are read
     /// and `question` wins where a payload somehow carries both.
-    nonisolated static func questions(in toolInput: JSONValue) -> [AgentQuestion]? {
+    ///
+    /// - Parameter acceptingNotes: whether this product takes a note beside
+    ///   each answer — Claude Code's `annotations`. Codex's encoder has nowhere
+    ///   to put one, so its questions say so.
+    nonisolated static func questions(
+        in toolInput: JSONValue,
+        acceptingNotes: Bool = false
+    ) -> [AgentQuestion]? {
         guard case let .object(fields) = toolInput,
               case let .array(raw)? = fields["questions"],
               !raw.isEmpty else { return nil }
@@ -683,12 +824,21 @@ nonisolated enum AgentRequestReading {
                     )
                 }
             }
+            // Codex names each question; Claude Code does not. Read as the
+            // product spelled it, whichever scalar it used.
+            let nativeID: String? = switch question["id"] {
+            case let .string(value)? where !value.isEmpty: value
+            case let .number(value)?: value == value.rounded() ? String(Int(value)) : String(value)
+            default: nil
+            }
             return AgentQuestion(
                 id: index,
                 header: header,
                 text: text,
                 options: options,
-                allowsSeveralAnswers: allowsSeveralAnswers
+                allowsSeveralAnswers: allowsSeveralAnswers,
+                nativeID: nativeID,
+                acceptsNote: acceptingNotes
             )
         }
         return questions.isEmpty ? nil : questions
