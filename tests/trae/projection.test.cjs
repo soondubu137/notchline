@@ -15,7 +15,7 @@ test('native IDE fields may omit remote-only mode and env',()=>{
  const f=fixture(),row=project(f);assert.equal(row.preview,'Displayed progress');assert.equal(row.requests[0].command,'printf test');
  assert.equal(JSON.stringify(row).includes('NEVER EXPORT'),false);assert.equal(row.requests[0].producer,'producer');
 });
-test('root admission excludes child, remote, SOLO and Plan/Spec',()=>{
+test('root admission excludes child, remote, standalone SoloLite and Plan/Spec',()=>{
  for(const mutate of [f=>f.session.parentSessionId=id(9),f=>f.session.remoteProjectId='remote',f=>f.session.env='remote',f=>f.context.platform='lite',f=>f.context.planMode=true,f=>f.message.userMessageContext={is_in_spec_mode:true}]){
   const f=fixture();mutate(f);assert.equal(project(f),null);
  }

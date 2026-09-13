@@ -99,7 +99,7 @@ Notchline 不提供持久权限规则。请求形态、编码限制和交付语�
 
 Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/hooks.json`，因此一次注册即可观察两者，Settings 中也只有一个开关。其 live progress 由事件触发更新，并非 token 流式更新。CLI 的中断实验尚未确认 `Ctrl-C` 是否总会发出 `Stop`；已测量到 Desktop 的 **Stop execution** 不发出任何 `Stop`。缺少结束信号时，绝不因没有后续信号而合成结束事件，即使 Desktop 自身的摘要记录了会话转为空闲。[CLI 测量记录](technical-explorations/multi-product-provider-architecture/antigravity-cli.md)和 [Desktop 测量记录](technical-explorations/multi-product-provider-architecture/antigravity-desktop.md)列出了模式、延迟和保守的移除路径。这些限制属于其 L3 声明的一部分。
 
-Trae 固定到已验证的 3.5.91 应用文件指纹。支持本地 IDE/V2 中持久存在的根 Thread；排除 SOLO、远程工作区、Plan/Spec 和子级活动。初始快照不会准入历史或已经运行的 Turn。失去观察时隐藏监测行，不推断完成；不提供删除检测或已读后移除来源。[实现及原生验收记录](trae-integration.md)说明安装方式、来源限制和验证。
+Trae 固定到已验证的 3.5.91 应用文件指纹。支持本地 IDE/V2 中持久存在的根 Thread。IDE 内的 SOLO 仍不纳入已声明的 L5 覆盖，尽管[原生边界测试](technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md)已确认普通本地生命周期及结构化问题能力。它与独立 SoloLite 不同；后者、远程工作区、Plan/Spec 和子级活动仍被排除。初始快照不会准入历史或已经运行的 Turn。失去观察时隐藏监测行，不推断完成；不提供删除检测或已读后移除来源。[实现及原生验收记录](trae-integration.md)说明安装方式、来源限制和验证。
 
 ## 6. 实现与验证
 
