@@ -10,7 +10,7 @@
 
 ## 1. What the product is
 
-Notchline is a live summary of the Turns a user still needs to attend to, at the top of the screen: Turns that are running, waiting on a person, or finished but not yet read in the product that produced them. The monitored products are Codex Desktop, Claude Code and Antigravity (Desktop and CLI).
+Notchline is a live summary of the Turns a user still needs to attend to, at the top of the screen: Turns that are running, waiting on a person, or finished but not yet read in the product that produced them. The monitored products are Codex Desktop, Claude Code, Antigravity (Desktop and CLI), and Trae Desktop (local IDE).
 
 It is not a history browser and it does not manage tasks. Each row is a root thread that can be returned to under the same identity, and the row's state is driven by that thread's current — or most recent still-monitored — Turn.
 
@@ -20,7 +20,7 @@ Collapsed, it merges with the physical notch on a notched screen and uses a cont
 
 ### 1.1 Product support coverage
 
-[Product support](product-support.md) is the authoritative L1–L6 contract and current capability matrix. Codex Desktop reaches L6 for ordinary `PermissionRequest`, with synchronous questions and `request_permissions` reading-only; Claude Code reaches L6 for its listed request forms; Antigravity reaches L3 on both surfaces, Desktop and CLI, with declared mode, cancellation and progress-update limits. Read removal, navigation quality, quota and usage, final answers, subagents, recovery and terminal reasons are independent capabilities. Goals and surface features below apply only where that matrix declares support; unsupported is not a failed read or zero usage. Read removal retires a monitoring row and never archives its Thread.
+[Product support](product-support.md) is the authoritative L1–L6 contract and current capability matrix. Codex Desktop reaches L6 for ordinary `PermissionRequest`, with synchronous questions and `request_permissions` reading-only; Claude Code reaches L6 for its listed request forms; Antigravity reaches L3 on both surfaces, Desktop and CLI, with declared mode, cancellation and progress-update limits. Trae Desktop reaches L5 on its verified 3.5.91 local IDE build for ordinary commands and structured questions; all answers stay in Trae. Read removal, navigation quality, quota and usage, final answers, subagents, recovery and terminal reasons are independent capabilities. Goals and surface features below apply only where that matrix declares support; unsupported is not a failed read or zero usage. Read removal retires a monitoring row and never archives its Thread.
 
 ## 2. Goals
 
@@ -461,3 +461,9 @@ A product requiring no setup is monitored without a configuration switch or file
 ## Generalisation conformance follow-up (2026-09-12)
 
 Reading-only requests support complete question-set browsing without input or an answer channel. A row with several live requests offers previous/next request controls with a position count; changing the selection sends nothing and preserves each live request's own question position and draft. Resolution, replacement and observation reset cannot transfer that state to another request. Existing answerable sets retain their answer-validation rules when advancing. No native support level changes.
+
+## Trae local IDE contract (2026-09-12)
+
+The [Trae integration](trae-integration.md) adds native root Thread and Turn identity, displayed title/workspace/progress, positive manual waits and reading-only command/question forms. A Turn must begin after observation attaches; the baseline cannot restore historical or already-running Turns. Native completion, failure and cancellation clear waits and end the Turn. Unknown forms return to Trae, never display a partial approval as complete. Navigation verifies the exact root ID in its owning window; failing that, the outcome says only that Trae was raised.
+
+No read-removal, quota, token, subagent, remote, SOLO or Plan/Spec capability is implied. Finished rows remain until the next observed Turn, dismissal or the app monitoring lifetime ending. A connection loss hides affected rows and changes availability, never infers a Turn end. Reconnection may correct only previously observed Turns; a different application process clears that lifetime. Setup installs one owned companion using Trae’s CLI and requires reopening its windows. Version and fingerprint failures disable observation.

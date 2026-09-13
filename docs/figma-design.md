@@ -979,3 +979,9 @@ Apple documents the grouping behaviour in
 ## Generalisation conformance follow-up (2026-09-12)
 
 The open request row gains a 24 pt navigation strip below the Thread title only when more than one live request exists. It uses the existing row spacing, request-control font and theme ink; arrow buttons have explicit accessible names and unavailable directions are disabled. The strip reads `Request n of m`. Reading-only question sets show quiet `Back`/`Next` controls beside the return-to-product action, without a bright affirmative or an input field. This specifies the implementation; no Figma file was edited.
+
+## Trae surface addition
+
+Settings draws a fourth registry row, **Trae Desktop**, with companion-installation help and declared local IDE/version limitations. The row has no Hooks-file link. Overlay attribution uses the existing product badge and shared colour/geometry. Its requests use the existing reading-only command/question forms, with measured native reading hints and the same return action; no new Figma variant or answer control is required. Actual SwiftUI row and Settings renders are part of [Trae acceptance](trae-integration.md).
+
+With four product rows, Settings scrolls vertically within a 580 pt-wide window, capped at 860 pt or 80 pt below the smallest connected display’s visible height (minimum 420 pt). This keeps Display controls and Quit reachable on shorter screens.

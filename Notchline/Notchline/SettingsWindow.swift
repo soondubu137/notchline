@@ -15,6 +15,16 @@ struct AppSettingsView: View {
     @EnvironmentObject private var store: MonitorStore
 
     var body: some View {
+        ScrollView(.vertical) {
+            contents
+        }
+        .frame(width: 580, height: min(860, max(420,
+            (NSScreen.screens.map { $0.visibleFrame.height }.min() ?? 940) - 80)))
+        .background(MacOSWindowColor.windowBackground)
+        .background(SettingsWindowChrome())
+    }
+
+    private var contents: some View {
         VStack(alignment: .leading, spacing: 22) {
             productsGroup
             displayGroup
@@ -54,9 +64,8 @@ struct AppSettingsView: View {
         .padding(.horizontal, 24)
         .padding(.top, 20)
         .padding(.bottom, 22)
-        .frame(width: 580, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(MacOSWindowColor.windowBackground)
-        .background(SettingsWindowChrome())
     }
 
     // MARK: - Products
@@ -80,10 +89,9 @@ struct AppSettingsView: View {
             }
         } footnote: {
             SettingsFootnote(
-                "Each switch adds only the lifecycle events Notchline needs and takes "
-                    + "them out again when it is off; your own settings and hooks are "
-                    + "left alone. Each file is copied beside itself as a "
-                    + ".notchline-backup file first."
+                "Trae uses a companion extension; reopen its windows after installation. "
+                    + "The other switches manage Notchline’s hooks and preserve your own settings. "
+                    + "Existing hook files are copied to .notchline-backup before changes."
             ) {
                 Button("Recheck") {
                     store.refreshNow()
@@ -438,7 +446,7 @@ struct ProductConnectionRows: View {
             caption: copy.diagnostic ?? descriptor.declaredBoundary,
             status: SettingsRowStatus(color: copy.color, text: copy.status)
         ) {
-            if let setup = descriptor.setup.managedHooks {
+            if descriptor.setup.isConfigurable {
                 HStack(spacing: 10) {
                     Toggle(
                         "\(descriptor.displayName) integration",
@@ -447,9 +455,11 @@ struct ProductConnectionRows: View {
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .disabled(store.isIntegrationBusy(for: descriptor.kind))
-                    .help(setup.switchHelp)
+                    .help(descriptor.setup.switchHelp)
 
-                    ShowInFinderButton(target: .revealing(setup.configurationFile(fileManager: .default)))
+                    if let setup = descriptor.setup.managedHooks {
+                        ShowInFinderButton(target: .revealing(setup.configurationFile(fileManager: .default)))
+                    }
                 }
             }
         }
@@ -655,7 +665,7 @@ struct ProductSettingsCopy: Equatable {
         diagnostic: String?
     ) {
         self.diagnostic = diagnostic
-        if descriptor.setup.managedHooks == nil {
+        if !descriptor.setup.isConfigurable {
             switch availability {
             case .ready: status = "Connected"; color = MacOSWindowColor.statusHealthy
             case .connecting, nil: status = "Connecting…"; color = MacOSWindowColor.statusPending
@@ -663,6 +673,22 @@ struct ProductSettingsCopy: Equatable {
             case .unsupportedVersion: status = "Version unsupported"; color = MacOSWindowColor.statusBlocked
             case .setupRequired, .disconnected:
                 status = "Not watching \(descriptor.displayName)"; color = MacOSWindowColor.statusWarning
+            }
+            return
+        }
+        if case .companionExtension = descriptor.setup {
+            switch setup {
+            case .notInstalled: status = "Integration is off"; color = MacOSWindowColor.statusIdle
+            case .repairRequired: status = "Reinstall the companion"; color = MacOSWindowColor.statusWarning
+            case .notRequired: status = "No setup required"; color = MacOSWindowColor.statusIdle
+            case .reviewRequired, .active:
+                if availability == .unsupportedVersion {
+                    status = "Version unsupported"; color = MacOSWindowColor.statusBlocked
+                } else if availability == .ready {
+                    status = "Connected · companion installed"; color = MacOSWindowColor.statusHealthy
+                } else {
+                    status = "Installed · reopen the Trae window to connect"; color = MacOSWindowColor.statusPending
+                }
             }
             return
         }

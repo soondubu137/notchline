@@ -83,3 +83,13 @@ It is simply `.ready`'s label — there is no separate version probe. The meanin
 A product declares `.none` or `.managedHooks` in `ProductSetup`. With no setup, Settings and first run show observation status without an integration switch, Hooks copy or file-reveal action. A ready source says `Connected`; unavailable observation never says that registration exists. `.notRequired` is a setup fact, not a connectivity claim.
 
 All shipping products still use managed Hooks. Their switches continue to add/remove the same definitions with the same backups and trust requirements. Removing them now also stops the runtime's owned source work immediately. No independent observation toggle or new stored preference was introduced. Native configuration editing and starting/stopping in-process readers are separate interfaces.
+
+## Trae’s companion switch
+
+The **Trae Desktop** row uses `ProductSetup.companionExtension` and `TraeProvider`’s configuration interface. It installs one VSIX with Trae’s bundled CLI (`--install-extension … --force`) and writes `agents/trae/installation.json` only after success. It edits no Hooks or application bundle. The installation message asks the user to reopen Trae’s windows. The switch removes that exact extension through `--uninstall-extension notchline.trae-companion`, then removes the registration marker; a failed removal remains visible for retry.
+
+An installed marker means installed, not connected. Active means a compatible companion has delivered a validated baseline. Trae’s short version must be 3.5.91, and the extension verifies three application fingerprints before exposing a socket. The boundary sentence names local IDE, reading-only requests and absent read removal/usage. No Hooks-file link is offered for this row; the other products keep their existing file links and trust rules. Installation and removal use a 45-second process deadline. Temporary VSIX staging is removed after the operation.
+
+With four product rows, Settings scrolls vertically within a 580 pt-wide window, capped at 860 pt or 80 pt below the smallest connected display’s visible height (minimum 420 pt). This keeps Display controls and Quit reachable on shorter screens.
+
+Onboarding uses the same four product rows and explains companion installation separately from the three Hooks configuration files. Its existing scroll area and three-page navigation remain in place.

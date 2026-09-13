@@ -5,7 +5,7 @@
 | Nature | The architecture as implemented, not a future plan |
 | Baseline | 2026-08-28 |
 | Purpose | Summarise, in one macOS top-of-screen surface, the active or unread-terminal Turns of the monitored products' root threads |
-| Entry point | `MonitorStore.shared` → one Provider per product from `ProductRegistry.builtIn`: `LiveCodexMonitorService` for Codex, `HookProductProvider` composed for Claude Code and Antigravity (Desktop and CLI, `AntigravitySurfaces.swift`) |
+| Entry point | `MonitorStore.shared` → one Provider per product from `ProductRegistry.builtIn`: `LiveCodexMonitorService` for Codex, `HookProductProvider` composed for Claude Code and Antigravity (Desktop and CLI, `AntigravitySurfaces.swift`), and `TraeProvider` composing `TraeSource` for Trae local IDE |
 
 This document follows the current Swift implementation, from a product's boundary signals entering the app through row-level status convergence, set filtering, top-level summary and exact navigation. The main chain stays:
 
@@ -17,7 +17,7 @@ boundary signals → one reducer / orchestrator → MonitorSnapshot → MonitorS
 
 ## Source composition and setup (2026-09-12)
 
-[Generalisation package 5](product-generalisation-plan.md#8-work-package-5--configuration-and-source-lifecycle-composition) is implemented by `MonitoringSourceComposition.swift` and `SupplementaryMonitoringEvidence.swift`. A product declares `ProductSetup.none` or the existing managed Hooks description. No-setup snapshots report `.notRequired`, and Settings offers no configuration action or file link for them.
+[Generalisation package 5](product-generalisation-plan.md#8-work-package-5--configuration-and-source-lifecycle-composition) is implemented by `MonitoringSourceComposition.swift` and `SupplementaryMonitoringEvidence.swift`. A product declares `ProductSetup.none`, a managed Hooks description, or Trae’s companion extension setup. No-setup snapshots report `.notRequired`, and Settings offers no configuration action or file link for them.
 
 The runtime discovers optional source ownership and scheduling capabilities from the sources it already composes. An owned instance starts once, contributes its change streams, and stops once per shutdown in reverse order. Scheduled reads run initially, on their own edges or deadlines, with one in flight, 5–60 second failure backoff and no expired deadline loop. Their cached values are consumed by the usual evidence/content contracts. Usage and terminal read-removal deadlines remain part of the same minimum; all deadlines park while observation is stopped. Source edges are counted before notification and buffered so a reading cannot consume a later change silently.
 
@@ -1173,3 +1173,9 @@ Request identity now reaches the presentation contract as `AgentRequest.Identity
 Scheduled source reads now run independently behind held evidence. `MonitoringSourceComposition` launches at most one read per source, excludes in-flight deadlines and emits a completion edge after storing the next deadline or failure backoff. Edges arriving during a read stay due. Stop cancels owned reads; old-generation completions cannot publish or restore deadlines. Sources still own protection of their cached values against cancellation-insensitive upstream completions. Start/stop hooks and ordinary held-value readers must remain short.
 
 The follow-up's optimised source harness measured cumulative process CPU for 1,000 composition refresh/deadline cycles: **6.89–7.27 ms** with a parked reader and **18.65–20.91 ms** with one read due per cycle (three samples each). A simulated 200 ms read no longer held the refresh call. [The execution record](product-generalisation-plan.md#11-conformance-follow-up-2026-09-12) gives the baseline, compiler settings and limits; these are source-composition measurements, excluding native I/O and overlay rendering.
+
+## Trae composition (2026-09-12)
+
+`TraeProvider` composes one `ProductMonitoringRuntime` with `TraeSource` as lifecycle, session reading and row content. `TraeBridgeTransport` owns directory discovery, same-user socket validation, bounded newline framing and ordered `TraeEvidenceBoundary` processing on one serial queue. Only typed evidence/progress enters `MonitoringRepository`; no native schema reaches `MonitorSnapshot` consumers. There is no additional Turn reducer, answer channel, read source or quota scheduler.
+
+The companion subscribes to Trae’s existing renderer stores and uses its product-owned client only to validate root identity, resolve the local Project and navigate. It never creates or disconnects an Aha client. Every lifecycle/request change is captured synchronously; adjacent content-only changes coalesce for 100 ms without overwriting a boundary. The queue holds at most 128 batches, the companion at most 512 observed Threads, and the transport at most 16 extension hosts. A batch has at most 128 changed Threads and 1 MiB; overflow fails closed. A 10-second transport/companion heartbeat and a 35-second lease manage connectivity only. They never infer business state. `MonitorStore` and the existing layer-backed readouts retain their rendering boundaries; this adds no continuous SwiftUI animation. See [the source and measurement record](trae-integration.md).

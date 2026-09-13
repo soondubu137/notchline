@@ -16,6 +16,7 @@ enum AgentKind: String, CaseIterable, Codable, Sendable, Comparable {
     /// folder under this app's support directory, so it is short enough for a
     /// socket path.
     case antigravity
+    case trae
 
     var displayName: String {
         switch self {
@@ -25,6 +26,8 @@ enum AgentKind: String, CaseIterable, Codable, Sendable, Comparable {
             "Claude Code"
         case .antigravity:
             "Antigravity"
+        case .trae:
+            "Trae"
         }
     }
 

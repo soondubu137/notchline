@@ -51,3 +51,14 @@ Generalisation package 5 adds no production artifact, preference or native confi
 ## Generalisation conformance follow-up (2026-09-12)
 
 Request occurrence identities, selection, saved per-request drafts and question positions are process memory only. They are pruned with the live requests and rows and are never persisted. The generalisation follow-up adds no native configuration, helper, socket, file path or on-disk artefact.
+
+## Trae companion artefacts
+
+| Path | Purpose and owner | Removal |
+| --- | --- | --- |
+| `~/Library/Application Support/Notchline/agents/trae/installation.json` | Notchline’s companion-version marker; written atomically only after successful installation | Turning Trae off removes it after successful uninstallation |
+| `~/Library/Application Support/Notchline/agents/trae/<extensionHostPID>.sock` | Same-user socket, mode 0600, in a mode-0700 directory; created by each local companion, at most one observer | Clean extension deactivation removes its own endpoint; a crash may leave a stale socket, which is never treated as live |
+| Trae’s managed extension storage: `notchline.trae-companion-1.0.0` | The VSIX installed by Trae’s extension CLI in its configured Extensions directory; JavaScript and manifest only | Trae’s CLI uninstalls this exact extension |
+| System temporary directory: `notchline-trae-install-<UUID>/` | Notchline’s packaging staging and generated VSIX | Removed at the end of setup, including errors |
+
+The companion emits bounded local frames; production stores no transcript, native response capture, Thread list or progress log. It reads the three fingerprinted files listed in [trae-integration.md](trae-integration.md) and the product-owned renderer client. It edits no application resource, authentication file, workspace setting or Trae Hook definition.

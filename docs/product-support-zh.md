@@ -47,6 +47,9 @@ L6 仅适用于已支持的形态，不代表产品中的每个请求都能回�
 | Claude Code：`ExitPlanMode` | 计划审批及文档 | 接受或退回；原产品接受附带文本时可提交文本 |
 | Claude Code：`AskUserQuestion` | 输入等待；问题集和带标签的选项 | 按请求要求单选或多选、输入自由文本，以及附加受支持的逐题备注 |
 | Antigravity（Desktop 与 CLI）：审批和问题 | 不支持：无法观察到等待，也无法观察到请求内容。尚未测量 Desktop 自身关于等待中步骤的记录 | 不支持 |
+| Trae 本地 IDE：普通 `RunCommand` | 明确的手动确认等待；命令及提供的普通参数 | 不支持；在 Trae 中回答 |
+| Trae 本地 IDE：`AskUserQuestion` | 输入等待；保留顺序的单选或多选问题、描述、原生 Others 字段、可选附加信息及文本长度限制 | 不支持；在 Trae 中回答 |
+| Trae：丰富权限、Plan/Spec 及其他形态 | 不属于 L5 范围；已识别但不支持的请求引导返回 Trae，排除模式不准入监测行 | 不支持 |
 
 Notchline 不提供持久权限规则。请求形态、编码限制和交付语义仍以 [answer-in-notch.md](answer-in-notch.md) 为准。L6 分级不会扩大这些操作的范围。
 
@@ -72,29 +75,31 @@ Notchline 不提供持久权限规则。请求形态、编码限制和交付语�
 
 此矩阵描述当前实现，不代表每个已安装的产品版本。已有测量和限制仍记录在链接指向的实现文档中。新版本或新模式在核对证据前属于尚未验证。尤其需要注意：当前[回答编码](../Notchline/Notchline/RequestAnswering.swift)会拒绝 Codex 的问题答案；能够识别或绘制问题，不代表存在写入路径。
 
-| 功能 | Codex Desktop | Claude Code（Desktop 与 CLI） | Antigravity（Desktop 与 CLI） |
-| --- | --- | --- | --- |
-| **层级** | 普通 `PermissionRequest` 达到 **L6**；同步问题和 `request_permissions` 具备 L4/L5 覆盖 | 第 3 节列出的请求形态达到 **L6** | 两个界面上已观察到的 Turn 达到 **L3**；模式限制见下文 |
-| Turn 生命周期与经过时间 | 支持 | 支持 | 支持从首次模型调用到 `Stop` 的监测。Desktop 的 **Stop execution** 不发出 `Stop`（已测量），因此该 Turn 会保持 `Working...`，直到该会话的下一次 Turn、Desktop 退出或用户手动移除；CLI 中不伴随 `Stop` 的中断未独立观察 |
-| Project 名 | Desktop 的 Project 归属，或 `Chats`；绝不从 cwd 推断 | 工作目录名称 | Desktop：其 Project 归属，未归入任何 Project 时显示 `Standalone`，无法读取时显示 `Project unavailable`；绝不使用文件夹名。CLI：TUI 工作区路径；当前 `-p` 载荷没有路径，显示 `Untitled folder` |
-| Thread 标题 | Desktop 名称 → Thread 预览 → 当前用户请求 → `Untitled` | transcript 中的标题记录；不可用时显示 `Untitled` | 两个界面均从 transcript 读取用户请求生成标题，不与 Desktop 生成的标题同步 |
-| Live progress | 拉取内容；不可用时按 Thread 降级 | 推送的 `MessageDisplay` 更新 | 在下一次模型调用和 `Stop` 时读取 transcript；长时间工具调用可能延迟更新 |
-| 审批等待与输入等待 | 支持普通审批、`request_permissions` 和同步问题；过滤自动审核 | 支持第 3 节列出的形态 | 两者均不支持 |
-| 请求阅读与回答 | 普通审批可回答；`request_permissions` 和同步问题只读；异步问题仅预览 | 范围见第 3 节 | 两者均不支持 |
-| 手动移除监测行 | 支持，适用于任意 Turn 状态 | 支持，适用于任意 Turn 状态 | 支持，适用于任意 Turn 状态 |
-| 已读后移除 | Desktop 按 Thread 提供的未读状态 | Desktop 记录和满足条件的前台证据；直接宿主终端中的操作 | Desktop：其按会话记录的查看时间，条件支持——用户离开该会话、在该会话上让 Desktop 窗口重新获得焦点或开始另一个会话时写入；一直看着 Turn 结束不会写入，直到上述操作发生。CLI：条件支持——Turn 结束后，在对应终端应用位于前台时键入或粘贴；仅返回标签页或移动指针不会清除监测行 |
-| 导航 | 验证目标后，通过深链接打开确切的 Thread | 将 Desktop 或终端宿主置于前台；宿主支持身份匹配时选中终端标签页或 pane | Desktop：仅将应用置于前台；它唯一的深链接不能打开会话。CLI：将进程的宿主置于前台；支持时选中匹配的终端标签页或 pane |
-| 剩余额度、窗口时长与重置时间 | 支持所报告的主窗口 | 支持所报告的窗口，最多三个 | 全部不支持 |
-| 多个额度窗口 | 当前界面展示一个报告的窗口 | 最多三个 | 不支持 |
-| 今日 token 用量 | 支持 | 支持，不依赖额度读取成功 | 不支持 |
-| 最终答案预览 | 支持 | 按设计不提供 | 支持；适用时回退到最后一段模型文本 |
-| Subagents | 数量、活动和审批证据参与父 Thread 状态汇总 | 数量、活动、审批证据和等待后台工作的暂停证据参与父 Thread 状态汇总 | 不支持 |
-| 冷启动状态恢复 | 不支持 | 不支持 | 不支持 |
-| 结束原因 | hooks 不提供失败原因；另行读取中断证据 | 使用可获得的失败原因和中断证据 | 观察到结束；可靠区分失败或取消尚未验证，Desktop 中的取消完全观察不到 |
+| 功能 | Codex Desktop | Claude Code（Desktop 与 CLI） | Antigravity（Desktop 与 CLI） | Trae Desktop（本地 IDE） |
+| --- | --- | --- | --- | --- |
+| **层级** | 普通 `PermissionRequest` 达到 **L6**；同步问题和 `request_permissions` 具备 L4/L5 覆盖 | 第 3 节列出的请求形态达到 **L6** | 两个界面上已观察到的 Turn 达到 **L3**；模式限制见下文 | **L5**，限 Trae 3.5.91 已验证构建、普通命令和结构化问题 |
+| Turn 生命周期与经过时间 | 支持 | 支持 | 支持从首次模型调用到 `Stop` 的监测。Desktop 的 **Stop execution** 不发出 `Stop`（已测量），因此该 Turn 会保持 `Working...`，直到该会话的下一次 Turn、Desktop 退出或用户手动移除；CLI 中不伴随 `Stop` 的中断未独立观察 | 使用原生实时 Turn ID 和开始时间；完成、失败及取消均结束 Turn |
+| Project 名 | Desktop 的 Project 归属，或 `Chats`；绝不从 cwd 推断 | 工作目录名称 | Desktop：其 Project 归属，未归入任何 Project 时显示 `Standalone`，无法读取时显示 `Project unavailable`；绝不使用文件夹名。CLI：TUI 工作区路径；当前 `-p` 载荷没有路径，显示 `Untitled folder` | 原生本地工作区文件夹名称；明确缺失时显示 `Untitled folder` |
+| Thread 标题 | Desktop 名称 → Thread 预览 → 当前用户请求 → `Untitled` | transcript 中的标题记录；不可用时显示 `Untitled` | 两个界面均从 transcript 读取用户请求生成标题，不与 Desktop 生成的标题同步 | 界面显示的原生标题；为空时显示 `Untitled` |
+| Live progress | 拉取内容；不可用时按 Thread 降级 | 推送的 `MessageDisplay` 更新 | 在下一次模型调用和 `Stop` 时读取 transcript；长时间工具调用可能延迟更新 | 由 renderer store 变化读取已显示的根 Thread 文本；相邻纯内容更新合并 100 ms，保留生命周期和请求边界 |
+| 审批等待与输入等待 | 支持普通审批、`request_permissions` 和同步问题；过滤自动审核 | 支持第 3 节列出的形态 | 两者均不支持 | 普通手动 `RunCommand` 与 `AskUserQuestion`；排除自动审核和子级活动 |
+| 请求阅读与回答 | 普通审批可回答；`request_permissions` 和同步问题只读；异步问题仅预览 | 范围见第 3 节 | 两者均不支持 | 命令和问题集只读，保留选项、自定义文本限制及可选附加信息；不支持回答 |
+| 手动移除监测行 | 支持，适用于任意 Turn 状态 | 支持，适用于任意 Turn 状态 | 支持，适用于任意 Turn 状态 | 支持，适用于任意 Turn 状态 |
+| 已读后移除 | Desktop 按 Thread 提供的未读状态 | Desktop 记录和满足条件的前台证据；直接宿主终端中的操作 | Desktop：其按会话记录的查看时间，条件支持——用户离开该会话、在该会话上让 Desktop 窗口重新获得焦点或开始另一个会话时写入；一直看着 Turn 结束不会写入，直到上述操作发生。CLI：条件支持——Turn 结束后，在对应终端应用位于前台时键入或粘贴；仅返回标签页或移动指针不会清除监测行 | 不支持；导航不会将 Turn 标记为已读 |
+| 导航 | 验证目标后，通过深链接打开确切的 Thread | 将 Desktop 或终端宿主置于前台；宿主支持身份匹配时选中终端标签页或 pane | Desktop：仅将应用置于前台；它唯一的深链接不能打开会话。CLI：将进程的宿主置于前台；支持时选中匹配的终端标签页或 pane | 通过所属窗口打开确切的已观察根 Thread，并核对选中结果；否则仅将 Trae 置于前台 |
+| 剩余额度、窗口时长与重置时间 | 支持所报告的主窗口 | 支持所报告的窗口，最多三个 | 全部不支持 | 不支持 |
+| 多个额度窗口 | 当前界面展示一个报告的窗口 | 最多三个 | 不支持 | 不支持 |
+| 今日 token 用量 | 支持 | 支持，不依赖额度读取成功 | 不支持 | 不支持 |
+| 最终答案预览 | 支持 | 按设计不提供 | 支持；适用时回退到最后一段模型文本 | 保留最后显示的根 Thread 文本；没有独立的完整答案界面 |
+| Subagents | 数量、活动和审批证据参与父 Thread 状态汇总 | 数量、活动、审批证据和等待后台工作的暂停证据参与父 Thread 状态汇总 | 不支持 | 不支持；排除子级内容和请求 |
+| 冷启动状态恢复 | 不支持 | 不支持 | 不支持 | 不支持；同一应用生命周期内重连只校正已观察到的 Turn |
+| 结束原因 | hooks 不提供失败原因；另行读取中断证据 | 使用可获得的失败原因和中断证据 | 观察到结束；可靠区分失败或取消尚未验证，Desktop 中的取消完全观察不到 | 原生完成、失败和取消均关闭 Turn；不单独显示原因标签 |
 
 终端已读后移除不覆盖当前不支持的 `tmux`、`screen`、`ssh` 或管道场景。没有可用已读证据时，已结束的监测行会保留到下一次提交、Thread 消失或用户手动移除。导航也取决于宿主是否可达，以及是否授予 Automation 权限；选中受支持的终端标签页是条件能力，不是对每种宿主的保证。参见 [tech-design.md](tech-design.md) 第 1.5、14.2 节和 [ADR 0012](adr/0012-read-state-is-answered-per-product-or-not-at-all.md)。
 
 Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/hooks.json`，因此一次注册即可观察两者，Settings 中也只有一个开关。其 live progress 由事件触发更新，并非 token 流式更新。CLI 的中断实验尚未确认 `Ctrl-C` 是否总会发出 `Stop`；已测量到 Desktop 的 **Stop execution** 不发出任何 `Stop`。缺少结束信号时，绝不因没有后续信号而合成结束事件，即使 Desktop 自身的摘要记录了会话转为空闲。[CLI 测量记录](technical-explorations/multi-product-provider-architecture/antigravity-cli.md)和 [Desktop 测量记录](technical-explorations/multi-product-provider-architecture/antigravity-desktop.md)列出了模式、延迟和保守的移除路径。这些限制属于其 L3 声明的一部分。
+
+Trae 固定到已验证的 3.5.91 应用文件指纹。支持本地 IDE/V2 中持久存在的根 Thread；排除 SOLO、远程工作区、Plan/Spec 和子级活动。初始快照不会准入历史或已经运行的 Turn。失去观察时隐藏监测行，不推断完成；不提供删除检测或已读后移除来源。[实现及原生验收记录](trae-integration.md)说明安装方式、来源限制和验证。
 
 ## 6. 实现与验证
 

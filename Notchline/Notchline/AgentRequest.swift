@@ -487,6 +487,8 @@ nonisolated struct AgentQuestion: Identifiable, Sendable, Equatable {
     /// this surface composes one yet, and an encoder refuses one where the
     /// product has nowhere to put it.
     let acceptsNote: Bool
+    /// Source-projected selection and text limits for a reading-only form.
+    let readingHint: String?
 
     nonisolated init(
         id: Int,
@@ -496,7 +498,8 @@ nonisolated struct AgentQuestion: Identifiable, Sendable, Equatable {
         allowsSeveralAnswers: Bool,
         nativeID: String? = nil,
         acceptsFreeText: Bool = true,
-        acceptsNote: Bool = false
+        acceptsNote: Bool = false,
+        readingHint: String? = nil
     ) {
         self.id = id
         self.header = header
@@ -506,6 +509,7 @@ nonisolated struct AgentQuestion: Identifiable, Sendable, Equatable {
         self.nativeID = nativeID
         self.acceptsFreeText = acceptsFreeText
         self.acceptsNote = acceptsNote
+        self.readingHint = readingHint
     }
 
     /// The options these positions name, in the order the product listed
@@ -1319,7 +1323,7 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
             return RequestBodyLayout(
                 setting: .prose,
                 lines: AgentRequestReading.wrapped(
-                    asked.text,
+                    [asked.text, asked.readingHint].compactMap { $0 }.joined(separator: "\n\n"),
                     to: width,
                     font: PanelMetrics.proseFont,
                     indentContinuations: false

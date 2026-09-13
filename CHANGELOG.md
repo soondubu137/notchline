@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add Trae Desktop at L5 for the verified 3.5.91 local IDE build: native Thread/Turn identity, displayed context and progress, reading-only ordinary commands and structured questions, and exact Thread navigation. Install the companion in Settings and reopen Trae. Answers, read removal, quota, subagents, cold-start recovery, SOLO, remote and Plan/Spec are outside this release.
+
+
 What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.

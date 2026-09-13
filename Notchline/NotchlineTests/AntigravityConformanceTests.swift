@@ -1383,7 +1383,7 @@ struct AntigravityConformanceTests {
         #expect(descriptor.declaredBoundary?.contains("Usage quota is not supported") == true)
         #expect(ProductRegistry.descriptor(for: .codex).declaredBoundary == nil)
         #expect(ProductRegistry.descriptor(for: .claudeCode).declaredBoundary == nil)
-        #expect(ProductRegistry.spokenNames == "Codex, Claude Code and Antigravity")
+        #expect(ProductRegistry.spokenNames == "Codex, Claude Code, Antigravity and Trae")
         #expect(HookIntegrationPaths.live(for: .antigravity).hooksConfiguration.path.hasSuffix("/.gemini/config/hooks.json"))
         #expect(HookIntegrationPaths.live(for: .antigravity).hookSocket.path.utf8.count < 104)
     }

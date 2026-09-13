@@ -4,7 +4,7 @@ This file applies to the whole repository, including every subdirectory.
 
 ## 1. What this project is
 
-A macOS overlay at the top of the screen. It summarises, with minimal interruption, the Turns from Codex Desktop, Claude Code and Antigravity (Desktop and CLI) that the user still needs to attend to, and offers a way back into the originating Thread. Collapsed, it hugs the notch or menu bar; on hover it expands into a list of live monitored Threads.
+A macOS overlay at the top of the screen. It summarises, with minimal interruption, the Turns from Codex Desktop, Claude Code, Antigravity (Desktop and CLI), and Trae Desktop (local IDE) that the user still needs to attend to, and offers a way back into the originating Thread. Collapsed, it hugs the notch or menu bar; on hover it expands into a list of live monitored Threads.
 
 **Terminology comes before code.** *Thread*, *Turn*, *monitoring lifecycle*, *current activity projection*, *unread terminal state*, *presence* and *integration availability* have precise definitions here. Read [`CONTEXT.md`](CONTEXT.md) before writing code, docs or a commit message, and honour its banned alternatives.
 
@@ -49,6 +49,7 @@ Each document owns a scope. A change landing in one of these scopes updates that
 | [`docs/figma-design.md`](docs/figma-design.md) | Visual and interaction spec, Figma file structure, legal component variants |
 | [`docs/system-architecture.md`](docs/system-architecture.md) | The implementation **as it actually is**: refresh timing, responsibilities, rendering and performance boundaries, the architectural invariants |
 | [`docs/product-generalisation-plan.md`](docs/product-generalisation-plan.md) | Executable five-package generalisation plan, implementation status and handover acceptance cases |
+| [`docs/trae-integration.md`](docs/trae-integration.md) | Trae local IDE companion: pinned build, request scope, private source and native acceptance |
 | [`docs/tech-design.md`](docs/tech-design.md) | Interfaces, protocols, data flow, failure recovery |
 | [`docs/integration-settings-behaviour.md`](docs/integration-settings-behaviour.md) | What the settings toggles actually do to the user's hook configuration |
 | [`docs/artifacts.md`](docs/artifacts.md) | Every file this app creates or edits, inside its container and outside it |

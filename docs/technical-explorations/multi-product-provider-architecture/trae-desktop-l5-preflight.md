@@ -305,3 +305,7 @@ Keep these outside the initial claim: legacy submission paths, SOLO/Plan/Spec, d
 
 
 Cleanup completed: the first fixture Thread was deleted before the Hook pass; the other two were deleted at the end, and native listing returned zero remaining Threads. The store observer was released and temporary Project Hooks disabled. The verified disposable main process exited; no Trae process retained its profile path. Its profile, Project, extensions, VSIX files, scripts and captured output were removed. The one recorded command trace was already absent. Original Trae PID `9869` retained its original start time. The application version and all three §2 fingerprints were rechecked and unchanged. Only this research document is retained; no source edit, Xcode build, full-suite run, Git index operation or commit was performed by this investigation. No production private integration or Codex dependency was added, modified, migrated or removed.
+
+## Production handover
+
+The user authorised implementation after §12. The shipped-source contract, restricted L5 scope, fingerprints and acceptance record now live in [Trae integration](../../trae-integration.md). This file remains the chronological feasibility evidence; its earlier unimplemented/remaining-gate statements describe those earlier stages.

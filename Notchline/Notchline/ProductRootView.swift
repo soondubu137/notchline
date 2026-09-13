@@ -156,8 +156,9 @@ struct OnboardingView: View {
             ProductConnectionRows()
         } footnote: {
             SettingsFootnote(
-                "Each switch writes Notchline’s hooks into "
-                    + "\(ProductRegistry.spokenConfigurationFiles) and takes them out "
+                "Trae installs a companion extension; reopen its windows afterwards. "
+                    + "The other switches write Notchline’s hooks into "
+                    + "\(ProductRegistry.spokenConfigurationFiles) and take them out "
                     + "again when off. Each file is backed up first."
             ) {
                 Button("Recheck") {

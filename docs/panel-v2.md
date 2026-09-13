@@ -276,3 +276,7 @@ reference bar, spent in the state where a fresh install lives.
 ## Generalisation conformance follow-up (2026-09-12)
 
 An open row with concurrent requests reserves `requestNavigationHeight` (24 pt) plus `sessionRowLineSpacing` above its body. The body keeps its existing width, cap and scrolling behaviour; the store's open-row and list heights include the strip. A single-request row retains its previous geometry. Reading-only question navigation occupies the existing answer-ground height.
+
+## Trae request content
+
+Trae adds a fourth product through the existing list and opened-row geometry. Native question instructions (choice count, optionality and custom-text limits) are included in the measured question text through `AgentQuestion.readingHint`; they do not create another panel state. Request browsing remains available with no answer handle. All timers and persistent motion retain the layer-backed rendering boundary. Coverage: [Trae integration](trae-integration.md).

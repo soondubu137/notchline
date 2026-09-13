@@ -9428,10 +9428,10 @@ struct NotchlineTests {
     /// Codex leads, always — the order is a product rule, not a sort result.
     @Test @MainActor
     func agentOrderIsFixedWithCodexLeading() {
-        #expect(AgentKind.allCases == [.codex, .claudeCode, .antigravity])
+        #expect(AgentKind.allCases == [.codex, .claudeCode, .antigravity, .trae])
         #expect(AgentKind.codex < AgentKind.claudeCode)
         #expect(AgentKind.claudeCode < AgentKind.antigravity)
-        #expect(AgentKind.allCases.shuffled().sorted() == [.codex, .claudeCode, .antigravity])
+        #expect(AgentKind.allCases.shuffled().sorted() == [.codex, .claudeCode, .antigravity, .trae])
     }
 
     /// The registry is the list the store and Settings iterate, and the enum is
@@ -9469,7 +9469,7 @@ struct NotchlineTests {
         #expect(ProductRegistry.descriptor(for: .codex).setup.managedHooks!.backupName == "hooks.json.notchline-backup")
         #expect(ProductRegistry.descriptor(for: .claudeCode).setup.managedHooks!.backupName == "settings.json.notchline-backup")
         #expect(ProductRegistry.descriptor(for: .antigravity).setup.managedHooks!.backupName == "hooks.json.notchline-backup")
-        #expect(ProductRegistry.spokenNames == "Codex, Claude Code and Antigravity")
+        #expect(ProductRegistry.spokenNames == "Codex, Claude Code, Antigravity and Trae")
         #expect(
             ProductRegistry.spokenConfigurationFiles
                 == "~/.codex/hooks.json, ~/.claude/settings.json or ~/.gemini/config/hooks.json"
@@ -21542,7 +21542,7 @@ for line in sys.stdin:
             ClaudeCodeHookVocabulary(),
             AntigravityHookVocabulary()
         ]
-        #expect(Set(vocabularies.map(\.agent)) == Set(AgentKind.allCases))
+        #expect(Set(vocabularies.map(\.agent)) == Set(ProductRegistry.builtIn.filter { $0.setup.managedHooks != nil }.map(\.kind)))
 
         for vocabulary in vocabularies {
             #expect(!vocabulary.managedDefinitions.isEmpty)

@@ -4,6 +4,35 @@ import Foundation
 enum ProductSetup: Sendable {
     case none
     case managedHooks(SetupDescription)
+    case companionExtension
+
+    var isConfigurable: Bool {
+        if case .none = self { return false }
+        return true
+    }
+
+    var installedMessage: String {
+        switch self {
+        case .none: "This product needs no setup."
+        case let .managedHooks(description): description.installedMessage
+        case .companionExtension: "Companion installed. Reopen Trae’s windows to connect."
+        }
+    }
+    var removedMessage: String {
+        switch self {
+        case .none: "This product needs no setup."
+        case let .managedHooks(description): description.removedMessage
+        case .companionExtension: "Notchline’s Trae companion has been removed."
+        }
+    }
+
+    var switchHelp: String {
+        switch self {
+        case .none: "This product needs no setup."
+        case let .managedHooks(description): description.switchHelp
+        case .companionExtension: "Installs or removes Notchline’s companion extension in Trae. Reopen Trae’s windows after installation."
+        }
+    }
 
     var managedHooks: SetupDescription? {
         guard case let .managedHooks(description) = self else { return nil }
@@ -232,6 +261,14 @@ enum ProductRegistry {
                         terminal: ProcessHostNavigator(sessions: sessions)
                     )
                 )
+            }
+        ),
+        ProductDescriptor(
+            kind: .trae, settingsTitle: "Trae Desktop", setup: .companionExtension,
+            declaredBoundary: "Watches Trae 3.5.91 in local IDE mode. Read command approvals and questions here; answer them in Trae. SOLO, Plan/Spec, remote work, read removal and usage quota are not supported.",
+            make: {
+                let service = TraeProvider()
+                return ProductModule(service: service, navigator: TraeNavigator(transport: service.source.transport))
             }
         )
     ]

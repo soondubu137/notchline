@@ -432,3 +432,7 @@ Design in [`15 — The column breathes`](https://www.figma.com/design/B9qIi46zhd
 ## Generalisation conformance follow-up (2026-09-12)
 
 Concurrent requests remain attributed to their original product and Thread. The shared row can browse them independently of whether they are answerable. Request identity retains producer scope through the store, so identical native IDs and words from separate producers cannot share drafts or late outcome notices. Existing main/subagent request-ranking and eligibility rules are unchanged.
+
+## Fourth product: Trae
+
+The registry now orders Codex, Claude Code, Antigravity and Trae. Trae uses the same neutral product-name attribution and the user’s theme ink. Its L5 local IDE rows join the existing status sort and summary; it contributes no quota window, token total or subagent count. No new product colour, footer gauge or status is introduced. Its exact scope is in [product-support.md](product-support.md).
