@@ -4,7 +4,9 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
-## Unreleased
+## 0.4.2 Alpha — 2026-09-13
+
+**Trae's own extension state is now the source of truth, and a running Turn shows a prompt, real progress and a final answer.** Installation, progress and removal all used to trust something Notchline remembered rather than what Trae itself currently says. (`docs/trae-integration.md`.)
 
 ### Added
 
@@ -17,6 +19,10 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 - **A Trae companion removed outside Notchline no longer leaves the Trae Desktop switch stuck on with nothing that can reconnect it.** Notchline used to trust a marker it wrote itself; removing the companion by hand (Trae's Extensions view, deleting the folder) left that belief uncorrected, Settings said "Installed, reopen the Trae window" forever, and turning the switch off failed silently and snapped it back on. Installation state is now read from Trae's own extension list on every check, so a genuinely removed or wrong-version companion shows "Integration is off" or "Reinstall the companion" — off, and reinstallable. (`docs/trae-integration.md`, `docs/integration-settings-behaviour.md`.)
 
 - **Turning the Trae Desktop switch off now actually removes the companion, even with it installed and connected.** Trae 3.5.91's own `--uninstall-extension` crashes on any installed extension, not just this one; that crash was silently read as a failed removal and the switch snapped back on with no explanation. Removal now falls back to editing Trae's extension manifest directly — deleting the companion's own folder and its one manifest entry, every other installed extension left untouched — when the official command fails. Reopening Trae's windows afterward is required, as installation already asks. (`docs/trae-integration.md`, `docs/integration-settings-behaviour.md`, `docs/non-public-codex-integration-features.md`.)
+
+### Known limitations
+
+Everything listed under `0.4.1` and earlier still stands, unchanged.
 
 ## 0.4.1 Alpha — 2026-09-13
 
