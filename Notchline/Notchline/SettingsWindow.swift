@@ -28,6 +28,7 @@ struct AppSettingsView: View {
         VStack(alignment: .leading, spacing: 22) {
             productsGroup
             displayGroup
+            quotaGroup
 
             // The build version and the action that quits the app belong to
             // the window rather than to a settings group.
@@ -406,6 +407,55 @@ struct AppSettingsView: View {
         Binding(
             get: { store.selectedDisplayID },
             set: { store.selectDisplay(id: $0) }
+        )
+    }
+
+    // MARK: - Quota
+
+    /// Which products get a block in the quota table (`quota-footer-v2.md` §13).
+    ///
+    /// **A card of switches, one per registered product**, in the order the
+    /// table draws them — not a pop-up of checkmarks. A menu closes on every
+    /// choice, so choosing two products out of four is four trips into it, and
+    /// its closed label can only summarise what a card simply shows. The
+    /// Products card above already holds one row per product, so this one
+    /// grows with the registry by the same rule.
+    ///
+    /// **Every product is listed, connected or not.** The choice is a standing
+    /// answer about what the table should hold, and the moment somebody wants
+    /// to leave a product out is not necessarily a moment it is open.
+    ///
+    /// The footnote says the one thing a switch cannot: today's total counts
+    /// every product whatever is on here.
+    private var quotaGroup: some View {
+        SettingsGroup(header: "Quota table") {
+            ForEach(Array(ProductRegistry.builtIn.enumerated()), id: \.element.kind) { index, descriptor in
+                if index > 0 {
+                    SettingsSeparator()
+                }
+                SettingsRow(title: descriptor.displayName) {
+                    Toggle(
+                        "Show \(descriptor.displayName) in the quota table",
+                        isOn: quotaTableSelection(for: descriptor.kind)
+                    )
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                }
+            }
+        } footnote: {
+            SettingsFootnote(
+                "A product switched on gets its own block — its usage today "
+                    + "and its limits — in the table under today’s total. The "
+                    + "total counts every connected product either way. With "
+                    + "every product off, the footer shows the total alone."
+            )
+        }
+    }
+
+    private func quotaTableSelection(for agent: AgentKind) -> Binding<Bool> {
+        Binding(
+            get: { store.showsInQuotaTable(agent) },
+            set: { store.setShowsInQuotaTable($0, for: agent) }
         )
     }
 }

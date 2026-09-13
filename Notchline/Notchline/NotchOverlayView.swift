@@ -1537,7 +1537,8 @@ struct RecentSessionSection: View {
 ///
 /// **Nothing here is drawn differently for being low.** There is no threshold,
 /// no window speaks, and no share reaches this line at any value (§4). The one
-/// thing that can change the footer's height is somebody opening the table.
+/// thing that can change the footer's height is somebody opening the table —
+/// or choosing, in Settings, which products it holds (§13).
 private struct ExpandedPanelFooter: View {
     @EnvironmentObject private var store: MonitorStore
     @Environment(\.overlayBodyWidth) private var overlayBodyWidth
@@ -1546,21 +1547,41 @@ private struct ExpandedPanelFooter: View {
 
     var body: some View {
         VStack(spacing: PanelMetrics.footerRuleSpacing) {
-            if store.showsQuotaFoldControl {
-                spendLine
+            if store.showsQuotaFooter {
+                if store.showsQuotaFoldControl {
+                    spendLine
+                } else {
+                    totalLine
+                }
 
-                if store.isQuotaExpanded {
+                if store.showsQuotaTable {
                     table
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
                 }
             }
         }
-        .padding(.bottom, store.isQuotaExpanded
+        .padding(.bottom, store.showsQuotaTable
             ? PanelMetrics.footerCaptionBottomMargin
             : PanelMetrics.footerBottomMargin)
         .frame(maxWidth: .infinity)
         .frame(height: store.expandedFooterHeight, alignment: .top)
+    }
+
+    /// The spend line with nothing behind it: every connected product has been
+    /// taken out of the table, so the line is today's total and nothing else.
+    ///
+    /// **Not a button**, and not a disabled one either. A line that takes a
+    /// click and does nothing is a control that is broken; this is a reading,
+    /// and it is drawn in exactly the place the spend line's reading is, so
+    /// the total does not move when the last product leaves the table.
+    private var totalLine: some View {
+        FooterSpendLineContent(isExpanded: false, isHovered: false, showsControl: false)
+            .frame(width: PanelMetrics.sessionViewportWidth(panelWidth: overlayBodyWidth ?? store.currentPanelSize.width))
+            .frame(height: PanelMetrics.recentSeamHeight)
+            .frame(maxWidth: .infinity)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Today, \(store.footerToday.spokenText)")
     }
 
     /// The footer's first line, always drawn, carrying the reading and the
@@ -1578,7 +1599,7 @@ private struct ExpandedPanelFooter: View {
             store.toggleQuotaTable()
         } label: {
             FooterSpendLineContent(
-                isExpanded: store.isQuotaExpanded,
+                isExpanded: store.showsQuotaTable,
                 isHovered: isHovered
             )
         }
@@ -1596,7 +1617,7 @@ private struct ExpandedPanelFooter: View {
         .onHover { isHovered = $0 }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Today, \(store.footerToday.spokenText)")
-        .accessibilityValue(store.isQuotaExpanded ? "Expanded" : "Collapsed")
+        .accessibilityValue(store.showsQuotaTable ? "Expanded" : "Collapsed")
         .accessibilityAddTraits(.isButton)
     }
 
@@ -1621,6 +1642,7 @@ private struct FooterSpendLineContent: View {
 
     let isExpanded: Bool
     let isHovered: Bool
+    var showsControl = true
 
     var body: some View {
         ZStack {
@@ -1633,7 +1655,9 @@ private struct FooterSpendLineContent: View {
 
                 FoldSeamRule(isVisible: isExpanded)
 
-                QuotaFoldChevron(isExpanded: isExpanded, isHovered: isHovered)
+                if showsControl {
+                    QuotaFoldChevron(isExpanded: isExpanded, isHovered: isHovered)
+                }
             }
             .padding(.horizontal, PanelMetrics.sessionRowPadding)
         }

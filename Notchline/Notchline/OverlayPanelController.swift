@@ -246,6 +246,12 @@ final class OverlayPanelController {
             // footer redraws itself, but only the panel can find the height the
             // table needs and give it back afterwards.
             store.$isQuotaExpanded.map { _ in () }.eraseToAnyPublisher(),
+            // And which products the table holds, chosen in Settings. With the
+            // table open, taking a product out shortens it and putting one
+            // back lengthens it, and taking the last one out shuts it; none of
+            // that republishes the quota or the open state, so the table would
+            // be drawn into a window still sized for the products it had.
+            store.$productsHiddenFromQuotaTable.map { _ in () }.eraseToAnyPublisher(),
             // Opening what the list has let go of is the same kind of height
             // change, and it was the one publish this list forgot. The seam is
             // the only control on the surface that moves the panel's bottom

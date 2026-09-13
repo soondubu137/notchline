@@ -2309,6 +2309,34 @@ final class MonitorStore: ObservableObject {
             preferences?.set(isQuotaExpanded, forKey: Self.quotaExpandedDefaultsKey)
         }
     }
+    /// The products the user has taken out of the quota table.
+    ///
+    /// **What is left out is stored, not what is kept**, so a product this app
+    /// learns to watch in a later build arrives in the table the way every
+    /// product did before this choice existed. A stored list of kept products
+    /// would hide it from everybody who ever opened the switches, including
+    /// the people who opened them and changed nothing — and a product that is
+    /// never drawn is a product nobody knows they could have drawn.
+    ///
+    /// **The table only.** Today's total at rest counts every connected
+    /// product whatever is chosen here: it is the one figure the footer always
+    /// draws, and a total that changed with a display preference would be a
+    /// different number wearing the same words (`quota-footer-v2.md` §13).
+    /// With every connected product left out there is nothing behind the
+    /// control, so the control goes and the line is the total alone
+    /// (``showsQuotaFoldControl``).
+    ///
+    /// Empty on a fresh install, and remembered across launches. A raw value
+    /// this build does not know is dropped on read rather than kept.
+    @Published var productsHiddenFromQuotaTable: Set<AgentKind> {
+        didSet {
+            guard productsHiddenFromQuotaTable != oldValue else { return }
+            preferences?.set(
+                productsHiddenFromQuotaTable.sorted().map(\.rawValue),
+                forKey: Self.quotaHiddenProductsDefaultsKey
+            )
+        }
+    }
     /// Whether the open panel is showing the app rather than the work.
     ///
     /// **It outlives a collapse and it is not remembered across launches**,
@@ -2508,6 +2536,7 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var hasCompletedOnboarding: Bool
 
     private static let quotaExpandedDefaultsKey = "quotaExpanded"
+    private static let quotaHiddenProductsDefaultsKey = "quotaHiddenProducts"
     private static let recentExpandedDefaultsKey = "recentExpanded"
     private static let privacyModeDefaultsKey = "privacyMode"
     private static let hidesCompactWingsDefaultsKey = "hidesCompactWings"
@@ -2680,6 +2709,11 @@ final class MonitorStore: ObservableObject {
         self.isQuotaExpanded = preferences?.object(
             forKey: Self.quotaExpandedDefaultsKey
         ) as? Bool ?? false
+        self.productsHiddenFromQuotaTable = Set(
+            (preferences?.stringArray(
+                forKey: Self.quotaHiddenProductsDefaultsKey
+            ) ?? []).compactMap(AgentKind.init(rawValue:))
+        )
         // `object(forKey:)` for the reason the quota's uses it: this defaults
         // to folded, and `bool` cannot tell an install that has never opened
         // the queue from one that opened and shut it.
@@ -3529,9 +3563,13 @@ final class MonitorStore: ObservableObject {
     /// `windows.first`, so a sort here would have made the table's first inner
     /// row a different window from the one every single-rule surface calls
     /// first.
+    ///
+    /// **Only the products the user keeps in the table**
+    /// (``productsHiddenFromQuotaTable``). Leaving one out removes its group
+    /// and moves nothing else: the rest keep Settings' order.
     var footerRules: [FooterRule] {
         let now = clock.now()
-        return quotaProducts.map { agent, quota in
+        return quotaTableProducts.map { agent, quota in
             FooterRule(
                 agent: agent,
                 today: UsageSummaryFormatter.today(tokens: quota.todayTokens),
@@ -3553,6 +3591,26 @@ final class MonitorStore: ObservableObject {
     private var quotaProducts: [(agent: AgentKind, quota: QuotaSnapshot)] {
         connectedAgents.compactMap { agent in
             latestByAgent[agent].map { (agent, $0.quota) }
+        }
+    }
+
+    /// The same, less the products the user has taken out of the table. The
+    /// table and its height read this; today's total never does.
+    private var quotaTableProducts: [(agent: AgentKind, quota: QuotaSnapshot)] {
+        quotaProducts.filter { !productsHiddenFromQuotaTable.contains($0.agent) }
+    }
+
+    /// Whether `agent` has a group in the quota table when it is connected.
+    func showsInQuotaTable(_ agent: AgentKind) -> Bool {
+        !productsHiddenFromQuotaTable.contains(agent)
+    }
+
+    /// Keep `agent` in the quota table, or take it out.
+    func setShowsInQuotaTable(_ shows: Bool, for agent: AgentKind) {
+        if shows {
+            productsHiddenFromQuotaTable.remove(agent)
+        } else {
+            productsHiddenFromQuotaTable.insert(agent)
         }
     }
 
@@ -3588,6 +3646,10 @@ final class MonitorStore: ObservableObject {
     /// The footer's one line at rest: every connected product's tokens for
     /// today, as a whole.
     ///
+    /// **Whatever the table is showing.** A product taken out of the table is
+    /// still counted here: the choice is about how long the table is, and the
+    /// total is not a view of the table (``productsHiddenFromQuotaTable``).
+    ///
     /// **It is not broken into products here.** The word that says whose a
     /// number is costs width on this line and costs nothing in the table, where
     /// every figure sits beside its own product's name — so the parts that used
@@ -3604,12 +3666,28 @@ final class MonitorStore: ObservableObject {
         return UsageSummaryFormatter.today(tokens: totals.reduce(0, +))
     }
 
-    /// The control is drawn whenever there is at least one connected product.
+    /// Whether the footer is drawn at all: at least one connected product.
+    ///
+    /// With nothing connected there is no footer — no products, no windows and
+    /// no tokens is nothing to say (§8.5 question 07).
+    var showsQuotaFooter: Bool { !quotaProducts.isEmpty }
+
+    /// The control is drawn whenever the table would have a group in it.
     ///
     /// It does not wait for anything to be close: a control that appeared only
     /// in trouble would be one nobody had used at the moment they first needed
-    /// it (§8.5 question 06). With nothing connected there is no footer at all.
-    var showsQuotaFoldControl: Bool { !quotaProducts.isEmpty }
+    /// it (§8.5 question 06). **It does wait for the table to have something
+    /// in it.** With every connected product taken out of the table the line
+    /// is today's total alone, and a chevron there would open onto nothing —
+    /// which covers both the user choosing no product and choosing only
+    /// products that are not connected right now (§13).
+    var showsQuotaFoldControl: Bool { !quotaTableProducts.isEmpty }
+
+    /// Whether the table is drawn: somebody opened it, and it has a group.
+    ///
+    /// ``isQuotaExpanded`` is kept as it was while the table is empty, so
+    /// putting a product back brings the table back the way the user left it.
+    var showsQuotaTable: Bool { isQuotaExpanded && showsQuotaFoldControl }
 
     /// Open the table, or shut it.
     ///
@@ -3626,10 +3704,16 @@ final class MonitorStore: ObservableObject {
     func toggleAbout() { isShowingAbout.toggle() }
 
     var expandedFooterHeight: CGFloat {
-        PanelMetrics.footerHeight(
-            productCount: quotaProducts.count,
-            windowCount: quotaProducts.reduce(0) { $0 + $1.quota.windows.count },
-            isExpanded: isQuotaExpanded
+        guard showsQuotaFooter else { return 0 }
+        // The resting line is one height whoever is in the table, so it is
+        // asked of the footer's presence rather than of the table's groups —
+        // a table with every product taken out still has a total to draw.
+        guard showsQuotaTable else { return PanelMetrics.restingFooterHeight }
+        let table = quotaTableProducts
+        return PanelMetrics.footerHeight(
+            productCount: table.count,
+            windowCount: table.reduce(0) { $0 + $1.quota.windows.count },
+            isExpanded: true
         )
     }
 

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Add Trae Desktop at L5 for the verified 3.5.91 local IDE build: native Thread/Turn identity, displayed context and progress, reading-only ordinary commands and structured questions, and exact Thread navigation. Install the companion in Settings and reopen Trae. Answers, read removal, quota, subagents, cold-start recovery, SOLO, remote and Plan/Spec are outside this release.
+- **Choose which products the quota table shows.** Settings has a new `Quota table` card with one switch per product, all on by default. A product switched off loses its block in the table. Today's total still counts every connected product. With every product off, the footer shows the total alone, with no chevron. (`docs/quota-footer-v2.md` §13.)
 
 
 What each released version of Notchline contains, newest first.

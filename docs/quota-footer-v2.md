@@ -10,6 +10,7 @@
 | Supersedes | [`dual-agent-design.md`](dual-agent-design.md) §5.1 (structure and the four heights), §5.2 (which windows are drawn), §5.4 (the fold, its default and its trap). |
 | Answered since | §8.5 questions 01 and 03, by the board's owner on 2026-09-05, from Figma page `11` §07. **There is no critical threshold and the concept is removed rather than re-tuned**, so §4 is void and no window speaks. **A field this app cannot read draws `--` in its own place** and is marked in no other way — §8.3, which is what the void threshold leaves behind. |
 | Overruled since | 3.3 kept tightest-first ordering inside a product and said so in §4. **The board's owner overruled that the same day: the order is fixed, and it is the order the product reports.** §5 is the rule, and it deletes work rather than adding it — `footerRules` already preserves the reader's order, so nothing is sorted anywhere. |
+| Amended | **The user chooses which products the table holds** (2026-09-12). §13 is the whole of it: a switch per product in Settings, today's total untouched by the choice, and no control on the spend line when the table would be empty. |
 | Superseded in | §2's ~~two heights~~ one height, by [`colour-v2.md`](colour-v2.md) §5 — the product name is a badge, so the table is `19W + 30P + 17`; the second of the two was the spoken line's `47`, and 3.3 removed the line under it (§4). §6's two tables were written before that and are corrected in place below; [`panel-v2.md`](panel-v2.md) §3.2 records the correction. Nothing else here moves. |
 
 ## 1. What V2 changes here, and why
@@ -536,3 +537,74 @@ now asserts the clearance **equals** `expandedHorizontalPadding` rather than the
 literal `12`, so the two can no longer drift.
 
 These values supersede every height above, the 2026-09-07 entry included.
+
+## 13. Which products the table holds
+
+**Built on 2026-09-12, at the user's request.** §5 gave the table one group per connected product
+and grows it by `28` a product, and that was written for two. With four products registered, and
+more coming, the opened table is a list of every product somebody happens to have connected, and
+most of the groups are ones nobody opened the table to read. An Antigravity or Trae group is a
+name and `-- today` and nothing else.
+
+### 13.1 The rule
+
+**The user picks any subset of the registered products, from none to all, and the table holds the
+connected products in that subset.** Everything else on this page stands: products keep Settings'
+order, windows keep the reader's, nothing sorts, and a kept product with no windows keeps its
+heading line (§5).
+
+**Today's total is not a view of the table.** The resting line still counts every connected
+product whatever is chosen (§3). The choice only decides how long the table is. A total that
+changed with a display preference would be a different number under the same words, and the
+table's own heading lines would no longer add up to anything the footer draws.
+
+**With nothing to open, there is no control.** When no connected product is kept, whether because
+none is chosen or because only products that are not connected right now are chosen, the spend line
+is today's total alone. There is no chevron, no rule and no hit target, and the line is not a
+button. §8.5 question 06 still holds where it applies: the control is always drawn **when there is
+a table behind it**, and a chevron that opens onto nothing is the thing that question was guarding
+against, from the other side. The footer stays `35` (the 2026-09-09 figure) in that state, which is
+the closed height at every connected form.
+
+**The open state outlives an empty table.** `quotaExpanded` is not touched when the last product
+leaves. The table is simply not drawn, so the first product put back brings it back the way the
+user left it.
+
+### 13.2 What is stored, and why it is the negative
+
+`quotaHiddenProducts` holds the products **taken out**, as an array of `AgentKind` raw values, and
+is absent on a fresh install. Storing what is kept would hide a product added in a later build
+from everyone who had ever touched the switches, including those who touched them and changed
+nothing. A product that is never drawn is a product nobody learns they could have drawn. The cost
+runs the other way and is small: someone who narrowed the table to one product sees a new product
+arrive in it once, and switches it off. A raw value this build does not recognise is dropped on
+read.
+
+### 13.3 Settings
+
+A `Quota table` group after `Display`: one card, **one switch per registered product** in
+`ProductRegistry.builtIn` order, which is the order the table draws. Every product is listed,
+connected or not, because the choice is a standing answer and not a command about what is open now
+([`figma-design.md`](figma-design.md) §8.4.1's rule). A pop-up of checkmarks was the other form and
+was not taken: a menu closes on every choice, so keeping two of four is four trips into it, and its
+closed title can only summarise what a card shows outright. The footnote says what no switch can:
+the total counts every connected product either way. Details are in
+[`figma-design.md`](figma-design.md) §8.5.
+
+### 13.4 What it cost in code
+
+| Symbol | Change |
+| --- | --- |
+| `MonitorStore.productsHiddenFromQuotaTable` | New, `@Published`, persisted as `quotaHiddenProducts`. `showsInQuotaTable(_:)` / `setShowsInQuotaTable(_:for:)` are the Settings binding |
+| `MonitorStore.footerRules` | Reads `quotaTableProducts`, the connected products less the hidden ones. `footerToday` still reads every connected product |
+| `MonitorStore.showsQuotaFooter` | New. It is the old meaning of `showsQuotaFoldControl`: at least one connected product, so there is a footer |
+| `MonitorStore.showsQuotaFoldControl` | Now means the table would have a group |
+| `MonitorStore.showsQuotaTable` | New: `isQuotaExpanded && showsQuotaFoldControl`. The view, the rule on the spend line, the bottom margin and the accessible value all read this rather than `isQuotaExpanded` |
+| `MonitorStore.expandedFooterHeight` | `0` with no footer, `restingFooterHeight` with no table drawn, `19W + 28P + 39` over the kept products otherwise. `PanelMetrics.footerHeight` is unchanged |
+| `OverlayPanelController.frameChangingPublishers` | Gains `$productsHiddenFromQuotaTable`. Changing the choice with the table open moves the panel's bottom edge and republishes nothing else |
+| `ExpandedPanelFooter` | Draws `totalLine`, the spend line's content with no chevron and no button, when there is no control. `FooterSpendLineContent` gains `showsControl` |
+| `AppSettingsView.quotaGroup` | New |
+| Tests | `aProductTakenOutOfTheQuotaTableIsStillCountedToday`, `withEveryProductTakenOutTheFooterIsTodaysTotalAlone` and `theQuotaTableChoiceIsRememberedAsWhatIsLeftOut` are new. `everyChangeThatMovesThePanelReachesTheWindow` gains taking a product out of the open table and putting it back |
+
+**Not in scope, and deliberately so:** the choice does not reach the collapsed notch, the band or
+the rows. It is about the table's length and nothing else.

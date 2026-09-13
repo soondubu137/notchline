@@ -2983,7 +2983,137 @@ struct NotchlineTests {
         #expect(store.connectedAgents.isEmpty)
         #expect(store.footerRules.isEmpty)
         #expect(!store.showsQuotaFoldControl)
+        #expect(!store.showsQuotaFooter)
         #expect(store.expandedFooterHeight == 0)
+    }
+
+    /// Two products with quota, as the three tests below read them: Codex with one window and 1K today, Claude Code with two and 2K.
+    @MainActor
+    private func storeWithTwoQuotaProducts(
+        preferences: UserDefaults? = nil
+    ) -> MonitorStore {
+        let store = MonitorStore(services: [], preferences: preferences)
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .codex,
+                availability: .ready,
+                sessions: [],
+                quota: QuotaSnapshot(remainingPercent: 72, resetsAt: nil, todayTokens: 1000),
+                diagnostic: nil
+            )
+        )
+        store.applyForTesting(
+            AgentSnapshot(
+                agent: .claudeCode,
+                availability: .ready,
+                sessions: [],
+                quota: QuotaSnapshot(
+                    windows: [
+                        QuotaWindow(label: "Current session", remainingPercent: 85, resetsAt: nil),
+                        QuotaWindow(label: "All models", remainingPercent: 12, resetsAt: nil)
+                    ],
+                    todayTokens: 2000
+                ),
+                diagnostic: nil
+            )
+        )
+        return store
+    }
+
+    /// **A product taken out of the table leaves the table, and nothing
+    /// else.** Its group goes, the others keep Settings' order, and the height
+    /// is the table that is left — but today's total still counts it, because
+    /// the choice is about how long the table is and the total is not a view
+    /// of the table (`quota-footer-v2.md` §13).
+    @Test @MainActor
+    func aProductTakenOutOfTheQuotaTableIsStillCountedToday() {
+        let store = storeWithTwoQuotaProducts()
+        store.isQuotaExpanded = true
+        #expect(store.footerRules.map(\.agent) == [.codex, .claudeCode])
+        #expect(store.footerToday.text == "3K today")
+
+        store.setShowsInQuotaTable(false, for: .codex)
+        #expect(!store.showsInQuotaTable(.codex))
+        #expect(store.footerRules.map(\.agent) == [.claudeCode])
+        #expect(store.footerToday.text == "3K today", "the total counts a product the table leaves out")
+        #expect(store.showsQuotaFoldControl)
+        #expect(store.showsQuotaTable)
+        #expect(
+            store.expandedFooterHeight
+                == PanelMetrics.footerHeight(productCount: 1, windowCount: 2, isExpanded: true)
+        )
+
+        store.setShowsInQuotaTable(true, for: .codex)
+        #expect(store.footerRules.map(\.agent) == [.codex, .claudeCode])
+        #expect(
+            store.expandedFooterHeight
+                == PanelMetrics.footerHeight(productCount: 2, windowCount: 3, isExpanded: true)
+        )
+    }
+
+    /// **With every product out, the footer is today's total and no control.**
+    ///
+    /// A chevron there would open onto nothing, so it goes, and the footer is
+    /// the resting line's height even with the table left open. The open state
+    /// itself is kept, so the first product put back brings the table back the
+    /// way the user left it. Keeping only a product that is not connected is
+    /// the same footer: the control answers to what the table would hold now.
+    @Test @MainActor
+    func withEveryProductTakenOutTheFooterIsTodaysTotalAlone() {
+        let store = storeWithTwoQuotaProducts()
+        store.isQuotaExpanded = true
+
+        for agent in AgentKind.allCases {
+            store.setShowsInQuotaTable(false, for: agent)
+        }
+        #expect(store.footerRules.isEmpty)
+        #expect(store.showsQuotaFooter)
+        #expect(!store.showsQuotaFoldControl)
+        #expect(!store.showsQuotaTable)
+        #expect(store.isQuotaExpanded, "the open state outlives an empty table")
+        #expect(store.footerToday.text == "3K today")
+        #expect(store.expandedFooterHeight == PanelMetrics.restingFooterHeight)
+
+        // Kept, but not connected: still nothing to open.
+        store.setShowsInQuotaTable(true, for: .trae)
+        #expect(store.footerRules.isEmpty)
+        #expect(!store.showsQuotaFoldControl)
+        #expect(store.expandedFooterHeight == PanelMetrics.restingFooterHeight)
+
+        store.setShowsInQuotaTable(true, for: .claudeCode)
+        #expect(store.footerRules.map(\.agent) == [.claudeCode])
+        #expect(store.showsQuotaTable)
+        #expect(
+            store.expandedFooterHeight
+                == PanelMetrics.footerHeight(productCount: 1, windowCount: 2, isExpanded: true)
+        )
+    }
+
+    /// The choice is remembered, starts with every product in, and is stored
+    /// as what is left out — so a product a later build adds arrives in the
+    /// table, and a name this build does not know is ignored rather than
+    /// failing the read.
+    @Test @MainActor
+    func theQuotaTableChoiceIsRememberedAsWhatIsLeftOut() {
+        let defaults = UserDefaults(suiteName: "quota-table-\(UUID().uuidString)")!
+        let fresh = MonitorStore(services: [], preferences: defaults)
+        #expect(fresh.productsHiddenFromQuotaTable.isEmpty)
+        #expect(AgentKind.allCases.allSatisfy { fresh.showsInQuotaTable($0) })
+
+        fresh.setShowsInQuotaTable(false, for: .claudeCode)
+        fresh.setShowsInQuotaTable(false, for: .antigravity)
+        #expect(
+            defaults.stringArray(forKey: "quotaHiddenProducts") == ["claudeCode", "antigravity"]
+        )
+        let relaunched = storeWithTwoQuotaProducts(preferences: defaults)
+        #expect(relaunched.productsHiddenFromQuotaTable == [.claudeCode, .antigravity])
+        #expect(relaunched.footerRules.map(\.agent) == [.codex])
+
+        defaults.set(["codex", "someFutureProduct"], forKey: "quotaHiddenProducts")
+        #expect(
+            MonitorStore(services: [], preferences: defaults).productsHiddenFromQuotaTable
+                == [.codex]
+        )
     }
 
     /// A window's line, whole: the label, the share and the countdown.
@@ -4217,6 +4347,10 @@ struct NotchlineTests {
                 store.removeFromRecent(store.recentDepartures[0])
             }),
             ("opening the quota table", { store.toggleQuotaTable() }),
+            ("taking the product out of the open table", {
+                store.setShowsInQuotaTable(false, for: .codex)
+            }),
+            ("putting it back", { store.setShowsInQuotaTable(true, for: .codex) }),
             ("showing the About panel", { store.toggleAbout() }),
             ("hiding the About panel", { store.toggleAbout() }),
             ("folding the queue", { store.toggleRecent() }),

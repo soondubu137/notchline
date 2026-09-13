@@ -689,7 +689,7 @@ The settings window is a **single panel with no sidebar**. V1 has three confirme
 | Switch | `38 × 22`, knob `18` |
 | Buttons and pop-ups | Capsule corners; a pop-up ends in an accent `18 × 18` double-chevron chip |
 
-The board's three groups top to bottom are `Products`, `Session list` and `Privacy`; the implementation has `Products`, `Display` and `Session list` — `Privacy` is deleted (§8.3) and `Display` is not on the board (§8.4). Each group is "a small heading, one rounded card, and footnote text beneath the card". The footnote replaces v1's blue hint bar — macOS states consequences in a footnote rather than a colour block, and a colour block in a native window only reads as a control nobody can press.
+The board's three groups top to bottom are `Products`, `Session list` and `Privacy`; the implementation has `Products`, `Display` and `Session list` — `Privacy` is deleted (§8.3) and `Display` is not on the board (§8.4). `Quota table` follows `Display` since 2026-09-12 and is not on the board either (§8.5). Each group is "a small heading, one rounded card, and footnote text beneath the card". The footnote replaces v1's blue hint bar — macOS states consequences in a footnote rather than a colour block, and a colour block in a native window only reads as a control nobody can press.
 
 The window's last row shows the version and the capsule `Quit` control **at opposite ends of it** (~~both at the leading edge, the button beside the version~~). Quitting belongs to no group: it is not a setting, and the component it takes away has no window of its own to close. The row takes no indent, so the version sits on the same vertical line as the group titles and the button's trailing edge lands on the cards' — the same line the `Recheck` capsule ends on. `Quit` goes to the bottom trailing corner because that is where macOS puts a window's action, and because beside the version it read as a second caption someone had made pressable. The two align on their **baselines**, not their tops, so the version sits on the line of the button's label rather than riding above it.
 
@@ -840,6 +840,20 @@ A `0.8 pt` line along `PanelContour`, **applied identically collapsed and expand
 This is not an exception to "do not add unconfirmed features": the rule below forbids pushing undecided features into settings, whereas `Show Notchline on` is existing behaviour given a place in the new shape, and `Hide the wings` and `Outline the panel` are two display preferences added alongside it on the same card — they add no monitored object and change no status decision, deciding only how much of this surface is drawn. Divergences between board and window are recorded here to be resolved when the board is updated.
 
 Do not add login items, animation, notification, model selection or other unconfirmed features to the V1 settings board.
+
+### 8.5 Quota table
+
+Not on the board, present in the implementation, after `Display` (2026-09-12, [`quota-footer-v2.md`](quota-footer-v2.md) §13). **One card, one row per product in `ProductRegistry.builtIn`** — `Codex`, `Claude Code`, `Antigravity`, `Trae` — each a title and a native switch, with no caption. The rows are the table's own order, and a product added to the registry adds a row here the same way it adds one to §8.1.
+
+| Item | Value |
+| --- | --- |
+| Header | `Quota table` |
+| Row title | The product's `displayName`, the name the table itself draws |
+| Control | Native macOS switch, **default on** for every product, remembered across launches as the set switched off (`quotaHiddenProducts`) |
+| Accessible name | `Show <product> in the quota table` |
+| Footnote | `A product switched on gets its own block — its usage today and its limits — in the table under today’s total. The total counts every connected product either way. With every product off, the footer shows the total alone.` |
+
+**Every product is listed and none is greyed, connected or not** — §8.4.1's rule: somebody deciding what the table should hold is not necessarily looking at a product that is open. **Switches, not a pop-up of checkmarks**: a menu closes on every choice, so keeping two of four is four trips into it, and a closed pop-up's title can only summarise what the card shows outright. **The footnote carries the one fact no switch can** — the total above the table is not filtered by any of them.
 
 ## 9. Interaction
 
