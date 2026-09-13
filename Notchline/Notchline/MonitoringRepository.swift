@@ -1103,9 +1103,11 @@ actor MonitoringRepository {
             switch signal {
             case .inputWaitOpened:
                 // Tracked so the pairing is right, and deliberately not drawn:
-                // whether a subagent's question reaches the user at all has not
-                // been measured, and a hint this product cannot stand behind is
-                // worse than no hint.
+                // whether a Codex subagent's question reaches the user at all
+                // has not been measured (a Claude Code subagent is given no
+                // question tool; see ``MonitoredTurnState/requestsAwaitingAnAnswer``),
+                // and a hint this product cannot stand behind is worse than no
+                // hint.
                 slots.open(PendingInput(
                     toolUseID: toolUseID,
                     openedAt: receivedAt,

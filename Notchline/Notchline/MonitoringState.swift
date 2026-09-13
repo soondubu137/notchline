@@ -700,27 +700,6 @@ struct MonitoredTurnState: Sendable {
         subagentsAwaitingApprovalCount > 0
     }
 
-    /// The one request this thread's row can open, out of everything it is
-    /// waiting on.
-    ///
-    /// **One row holds one request**, because a row is
-    /// `agent:threadID:turnID` and a subagent has no row of its own. So this
-    /// picks, and the order it picks in is the order the surface already reads:
-    /// the turn's own question first, then the turn's own approval, then a
-    /// subagent's -- which is `PRD.md` §6.2's priority with its stated
-    /// exception, *input outranks approval where both are this turn's*, and it
-    /// has to agree or a row would say `Approval needed` and open to nothing.
-    ///
-    /// Among several waiting subagents the **oldest** wins. It has been
-    /// blocking longest, and it is the only stable choice: newest-first would
-    /// swap an open row's contents under a reader's eye, which is exactly what
-    /// `answer-in-notch.md` §6.3 exists to prevent. `runningSubagentIDs` gates
-    /// it for the same reason ``subagentsAwaitingApprovalCount`` is gated --
-    /// an agent that never announced itself is not this thread's.
-    ///
-    /// A subagent's *question* is deliberately not offered, exactly as its
-    /// count is not drawn: whether one reaches a person at all is unmeasured,
-    /// and a request this app cannot vouch for is worse than none.
     /// Every connection this turn is holding open, its subagents' included.
     ///
     /// Deliberately *every* one and not only the request a row can open: a
@@ -778,9 +757,16 @@ struct MonitoredTurnState: Sendable {
             return wait.request.map { Ranked(request: $0, order: Double(index), producer: "") }
         }
         // A subagent's *question* is deliberately not offered, exactly as its
-        // count is not drawn: whether one reaches a person at all is
-        // unmeasured, and a request this app cannot vouch for is worse than
-        // none.
+        // count is not drawn. On Claude Code there is none to offer: a subagent
+        // is given no `AskUserQuestion`, neither in its tool list nor among its
+        // deferred tools (measured 2026-09-12 on a foreground subagent in
+        // Claude Desktop 2.1.266 and background ones in the CLI 2.1.270), so
+        // the approval its `PermissionRequest` would file beside the question
+        // never reaches this list either. On Codex, whether a subagent's
+        // question reaches a person is still unmeasured, and a request this
+        // app cannot vouch for is worse than none. Should Claude Code grant the
+        // tool, that approval would be offered here as the subagent's: measure
+        // whether its dialog reaches a person before choosing to hide it.
         let subagents = subagentSlots
             .filter { agentID, _ in runningSubagentIDs.contains(agentID) }
             .flatMap { agentID, slots in
