@@ -69,6 +69,73 @@ nonisolated struct AnswerOperations: Sendable, Equatable, Hashable {
     }
 }
 
+/// What sending an answer proved, and no more than it proved.
+///
+/// **A boolean collapsed six facts into two words** (`docs/product-generalisation-plan.md`
+/// package 4): a socket write that succeeded, a product that acknowledged
+/// acting, a connection whose peer had already gone, a product that refused,
+/// an operation the channel never carried, and a write that may or may not
+/// have arrived all had to be `true` or `false`, and the row then said
+/// *the product stopped waiting* for every one of the false ones. Each case
+/// here names what the channel can honestly claim; a channel must never
+/// report a stronger one than it can prove.
+///
+/// **The Hooks channel's best is ``sent``.** A hook's stdout is written to
+/// and closed; nothing comes back to say the product read it. Measured, both
+/// products act on what arrives there (`answer-in-notch.md` §14.2), but that
+/// is a measurement about the products and not an acknowledgement on this
+/// channel, so it is not ``accepted``.
+///
+/// No outcome moves the row's status: native evidence alone does that
+/// (`answer-in-notch.md` §8.1), and no outcome lets an answer be sent again
+/// on its own -- an ``uncertain`` write in particular must not be retried by
+/// anything but a channel that can prove the retry is idempotent, and none
+/// shipping can.
+nonisolated enum AnswerOutcome: Sendable, Equatable {
+    /// The product acknowledged acting on the answer. No shipping channel
+    /// can prove this yet; it exists so that one which can is not made to
+    /// say ``sent``.
+    case accepted
+    /// Every byte was written to the channel and the channel closed. Nothing
+    /// proves the product read them; measured, it does.
+    case sent
+    /// The channel no longer holds a connection for this handle, so nothing
+    /// was written. The row stays what it is, and says `Read`.
+    case expired(AnswerExpiry)
+    /// The product refused the answer and said why. Only a channel that
+    /// hears back can report this.
+    case rejected(String)
+    /// The channel does not carry this operation for this request. Nothing
+    /// was written and the handle is not spent -- the request may still be
+    /// answered with what the channel does carry.
+    case unsupportedOperation
+    /// Some or none of the answer may have reached the product and nothing
+    /// says which. The handle is spent: an answer that may have landed must
+    /// not be sent twice.
+    case uncertain
+
+    /// Whether the answer is known to have left this app whole.
+    nonisolated var answerArrived: Bool {
+        switch self {
+        case .accepted, .sent: true
+        case .expired, .rejected, .unsupportedOperation, .uncertain: false
+        }
+    }
+}
+
+/// Why a channel had nothing to write an answer to.
+nonisolated enum AnswerExpiry: Sendable, Equatable {
+    /// The other end went away before the write: the product was answered
+    /// in its own window and closed the hook process, or gave up waiting.
+    case peerGone
+    /// The window the product registered for an answer ran out while the
+    /// connection was still held; the product has moved on without one.
+    case timedOut
+    /// The handle names nothing this channel holds: already spent, minted by
+    /// another issuer, or released when the wait it belonged to cleared.
+    case notHeld
+}
+
 /// What a person answered, in words no product owns.
 ///
 /// The same shape on both products, because the *question* is the same on both

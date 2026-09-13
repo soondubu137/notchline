@@ -549,6 +549,9 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
         guard isObserving else { return nil }
         return [
             await composition.nextDeadline(),
+            // A held answer window running out: the refresh that withdraws
+            // the handle is what turns the mark from `Answer` to `Read`.
+            lifecycle.repository.nextAnswerExpiry(),
             await usage?.nextReadDeadline(),
             readEvidence.flatMap {
                 readGate.nextDeadline(now: clock.now(), screenIsAvailable: $0.screen.isAvailable())

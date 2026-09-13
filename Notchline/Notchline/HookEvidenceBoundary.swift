@@ -112,14 +112,19 @@ extension MonitoringRepository {
         // The old reducer normalised event names before vocabulary lookup.
         // Keep that interpretation here; raw transport framing is unchanged.
         let interpretedName = eventName.trimmingCharacters(in: .whitespacesAndNewlines)
-        var ticket: HookReplyRegistry.Ticket?
+        var handle: AnswerHandle?
         // What the product will act on down this connection, declared with
         // the connection and carried on the evidence beside it. Nothing is
         // declared where nothing is held.
         var operations = AnswerOperations.readingOnly
         if let descriptor, eventName == vocabulary.answeringEventName {
             operations = vocabulary.answerOperations(forEvent: interpretedName, toolName: payload.toolName)
-            ticket = hooks.replies.hold(descriptor, answering: payload.toolInput, permitting: operations)
+            handle = hooks.replies.hold(
+                descriptor, answering: payload.toolInput, permitting: operations,
+                // The helper's own `nc -w` window, measured from arrival: past
+                // it the product has carried on without this app's answer.
+                expiringAt: receivedAt.addingTimeInterval(TimeInterval(vocabulary.answerWindowSeconds))
+            )
         }
         let projected = vocabulary.carriesRequest(forEvent: interpretedName, toolName: payload.toolName)
             ? vocabulary.request(
@@ -137,12 +142,12 @@ extension MonitoringRepository {
             workingDirectory: payload.workingDirectory,
             namesATranscript: payload.namesATranscript,
             pausesForBackgroundWork: payload.pausesForBackgroundWork,
-            request: projected, answerHandle: ticket.map(AnswerHandle.init),
+            request: projected, answerHandle: handle,
             answerOperations: operations,
             sourceEvent: eventName
         ), in: epoch)
-        if !admitted, let ticket { hooks.replies.release(ticket) }
-        return ticket == nil ? .close : .held
+        if !admitted, let handle { hooks.replies.release(handle) }
+        return handle == nil ? .close : .held
     }
 
     /// Native output and socket writes stay outside the shared reducer.
@@ -153,21 +158,23 @@ extension MonitoringRepository {
     /// is a check one layer can forget: an answer the connection was never
     /// declared for is refused before any bytes are composed, and the
     /// connection stays held for the answer it does accept.
-    func answer(_ answer: AgentAnswer, on ticket: HookReplyRegistry.Ticket) -> Bool {
-        guard let hooks = boundary as? HookEvidenceBoundary else { return false }
-        guard let permitted = hooks.replies.operations(for: ticket) else {
-            // Nothing is held under this ticket any more, so the request
-            // stops claiming a connection it does not have.
-            withdrawAnswerHandle(AnswerHandle(ticket: ticket))
-            return false
+    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) -> AnswerOutcome {
+        guard let hooks = boundary as? HookEvidenceBoundary else { return .expired(.notHeld) }
+        guard let permitted = hooks.replies.operations(for: handle) else {
+            // Nothing is held under this handle any more -- spent, minted by
+            // another channel, or let go when its wait cleared or its window
+            // ran out -- so the request stops claiming a connection it does
+            // not have.
+            withdrawAnswerHandle(handle)
+            return .expired(.notHeld)
         }
         guard permitted.permits(answer),
               let body = hooks.vocabulary.answering?.hookOutput(
-                for: answer, updating: hooks.replies.input(for: ticket)
-              ) else { return false }
-        let delivered = hooks.replies.answer(ticket, with: body)
-        withdrawAnswerHandle(AnswerHandle(ticket: ticket))
-        return delivered
+                for: answer, updating: hooks.replies.input(for: handle)
+              ) else { return .unsupportedOperation }
+        let outcome = hooks.replies.answer(handle, with: body)
+        withdrawAnswerHandle(handle)
+        return outcome
     }
 }
 
@@ -213,7 +220,7 @@ nonisolated final class HookEvidenceBoundary: MonitoringBoundaryObserver, @unche
     func didApply(_ evidence: MonitoringEvidence, accepted: Bool) {
         // Applied, accepted or not, so the connection it arrived with is now
         // the reducer's to keep or let go at the reconciliation that follows.
-        if let ticket = evidence.answerHandle?.ticket { replies.markReduced(ticket) }
+        if let handle = evidence.answerHandle { replies.markReduced(handle) }
         lock.lock()
         defer { lock.unlock() }
         // Delivery proves a definition fired even if its evidence cannot be placed.
@@ -234,11 +241,19 @@ nonisolated final class HookEvidenceBoundary: MonitoringBoundaryObserver, @unche
     }
 
     func didDiscard(_ evidence: [MonitoringEvidence]) {
-        replies.release(evidence.compactMap { $0.answerHandle?.ticket })
+        replies.release(evidence.compactMap(\.answerHandle))
     }
 
     func retainAnswerHandles(_ handles: Set<AnswerHandle>) {
-        replies.retain(only: Set(handles.map(\.ticket)))
+        replies.retain(only: handles)
+    }
+
+    func expiredAnswerHandles(at now: Date) -> Set<AnswerHandle> {
+        replies.expire(at: now)
+    }
+
+    func nextAnswerHandleExpiry() -> Date? {
+        replies.nextExpiry()
     }
 
     func reset() {

@@ -3836,6 +3836,18 @@ final class MonitorStore: ObservableObject {
     /// and changes at most once per row.
     private var answerProgress: [String: AnswerProgress] = [:]
 
+    /// Every handle an answer has been sent on, whatever came back.
+    ///
+    /// **One attempt per handle, decided here as well as at the channel**
+    /// (`answer-in-notch.md` §8). ``isAnswerInFlight`` stops a second click
+    /// while the first is on its way; this stops one after it has landed,
+    /// because an answer that may have arrived -- an uncertain write, a peer
+    /// that went away mid-body -- must not be sent twice, and a row whose
+    /// product still publishes the handle would otherwise offer exactly that.
+    /// The one outcome that does not spend a handle is an operation the
+    /// channel does not carry, which wrote nothing. Pruned with the rows.
+    private var spentAnswerHandles: Set<AnswerHandle> = []
+
     /// Which answer the white ground is on — and so what `⏎` will do.
     ///
     /// **Recomputed from what has been typed, never set from anywhere else.**
@@ -4286,24 +4298,34 @@ final class MonitorStore: ObservableObject {
         // ordinarily already true; it is checked here so that no caller of
         // this method -- a key, a click, a specimen -- can send what the
         // connection was never declared for. The boundary checks it again.
-        guard session.request?.operations.permits(answer) == true else { return }
+        guard let request = session.request, request.operations.permits(answer),
+              // And once per handle, whatever comes back.
+              spentAnswerHandles.insert(ticket).inserted else { return }
         isAnswerInFlight = true
         let agent = session.agent
         let rowID = session.id
+        // What was answered, stripped of its connection, so a result landing
+        // on a row that another request has since taken annotates nothing.
+        let asked = request.asked
         let previewWhenWritten = session.preview
         Task { [weak self] in
-            let delivered = await self?.answerer(for: agent)?
-                .answer(answer, on: ticket) ?? false
+            // A product with no channel answers nothing, which is what a
+            // handle nobody holds says.
+            let outcome = await self?.answerer(for: agent)?
+                .answer(answer, on: ticket) ?? .expired(.notHeld)
             // The store is `@MainActor` and this task body is not: under
             // `SWIFT_APPROACHABLE_CONCURRENCY` the hop back is elided, and a
             // panel property written off the main actor is drawn one publish
             // stale (`AGENTS.md` §7).
             await MainActor.run { [weak self] in
                 self?.answerLanded(
-                    delivered: delivered,
+                    outcome,
                     rowID: rowID,
+                    asked: asked,
+                    handle: ticket,
                     previewWhenWritten: previewWhenWritten,
-                    notice: notice
+                    notice: notice,
+                    product: agent
                 )
             }
         }
@@ -4315,21 +4337,42 @@ final class MonitorStore: ObservableObject {
     /// front of a second request nobody had seen. With nothing left waiting it
     /// unlatches instead — hands the keyboard back and starts answering the
     /// pointer again — and that release is how it says you are finished.
+    ///
+    /// **The outcome is what the channel proved and the row says exactly
+    /// that** (``AnswerOutcome``): an answer that arrived says what was sent,
+    /// and every way it did not says which way, in the preview's own ink.
+    /// None of them moves the status -- native evidence alone does that
+    /// (§8.1) -- and none of them sends again.
+    ///
+    /// **A result for a request the row no longer holds annotates nothing.**
+    /// The row is `agent:threadID:turnID`, and while an answer was on its way
+    /// the product may have replaced the request on it; a notice about the
+    /// old one under the new one's words, or the new one's draft cleared for
+    /// the old one's success, would each be a sentence about the wrong thing.
     private func answerLanded(
-        delivered: Bool,
+        _ outcome: AnswerOutcome,
         rowID: String,
+        asked: AgentRequest,
+        handle: AnswerHandle,
         previewWhenWritten: String?,
-        notice: String
+        notice: String,
+        product: AgentKind
     ) {
         isAnswerInFlight = false
-        if delivered {
+        // Nothing was written and nothing spent; the channel may still take
+        // what it does carry.
+        if outcome == .unsupportedOperation { spentAnswerHandles.remove(handle) }
+        if let current = sessions.first(where: { $0.id == rowID })?.request, current.asked != asked {
+            requestRefresh()
+            return
+        }
+        let arrived = outcome.answerArrived
+        if arrived {
             answerProgress[rowID] = nil
             answerDraftGeneration &+= 1
         }
         answerNotices[rowID] = AnswerNotice(
-            text: delivered
-                ? notice
-                : "Not sent — the product stopped waiting for this answer",
+            text: arrived ? notice : Self.noticeText(for: outcome, product: product),
             previewWhenWritten: previewWhenWritten
         )
         if openRowID == rowID { closeOpenRow() }
@@ -4341,7 +4384,7 @@ final class MonitorStore: ObservableObject {
         // Only on an answer that arrived. Advancing past a row that has just
         // said `Not sent` would hide the one line explaining why, and there is
         // nothing to advance *from*: nothing was answered.
-        if delivered,
+        if arrived,
            let next = sessions.first(where: { $0.id != rowID && $0.request != nil }) {
             openRow(next.id)
         }
@@ -4349,6 +4392,35 @@ final class MonitorStore: ObservableObject {
         // row is now out of date by one publish. Asking for the refresh is
         // cheaper than teaching the projection to notice a connection closing.
         requestRefresh()
+    }
+
+    /// What the preview line says for an answer that did not arrive, in the
+    /// preview's own ink and the channel's own certainty (§8 state 03).
+    ///
+    /// Each sentence claims only what its outcome proved: a peer that went
+    /// away, a window that ran out, a handle nothing holds, a product's own
+    /// refusal in its own words, an operation the channel does not carry, or
+    /// a write nobody can vouch for -- which is the one that sends the person
+    /// to the product to look, because sending again is the one thing it
+    /// must not do.
+    private static func noticeText(for outcome: AnswerOutcome, product: AgentKind) -> String {
+        switch outcome {
+        case .accepted, .sent:
+            // Answered by the shape's own notice; never reached.
+            "Answered"
+        case .expired(.peerGone):
+            "Not sent — the product stopped waiting for this answer"
+        case .expired(.timedOut):
+            "Not sent — the time for answering here ran out"
+        case .expired(.notHeld):
+            "Not sent — this request can no longer be answered here"
+        case let .rejected(reason):
+            "Not accepted — \(reason)"
+        case .unsupportedOperation:
+            "Not sent — \(product.displayName) does not take this answer here"
+        case .uncertain:
+            "Sent, but not confirmed — check in \(product.displayName)"
+        }
     }
 
     /// Opens one row, and starts the arrival its affirmative is armed by.
@@ -4445,6 +4517,11 @@ final class MonitorStore: ObservableObject {
             return preview == notice.previewWhenWritten
         }
         answerProgress = answerProgress.filter { previews[$0.key] != nil }
+        // A spent handle is remembered for as long as some row still offers
+        // it; once no product publishes it, nothing could send on it again.
+        spentAnswerHandles = spentAnswerHandles.filter { handle in
+            sessions.contains { $0.request?.answerHandle == handle }
+        }
     }
 
     var currentPanelSize: CGSize {

@@ -66,7 +66,20 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
         /// write, so a surface offering something the channel never accepted
         /// is refused here before a byte is composed.
         let operations: AnswerOperations
+        /// When the product's own window for an answer runs out.
+        ///
+        /// The helper waits `nc -w` seconds for this app and the product waits
+        /// its registered timeout for the helper, the first inside the second
+        /// by construction (``AgentHookVocabulary/answerWindowSeconds``). Past
+        /// this instant the product has carried on without an answer, so the
+        /// connection is let go and the request says `Read`, whatever the
+        /// Turn is doing -- a channel expiring is not a wait ending.
+        let expiresAt: Date?
     }
+
+    /// Names this registry on every handle it mints, so a number another
+    /// registry counted to cannot address a connection here.
+    let identity = UUID()
 
     private let lock = NSLock()
     private var held: [Ticket: Connection] = [:]
@@ -99,47 +112,81 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
     func hold(
         _ descriptor: Int32,
         answering input: JSONValue?,
-        permitting operations: AnswerOperations
-    ) -> Ticket {
+        permitting operations: AnswerOperations,
+        expiringAt expiresAt: Date? = nil
+    ) -> AnswerHandle {
         lock.lock()
         defer { lock.unlock() }
         let ticket = nextTicket
         nextTicket += 1
-        held[ticket] = Connection(descriptor: descriptor, input: input, operations: operations)
-        return ticket
+        held[ticket] = Connection(
+            descriptor: descriptor, input: input, operations: operations, expiresAt: expiresAt
+        )
+        return AnswerHandle(ticket: ticket, issuer: identity)
+    }
+
+    /// The ticket a handle names here, or nil for one minted elsewhere.
+    private func ticket(of handle: AnswerHandle) -> Ticket? {
+        handle.issuer == identity ? handle.ticket : nil
     }
 
     /// What one held connection accepts, while it is still held; nil once it
-    /// is not, which is the answer a stale ticket gets.
-    func operations(for ticket: Ticket) -> AnswerOperations? {
+    /// is not, which is the answer a stale handle gets.
+    func operations(for handle: AnswerHandle) -> AnswerOperations? {
         lock.lock()
         defer { lock.unlock() }
-        return held[ticket]?.operations
+        return ticket(of: handle).flatMap { held[$0]?.operations }
+    }
+
+    /// The connections whose window has run out, let go: the request keeps
+    /// its words and stops claiming a way to answer them.
+    func expire(at now: Date) -> Set<AnswerHandle> {
+        lock.lock()
+        let departing = held.filter { $0.value.expiresAt.map { $0 <= now } ?? false }
+        for ticket in departing.keys {
+            held.removeValue(forKey: ticket)
+            reduced.remove(ticket)
+        }
+        lock.unlock()
+        for connection in departing.values { close(connection.descriptor) }
+        return Set(departing.keys.map { AnswerHandle(ticket: $0, issuer: identity) })
+    }
+
+    /// The earliest moment a held connection's window runs out, for the
+    /// refresh that will withdraw it.
+    func nextExpiry() -> Date? {
+        lock.lock()
+        defer { lock.unlock() }
+        return held.values.compactMap(\.expiresAt).min()
     }
 
     /// The `tool_input` one held request arrived with, while it is still held.
-    func input(for ticket: Ticket) -> JSONValue? {
+    func input(for handle: AnswerHandle) -> JSONValue? {
         lock.lock()
         defer { lock.unlock() }
-        return held[ticket]?.input
+        return ticket(of: handle).flatMap { held[$0]?.input }
     }
 
     /// Writes one answer onto the connection and closes it.
     ///
-    /// Returns whether the whole answer reached the peer. `false` is an ordinary
-    /// outcome and not a bug: the product may have killed the hook process
-    /// because the person answered there instead, and a write to a descriptor
-    /// whose peer has gone fails with `EPIPE`. The caller says so on the row
-    /// rather than retrying — there is nothing to retry against.
+    /// What comes back is what the write proved (``AnswerOutcome``): every
+    /// byte written is ``AnswerOutcome/sent`` and no more -- a hook's stdout
+    /// acknowledges nothing. A write to a descriptor whose peer has gone
+    /// fails with `EPIPE`, which is an ordinary outcome and not a bug: the
+    /// product may have killed the hook process because the person answered
+    /// there instead. A handle this registry does not hold -- spent, minted
+    /// elsewhere, or released when its wait cleared -- writes nothing. The
+    /// caller says so on the row rather than retrying; there is nothing to
+    /// retry against, and after a partial write nothing safe to retry with.
     ///
     /// `SIGPIPE` is ignored process-wide (``BrokenPipeSignal``), which is what
     /// turns that case into an error return instead of the app dying.
     @discardableResult
-    func answer(_ ticket: Ticket, with body: Data) -> Bool {
+    func answer(_ handle: AnswerHandle, with body: Data) -> AnswerOutcome {
         lock.lock()
-        guard let connection = held.removeValue(forKey: ticket) else {
+        guard let ticket = ticket(of: handle), let connection = held.removeValue(forKey: ticket) else {
             lock.unlock()
-            return false
+            return .expired(.notHeld)
         }
         reduced.remove(ticket)
         lock.unlock()
@@ -151,7 +198,8 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
     ///
     /// The product then carries on exactly as it does when this app is not
     /// running, which is the fail-open the whole transport is built on.
-    func release(_ ticket: Ticket) {
+    func release(_ handle: AnswerHandle) {
+        guard let ticket = ticket(of: handle) else { return }
         lock.lock()
         let connection = held.removeValue(forKey: ticket)
         reduced.remove(ticket)
@@ -161,7 +209,8 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
 
     /// The reducer has applied the evidence this connection arrived with, so
     /// the connection is now the reducer's to keep or let go.
-    func markReduced(_ ticket: Ticket) {
+    func markReduced(_ handle: AnswerHandle) {
+        guard let ticket = ticket(of: handle) else { return }
         lock.lock()
         if held[ticket] != nil { reduced.insert(ticket) }
         lock.unlock()
@@ -174,7 +223,8 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
     /// seven paths releases its connection without any of those paths knowing
     /// this type exists. A connection whose evidence no drain has taken yet is
     /// not judged -- see ``reduced``.
-    func retain(only tickets: Set<Ticket>) {
+    func retain(only handles: Set<AnswerHandle>) {
+        let tickets = Set(handles.compactMap(ticket(of:)))
         lock.lock()
         let departing = held.filter { reduced.contains($0.key) && !tickets.contains($0.key) }
         for ticket in departing.keys {
@@ -188,8 +238,8 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
     /// Closes the connections of evidence that was discarded before any
     /// drain took it -- an observation reset emptying the inbox -- so they do
     /// not wait on a reconciliation that will never see them.
-    func release(_ tickets: some Sequence<Ticket>) {
-        for ticket in tickets { release(ticket) }
+    func release(_ handles: some Sequence<AnswerHandle>) {
+        for handle in handles { release(handle) }
     }
 
     /// Closes everything, for a listener shutting down.
@@ -202,11 +252,18 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
         for connection in departing.values { close(connection.descriptor) }
     }
 
-    /// Writes the whole body, looping past short writes and signals.
-    private static func write(_ body: Data, to descriptor: Int32) -> Bool {
+    /// Writes the whole body, looping past short writes and signals, and
+    /// says what the write proved.
+    ///
+    /// A peer that has gone (`EPIPE`, `ECONNRESET`, `ENOTCONN`) before any
+    /// byte was taken is ``AnswerExpiry/peerGone``: nothing reached it and
+    /// nothing will. Any other failure, or one after part of the body was
+    /// taken, is ``AnswerOutcome/uncertain``: the product may hold half a
+    /// decision, and a retry could hand it a second one.
+    private static func write(_ body: Data, to descriptor: Int32) -> AnswerOutcome {
         var written = 0
-        return body.withUnsafeBytes { raw -> Bool in
-            guard let base = raw.baseAddress else { return true }
+        return body.withUnsafeBytes { raw -> AnswerOutcome in
+            guard let base = raw.baseAddress else { return .sent }
             while written < raw.count {
                 let count = Darwin.write(descriptor, base + written, raw.count - written)
                 if count > 0 {
@@ -214,16 +271,18 @@ nonisolated final class HookReplyRegistry: @unchecked Sendable {
                     continue
                 }
                 if count < 0, errno == EINTR { continue }
+                let failure = errno
                 // `EPIPE` is the ordinary shape of "the product stopped
                 // waiting", so this is logged rather than reported: the caller
-                // already learns it from the return value and is the only place
+                // already learns it from the outcome and is the only place
                 // that can say anything useful to the person who typed it.
                 Self.log.debug(
-                    "an answer could not be written to a held hook connection (errno \(errno))"
+                    "an answer could not be written to a held hook connection (errno \(failure))"
                 )
-                return false
+                let peerGone = failure == EPIPE || failure == ECONNRESET || failure == ENOTCONN
+                return written == 0 && peerGone ? .expired(.peerGone) : .uncertain
             }
-            return true
+            return .sent
         }
     }
 }

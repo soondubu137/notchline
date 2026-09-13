@@ -211,7 +211,7 @@ nonisolated struct ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfigu
         await runtime.disconnect()
     }
 
-    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
+    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> AnswerOutcome {
         await runtime.answer(answer, on: handle)
     }
 

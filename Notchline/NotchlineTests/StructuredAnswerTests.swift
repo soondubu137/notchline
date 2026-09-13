@@ -278,7 +278,7 @@ struct StructuredAnswerTests {
             "hook_event_name": "PreToolUse", "session_id": "s-1", "prompt_id": "t-1",
             "tool_name": "Bash", "tool_use_id": "call-1", "tool_input": ["command": "ls"]
         ])
-        let pair = try Pair()
+        let pair = try AnsweringSocketPair()
         defer { pair.closePeer() }
         #expect(try deliver([
             "hook_event_name": "PermissionRequest", "session_id": "s-1", "prompt_id": "t-1",
@@ -290,31 +290,31 @@ struct StructuredAnswerTests {
         let request = try #require(waiting.turns.first?.requestAwaitingAnAnswer)
         #expect(request.operations == .decision)
         #expect(request.canBeAnswered)
-        let ticket = try #require(request.answerHandle?.ticket)
+        let handle = try #require(request.answerHandle)
 
         // A question's answers down a decision's connection: refused, nothing
         // written, the connection still held and the row still answerable.
         let answered = await repository.answer(
-            .answers([AgentQuestionAnswer(question: question(), selectedOptionIDs: [0])]), on: ticket
+            .answers([AgentQuestionAnswer(question: question(), selectedOptionIDs: [0])]), on: handle
         )
-        #expect(!answered)
+        #expect(answered == .unsupportedOperation)
         #expect(!pair.peerHasInput())
         #expect(await repository.observedState().turns.first?.requestAwaitingAnAnswer?.canBeAnswered == true)
 
         // The decision it was declared for travels.
-        #expect(await repository.answer(.refuse("not now"), on: ticket))
+        #expect(await repository.answer(.refuse("not now"), on: handle) == .sent)
         #expect(pair.peerHasInput())
         let sent = try #require(pair.readFromPeer())
         #expect(String(decoding: sent, as: UTF8.self).contains(#""behavior":"deny""#))
         #expect(await repository.observedState().turns.first?.requestAwaitingAnAnswer?.canBeAnswered == false)
-        // And the spent ticket answers nothing more.
-        #expect(await repository.answer(.grant, on: ticket) == false)
+        // And the spent handle answers nothing more.
+        #expect(await repository.answer(.grant, on: handle) == .expired(.notHeld))
     }
 }
 
 /// One connected pair of descriptors: the app's end is handed to the
 /// repository, the peer's end is what the product would read.
-private struct Pair {
+struct AnsweringSocketPair {
     let app: Int32
     let peer: Int32
 

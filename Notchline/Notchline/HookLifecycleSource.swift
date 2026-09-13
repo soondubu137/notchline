@@ -203,8 +203,8 @@ struct HookLifecycleSource: MonitoringLifecycleSource {
         try await setup.uninstall()
     }
 
-    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
-        await repository.answer(answer, on: handle.ticket)
+    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> AnswerOutcome {
+        await repository.answer(answer, on: handle)
     }
 
     func disconnect() {

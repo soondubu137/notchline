@@ -83,6 +83,11 @@ nonisolated protocol MonitoringBoundaryObserver: Sendable {
     /// let go.
     func didDiscard(_ evidence: [MonitoringEvidence])
     func retainAnswerHandles(_ handles: Set<AnswerHandle>)
+    /// The handles whose answer window has run out, let go by the boundary
+    /// and returned so the reducer can withdraw them from their requests.
+    func expiredAnswerHandles(at now: Date) -> Set<AnswerHandle>
+    /// When the next held window runs out; nil while none is held.
+    func nextAnswerHandleExpiry() -> Date?
     func diagnostic(for statistics: MonitoringStatistics) -> String?
     func reset()
 }

@@ -783,6 +783,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         ) {
             deadlines.append(terminal)
         }
+        // A held answer window running out: the refresh that withdraws the
+        // handle is what turns the mark from `Answer` to `Read`.
+        if let expiry = hookEvents.nextAnswerExpiry() { deadlines.append(expiry) }
         return deadlines.min()
     }
 
@@ -956,7 +959,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// will act on is its vocabulary's business (``RequestAnswering``), and
     /// which connection they go down is the registry's. This is the boundary
     /// the store reaches both through.
-    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
+    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> AnswerOutcome {
         await hooks.answer(answer, on: handle)
     }
 

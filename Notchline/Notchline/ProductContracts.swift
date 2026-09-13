@@ -69,29 +69,45 @@ protocol IntegrationConfiguring: Sendable {
 /// The one way an answer typed on the notch finds its way back to the request
 /// it answers.
 ///
-/// Opaque outside the hook transport: the surface and the store carry it and
-/// compare it, and only the repository that minted it knows it is a held
-/// connection. A future transport binds its own kind of handle here without the
-/// domain learning a new name for it. A handle no longer held answers nothing,
-/// which is what makes a stale click harmless.
+/// **Opaque, and scoped to the channel that minted it.** The surface and the
+/// store carry it and compare it; only the channel that issued it can turn it
+/// back into a connection, and only while that channel still holds one under
+/// it. The native request identity, the descriptor, the request's raw input
+/// and the encoding context all stay in the issuing channel
+/// (``HookReplyRegistry``). A handle from an earlier issuer -- a channel that
+/// restarted and began counting again -- addresses nothing on the new one,
+/// however its numbers line up, and a handle already spent answers nothing,
+/// which is what makes a stale or repeated click harmless.
 struct AnswerHandle: Hashable, Sendable {
+    /// The channel that minted this handle, so a number reused by another
+    /// channel cannot address a request here.
+    let issuer: UUID
+    /// The issuer's own name for the held connection, meaningless anywhere
+    /// else.
     let ticket: HookReplyRegistry.Ticket
+
+    /// A handle minted by no channel, for a fixture that only records what it
+    /// was handed. It addresses nothing on any live channel.
+    static let unissued = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+
+    init(ticket: HookReplyRegistry.Ticket, issuer: UUID = AnswerHandle.unissued) {
+        self.ticket = ticket
+        self.issuer = issuer
+    }
 }
 
-/// A product whose requests can be answered from the notch (L6 for its declared request forms).
+/// A product whose requests can be answered from the notch (L6 for its
+/// declared request forms). This is the answer channel contract: one method,
+/// one handle, one outcome.
 protocol AnswerDelivering: Sendable {
-    /// Sends one answer back down the connection its request arrived on.
-    ///
-    /// Returns whether the whole answer reached the product. `false` is an
-    /// ordinary outcome rather than a bug — the product may have been answered
-    /// in its own window and killed the hook process, and this is the only
-    /// moment that can be discovered (``HookReplyRegistry``). It is
-    /// [`answer-in-notch.md`](../../docs/answer-in-notch.md) §8's *not
-    /// delivered*, and the row says so.
+    /// Sends one answer back down the connection its request arrived on, and
+    /// says what that proved (``AnswerOutcome``).
     ///
     /// **The handle rather than the row**, because the connection is what an
-    /// answer travels on and a row is only where it was typed.
-    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool
+    /// answer travels on and a row is only where it was typed. A handle is
+    /// spent by the attempt whatever the outcome, except an operation the
+    /// channel does not carry, which writes nothing and spends nothing.
+    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> AnswerOutcome
 }
 
 /// A product that reports how much of its limits is left, read on a clock of

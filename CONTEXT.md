@@ -130,8 +130,8 @@ Only the rules already asking that second question read it: summary status, prod
 **Request** — What one agent is asking a person, in the product's own words: a command to grant, a document to accept, a question with options, or a question with none ([`docs/answer-in-notch.md`](docs/answer-in-notch.md) §2.1). It is a thing the *product* composed and this app only draws — the app never annotates it, never marks a command as dangerous, and never summarises it.
 *Avoid:* prompt, dialog, permission, approval payload.
 
-**Answer** — What the person gave back: a grant, a refusal carrying what to do instead, or the answers to a question set. It travels on the hook connection the request arrived on and is written in that product's own schema ([ADR 0019](docs/adr/0019-the-helper-answers-on-the-stream-adr-0013-silenced.md)).
-*Avoid:* decision, response, permission grant, approval.
+**Answer** — What the person gave back: a grant, a refusal carrying what to do instead, or the answers to a question set. It travels on the hook connection the request arrived on and is written in that product's own schema ([ADR 0019](docs/adr/0019-the-helper-answers-on-the-stream-adr-0013-silenced.md)). What comes back is an **outcome** (`AnswerOutcome`) that claims only what the channel proved — *sent* for a hook's stdout, never *accepted*, since nothing on that channel acknowledges — and no outcome moves a Turn's status or sends the answer again.
+*Avoid:* decision, response, permission grant, approval; delivered as a synonym for accepted.
 
 **Answerable** — Said of one request, and true exactly when a connection is being held open for it **and that connection was declared to accept what the form is answered by** (`AnswerOperations`: a decision, or a question set's answers). Not a property of a product, a status or a form: a request whose connection has closed is read, and the row says so — and so is a question drawn over a connection that takes only a decision, which is Codex's.
 *Avoid:* actionable, interactive, live.

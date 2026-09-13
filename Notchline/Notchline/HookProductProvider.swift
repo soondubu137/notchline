@@ -102,7 +102,7 @@ struct HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDeliv
     }
     func nextRefreshDeadline() async -> Date? { await runtime.nextRefreshDeadline() }
     func disconnect() async { await runtime.disconnect() }
-    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
+    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> AnswerOutcome {
         await hooks.answer(answer, on: handle)
     }
     func setupStatus() async -> IntegrationSetupStatus { await hooks.setupStatus() }

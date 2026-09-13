@@ -29442,7 +29442,7 @@ for line in sys.stdin:
         #expect(await eventually { store.answerNotices[row.id] != nil })
 
         #expect(await service.answersTaken() == [.grant])
-        #expect(await service.ticketsUsed() == [7])
+        #expect(await service.handlesUsed() == [AnswerHandle(ticket: 7)])
         #expect(store.previewLine(for: row) == "Approved")
         #expect(store.sessions.contains { $0.id == row.id })
         #expect(store.openRowID == nil)
@@ -29495,7 +29495,7 @@ for line in sys.stdin:
                 form: .command("rm -rf build"),
                 answerHandle: AnswerHandle(ticket: 1)
             ),
-            delivers: false
+            outcome: .expired(.peerGone)
         )
         let (store, service, row) = bench
         store.toggleOpenRow(row)
@@ -29510,6 +29510,107 @@ for line in sys.stdin:
         // The text is still the row's, so reopening finds it where it was left.
         store.toggleOpenRow(row)
         #expect(store.answerDraft == "delete only the artefacts")
+    }
+
+    /// An asynchronous channel's outcomes reach the row as what they proved,
+    /// and none of them sends again.
+    ///
+    /// Package 4's synthetic channel: no descriptor, an answer that waits on
+    /// the far end, and the three outcomes the Hooks channel can never
+    /// produce. `accepted` lands like `sent`; a refusal keeps what was typed
+    /// and says the product's own reason; an uncertain write keeps what was
+    /// typed, sends the person to the product, and above all is never sent
+    /// twice -- the handle is spent by the attempt.
+    @Test(arguments: [
+        AnswerOutcome.accepted, .rejected("that path is outside the project"), .uncertain
+    ]) @MainActor
+    func anAsynchronousChannelsOutcomeReachesTheRowWithoutARetry(outcome: AnswerOutcome) async throws {
+        let (store, service, row) = answeringStore(
+            request: AgentRequest(
+                id: "c-1", toolName: "Bash", form: .command("rm -rf build"),
+                answerHandle: AnswerHandle(ticket: 1)
+            )
+        )
+        await service.holdAnswers()
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.answerDraftChanged(to: "delete only the artefacts")
+        store.takeAnswer(.refusal)
+        #expect(await eventually { await service.isHoldingAnAnswer })
+        #expect(store.isAnswerInFlight)
+        // A second press while the first is on its way sends nothing.
+        store.takeAnswer(.affirmative)
+        #expect(await service.handlesUsed().count == 1)
+
+        await service.release(with: outcome)
+        #expect(await eventually { store.answerNotices[row.id] != nil })
+        let said = try #require(store.previewLine(for: row))
+        switch outcome {
+        case .accepted:
+            #expect(said == "Denied")
+        case .rejected:
+            #expect(said == "Not accepted — that path is outside the project")
+        case .uncertain:
+            #expect(said == "Sent, but not confirmed — check in Claude Code")
+        default:
+            Issue.record("not an outcome this test sends")
+        }
+        #expect(!store.isAnswerInFlight)
+        #expect(store.openRowID == nil)
+
+        // The product still publishes the handle, so the row still offers to
+        // answer -- and the store refuses to send on it again, whatever came
+        // back.
+        store.toggleOpenRow(row)
+        #expect(store.answerDraft == (outcome == .accepted ? "" : "delete only the artefacts"))
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.affirmative)
+        #expect(await service.handlesUsed().count == 1)
+        #expect(!store.isAnswerInFlight)
+    }
+
+    /// A result arriving after another request has taken the row annotates
+    /// nothing about that request.
+    ///
+    /// The row is `agent:threadID:turnID`; while the answer to one request
+    /// was on its way the product replaced it with another. A notice about
+    /// the old one under the new one's words, or the new one's draft cleared
+    /// for the old one's success, would each be a sentence about the wrong
+    /// thing.
+    @Test @MainActor
+    func aResultArrivingAfterAnotherRequestTookTheRowAnnotatesNothing() async throws {
+        let (store, service, row) = answeringStore(
+            request: AgentRequest(
+                id: "c-1", toolName: "Bash", form: .command("rm -rf build"),
+                answerHandle: AnswerHandle(ticket: 1)
+            )
+        )
+        await service.holdAnswers()
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { await service.isHoldingAnAnswer })
+
+        // Another request on the same row, before the first is answered.
+        let replacement = AgentRequest(
+            id: "c-2", toolName: "Bash", form: .command("git push --force"),
+            answerHandle: AnswerHandle(ticket: 2)
+        )
+        await service.publish([answerableSession(request: replacement)])
+        store.refreshNow()
+        #expect(await eventually { store.sessions.first?.request?.id == "c-2" })
+
+        await service.release(with: .sent)
+        #expect(await eventually { !store.isAnswerInFlight })
+        #expect(store.answerNotices[row.id] == nil)
+        #expect(store.previewLine(for: try #require(store.sessions.first)) == row.preview)
+        // And the replacement is answerable in its own right, on its own handle.
+        #expect(await eventually { store.openSession?.request?.id == "c-2" || store.openRowID == nil })
+        if store.openRowID == nil { store.toggleOpenRow(try #require(store.sessions.first)) }
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { await service.handlesUsed().count == 2 })
+        #expect(await service.handlesUsed().last == AnswerHandle(ticket: 2))
     }
 
     /// A request settled somewhere else closes its row within one publish.
@@ -31206,9 +31307,9 @@ for line in sys.stdin:
         #expect(request.canBeAnswered)
         #expect(!asking.isPeerClosed)
 
-        let ticket = try #require(request.answerHandle?.ticket)
-        let granted = await repository.answer(.grant, on: ticket)
-        #expect(granted)
+        let handle = try #require(request.answerHandle)
+        let granted = await repository.answer(.grant, on: handle)
+        #expect(granted == .sent)
         let sent = try #require(asking.readFromPeer())
         let decoded = try JSONSerialization.jsonObject(with: sent) as? [String: Any]
         #expect(decoded?["hookSpecificOutput"] != nil)
@@ -31343,7 +31444,7 @@ for line in sys.stdin:
         // And the answer really travels: `updatedInput` is the tool's own input
         // with the person's choices merged into it, so the call runs and
         // returns them rather than being refused.
-        let ticket = try #require(request.answerHandle?.ticket)
+        let handle = try #require(request.answerHandle)
         #expect(
             await repository.answer(
                 .answers([
@@ -31351,8 +31452,8 @@ for line in sys.stdin:
                     // its position; the encoder spells the label.
                     AgentQuestionAnswer(question: try #require(asked.first), selectedOptionIDs: [1])
                 ]),
-                on: ticket
-            )
+                on: handle
+            ) == .sent
         )
         let sent = try #require(asking.readFromPeer())
         let decoded = try JSONSerialization.jsonObject(with: sent) as? [String: Any]
@@ -34195,13 +34296,13 @@ private func asked(
 private func answeringStore(
     request: AgentRequest,
     status: SessionStatus = .approvalNeeded,
-    delivers: Bool = true
+    outcome: AnswerOutcome = .sent
 ) -> (store: MonitorStore, service: AnsweringMonitoringStub, row: MonitoredSession) {
     let row = answerableSession(status: status, request: request)
     let service = AnsweringMonitoringStub(
         agent: .claudeCode,
         sessions: [row],
-        delivers: delivers
+        outcome: outcome
     )
     let store = MonitorStore(
         displays: [],
@@ -34229,26 +34330,39 @@ private actor AnsweringMonitoringStub: AgentMonitoring, IntegrationConfiguring, 
     nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
 
     private var sessions: [MonitoredSession]
-    private let delivers: Bool
+    private let outcome: AnswerOutcome
     private var answers: [AgentAnswer] = []
-    private var tickets: [HookReplyRegistry.Ticket] = []
+    private var handles: [AnswerHandle] = []
+    /// Whether an answer waits here until ``release(with:)``, standing in for
+    /// a channel that hears back later.
+    private var holdsAnswers = false
+    private var pending: CheckedContinuation<AnswerOutcome, Never>?
 
-    init(agent: AgentKind, sessions: [MonitoredSession], delivers: Bool = true) {
+    init(agent: AgentKind, sessions: [MonitoredSession], outcome: AnswerOutcome = .sent) {
         self.agent = agent
         self.sessions = sessions
-        self.delivers = delivers
+        self.outcome = outcome
     }
 
     func answersTaken() -> [AgentAnswer] { answers }
-    func ticketsUsed() -> [HookReplyRegistry.Ticket] { tickets }
+    func handlesUsed() -> [AnswerHandle] { handles }
 
     /// What this product says next time it is asked.
     func publish(_ sessions: [MonitoredSession]) { self.sessions = sessions }
 
-    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> Bool {
+    /// Hold every answer until it is released with an outcome of its own.
+    func holdAnswers() { holdsAnswers = true }
+    var isHoldingAnAnswer: Bool { pending != nil }
+    func release(with outcome: AnswerOutcome) {
+        pending?.resume(returning: outcome)
+        pending = nil
+    }
+
+    func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> AnswerOutcome {
         answers.append(answer)
-        tickets.append(handle.ticket)
-        return delivers
+        handles.append(handle)
+        guard holdsAnswers else { return outcome }
+        return await withCheckedContinuation { pending = $0 }
     }
 
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {

@@ -69,6 +69,10 @@ actor MonitoringRepository {
     @discardableResult
     func drainDeliveredEvents() -> MonitoringStateSnapshot {
         drainInbox()
+        // A window that ran out is not an event, so it is asked about here,
+        // on the refresh, rather than on a drain that may never come.
+        withdrawExpiredAnswerHandles()
+        signalIfProjectionChanged()
         let result = snapshot(didConsumeEvents: didReduceSinceLastReport)
         didReduceSinceLastReport = false
         return result
@@ -127,6 +131,21 @@ actor MonitoringRepository {
             }
             if changed { turnsByThreadID[threadID] = turn }
         }
+    }
+
+    /// The handles whose window has run out, withdrawn from their requests.
+    /// The requests stay, readable, and say `Read`.
+    func withdrawExpiredAnswerHandles() {
+        guard let boundary else { return }
+        for handle in boundary.expiredAnswerHandles(at: clock.now()) {
+            withdrawAnswerHandle(handle)
+        }
+    }
+
+    /// When the next held answer window runs out, for the refresh that will
+    /// withdraw it; nil while none is held.
+    nonisolated func nextAnswerExpiry() -> Date? {
+        boundary?.nextAnswerHandleExpiry()
     }
 
     // MARK: - Evidence that is not a hook event
