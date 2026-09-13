@@ -108,26 +108,10 @@ actor MonitoringRepository {
 
     func withdrawAnswerHandle(_ handle: AnswerHandle) {
         for (threadID, var turn) in turnsByThreadID {
-            var changed = false
-            if turn.pendingApproval?.request?.answerHandle == handle {
-                turn.pendingApproval = turn.pendingApproval?.withdrawingAnswerHandle()
+            var changed = turn.waits.withdraw(handle)
+            for (agentID, var slots) in turn.subagentSlots where slots.withdraw(handle) {
+                turn.subagentSlots[agentID] = slots
                 changed = true
-            }
-            if turn.pendingInput?.request?.answerHandle == handle {
-                turn.pendingInput = turn.pendingInput?.withdrawingAnswerHandle()
-                changed = true
-            }
-            for (agentID, var slots) in turn.subagentSlots {
-                if slots.pendingApproval?.request?.answerHandle == handle {
-                    slots.pendingApproval = slots.pendingApproval?.withdrawingAnswerHandle()
-                    turn.subagentSlots[agentID] = slots
-                    changed = true
-                }
-                if slots.pendingInput?.request?.answerHandle == handle {
-                    slots.pendingInput = slots.pendingInput?.withdrawingAnswerHandle()
-                    turn.subagentSlots[agentID] = slots
-                    changed = true
-                }
             }
             if changed { turnsByThreadID[threadID] = turn }
         }
@@ -304,9 +288,7 @@ actor MonitoringRepository {
             return
         }
         turn.sessionStatus = turn.sessionStatus.transitioned(on: .completed)
-        turn.pendingInput = nil
-        turn.pendingApproval = nil
-        turn.openToolUse = nil
+        turn.waits.clearAll()
         if orphansSubagents, !turn.runningSubagentIDs.isEmpty {
             turn.runningSubagentIDs.removeAll()
             // The waits go with them. A dialogue raised by a subagent of a turn
@@ -400,28 +382,21 @@ actor MonitoringRepository {
         guard var turn = turnsByThreadID[threadID] else { return }
         var changed = false
 
-        if let pending = turn.pendingApproval, moment > pending.openedAt {
-            turn.pendingApproval = nil
+        if turn.waits.endApprovals(before: moment) {
             changed = true
-            // The same re-derivation `toolCallClosed` performs, and for the
-            // same reason: an input wait outranks the approval that was
-            // cleared, and a turn already at `completed` absorbs both.
-            turn.sessionStatus = turn.sessionStatus.transitioned(
-                on: turn.pendingInputToolUseID != nil ? .inputNeeded : .running
-            )
+            // The same re-derivation every wait change performs: a question
+            // outranks whatever approval was cleared, an approval newer than
+            // the reading stands, and a turn already at `completed` absorbs
+            // both.
+            turn.deriveStatus()
         }
 
-        for (agentID, slots) in turn.subagentSlots {
-            guard let pending = slots.pendingApproval, moment > pending.openedAt else {
-                continue
-            }
-            var cleared = slots
-            cleared.pendingApproval = nil
+        for (agentID, var slots) in turn.subagentSlots where slots.endApprovals(before: moment) {
             changed = true
-            if cleared.isEmpty {
+            if slots.isEmpty {
                 turn.subagentSlots.removeValue(forKey: agentID)
             } else {
-                turn.subagentSlots[agentID] = cleared
+                turn.subagentSlots[agentID] = slots
             }
         }
 
@@ -585,8 +560,13 @@ actor MonitoringRepository {
 
         let receivedAt = event.observedAt
         let infersDenials = policy.infersApprovalRefusalFromActivity
-        let requestAsked: (String) -> AgentRequest? = { id in
-            event.request?.identified(by: id).answerable(by: event)
+        // The identity a request is filed under: the product's own where it
+        // names requests apart from calls, else the call it concerns.
+        let requestIdentity: (String) -> String = { callID in
+            self.stableIdentifier(event.requestID) ?? callID
+        }
+        let requestAsked: (String) -> AgentRequest? = { callID in
+            event.request?.identified(by: requestIdentity(callID)).answerable(by: event)
         }
 
         switch signal {
@@ -718,15 +698,12 @@ actor MonitoringRepository {
                 // pipeline that ran with no call open is not a human waiting --
                 // so with nothing to pair against it stays a no-op rather than
                 // opening a wait nothing could close.
-                guard let openToolUse = state.openToolUse else { return }
-                guard event.toolName == nil
-                    || openToolUse.name == nil
-                    || event.toolName == openToolUse.name else {
-                    // Asking about some other call than the one still open: the
-                    // pairing would be a guess, so decline to make it.
-                    return
-                }
-                state.pendingApproval = PendingApproval(
+                // Asking about some other call than the ones still open, or
+                // about one of several this could equally be: the pairing
+                // would be a guess, so decline to make it
+                // (``ProducerWaits/callToBorrow(forTool:)``).
+                guard let openToolUse = state.waits.callToBorrow(forTool: event.toolName) else { return }
+                state.waits.open(PendingApproval(
                     toolUseID: openToolUse.id,
                     isInferred: true,
                     openedAt: receivedAt,
@@ -738,13 +715,11 @@ actor MonitoringRepository {
                     // Re-filed on *this* event's connection: the request may be
                     // the one the opening call supplied, but the connection an
                     // answer travels back on is the one that just arrived.
-                    request: requestAsked(openToolUse.id) ?? (
-                        state.pendingApproval?.toolUseID == openToolUse.id
-                            ? state.pendingApproval?.request?
-                                .answerable(by: event)
-                            : nil
-                    )
-                )
+                    request: requestAsked(openToolUse.id)
+                        ?? state.waits.approvals.first { $0.toolUseID == openToolUse.id }?
+                            .request?.answerable(by: event),
+                    requestID: requestIdentity(openToolUse.id)
+                ))
                 // **The connection belongs to the call, not to the slot it
                 // opened.** An `AskUserQuestion` opens the *input* wait on its
                 // own `PreToolUse` and then raises this event for the **same
@@ -760,9 +735,8 @@ actor MonitoringRepository {
                 // approval about some *other* call than the one that opened the
                 // input wait carries its connection to that other call's slot
                 // and never to this one.
-                if state.pendingInputToolUseID == openToolUse.id,
-                   let waiting = state.pendingInput {
-                    state.pendingInput = PendingInput(
+                if let waiting = state.waits.inputs.first(where: { $0.toolUseID == openToolUse.id }) {
+                    state.waits.open(PendingInput(
                         toolUseID: waiting.toolUseID,
                         openedAt: waiting.openedAt,
                         // Same two rules as the approval above: the newer
@@ -770,11 +744,11 @@ actor MonitoringRepository {
                         // arrive must not blank the one the opening call
                         // already supplied.
                         request: requestAsked(waiting.toolUseID)
-                            ?? waiting.request?.answerable(by: event)
-                    )
+                            ?? waiting.request?.answerable(by: event),
+                        requestID: waiting.requestID
+                    ))
                 }
-                state.sessionStatus = state.sessionStatus
-                    .transitioned(on: .approvalNeeded)
+                state.deriveStatus()
             }
         case .inputWaitOpened:
             announcedCallCount += 1
@@ -788,18 +762,15 @@ actor MonitoringRepository {
                 createWith: .running,
                 adoptContinuationWith: .running
             ) {
-                Self.resolveInferredApproval(
-                    &$0.pendingApproval,
-                    activityOn: toolUseID,
-                    whenInferring: infersDenials
-                )
-                $0.pendingInput = PendingInput(
+                $0.waits.resolveInferredApprovals(exceptCall: toolUseID, whenInferring: infersDenials)
+                $0.waits.open(PendingInput(
                     toolUseID: toolUseID,
                     openedAt: receivedAt,
-                    request: requestAsked(toolUseID)
-                )
-                $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
-                $0.sessionStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
+                    request: requestAsked(toolUseID),
+                    requestID: requestIdentity(toolUseID)
+                ))
+                $0.waits.announce(OpenToolUse(id: toolUseID, name: event.toolName))
+                $0.deriveStatus()
             }
         case .approvalWaitOpened:
             announcedCallCount += 1
@@ -813,19 +784,16 @@ actor MonitoringRepository {
                 createWith: .running,
                 adoptContinuationWith: .running
             ) {
-                Self.resolveInferredApproval(
-                    &$0.pendingApproval,
-                    activityOn: toolUseID,
-                    whenInferring: infersDenials
-                )
-                $0.pendingApproval = PendingApproval(
+                $0.waits.resolveInferredApprovals(exceptCall: toolUseID, whenInferring: infersDenials)
+                $0.waits.open(PendingApproval(
                     toolUseID: toolUseID,
                     isInferred: false,
                     openedAt: receivedAt,
-                    request: requestAsked(toolUseID)
-                )
-                $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
-                $0.sessionStatus = $0.sessionStatus.transitioned(on: .approvalNeeded)
+                    request: requestAsked(toolUseID),
+                    requestID: requestIdentity(toolUseID)
+                ))
+                $0.waits.announce(OpenToolUse(id: toolUseID, name: event.toolName))
+                $0.deriveStatus()
             }
         case .toolCallOpened, .questionAskedWithoutWaiting:
             // No state change on its own, but it records the open call so an
@@ -854,15 +822,9 @@ actor MonitoringRepository {
                 createWith: nil,
                 adoptContinuationWith: .running
             ) {
-                Self.resolveInferredApproval(
-                    &$0.pendingApproval,
-                    activityOn: toolUseID,
-                    whenInferring: infersDenials
-                )
-                $0.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
-                if $0.pendingInputToolUseID == nil, $0.pendingApproval == nil {
-                    $0.sessionStatus = $0.sessionStatus.transitioned(on: .running)
-                }
+                $0.waits.resolveInferredApprovals(exceptCall: toolUseID, whenInferring: infersDenials)
+                $0.waits.announce(OpenToolUse(id: toolUseID, name: event.toolName))
+                $0.deriveStatus()
                 // A question that could not be read leaves the last one it
                 // could standing: the alternative is a row that loses the
                 // question because the product added a field.
@@ -887,32 +849,30 @@ actor MonitoringRepository {
                 createWith: nil,
                 adoptContinuationWith: .running
             ) {
-                if $0.pendingInputToolUseID == toolUseID {
-                    $0.pendingInput = nil
-                }
-                if $0.pendingApproval?.toolUseID == toolUseID {
-                    $0.pendingApproval = nil
-                } else {
-                    Self.resolveInferredApproval(
-                        &$0.pendingApproval,
-                        activityOn: toolUseID,
-                        whenInferring: infersDenials
-                    )
-                }
-                if $0.openToolUse?.id == toolUseID {
-                    $0.openToolUse = nil
-                }
-                // Only resume Running once no wait is still open: an unrelated
-                // tool finishing must not clear a prompt the human has not
-                // answered. The state machine only enters a wait from Running,
-                // so at most one of these is ever set.
-                if $0.pendingInputToolUseID != nil {
-                    $0.sessionStatus = $0.sessionStatus.transitioned(on: .inputNeeded)
-                } else if $0.pendingApproval != nil {
-                    $0.sessionStatus = $0.sessionStatus.transitioned(on: .approvalNeeded)
-                } else {
-                    $0.sessionStatus = $0.sessionStatus.transitioned(on: .running)
-                }
+                // The call's own waits end with it; an inferred approval about
+                // some *other* call ends on this activity where refusals are
+                // inferred. Resolving one request cannot clear another: what
+                // is left decides the status, so an unrelated tool finishing
+                // never clears a prompt the human has not answered.
+                $0.waits.closeCall(toolUseID)
+                $0.waits.resolveInferredApprovals(exceptCall: toolUseID, whenInferring: infersDenials)
+                $0.deriveStatus()
+            }
+        case .requestResolved:
+            // The product says it no longer asks this one request, by the
+            // request's own identity. Nothing else ends with it.
+            guard let requestID = stableIdentifier(event.requestID ?? event.toolUseID) else {
+                return false
+            }
+            mutateExactTurn(
+                threadID: threadID,
+                turnID: turnID,
+                at: receivedAt,
+                createWith: nil,
+                adoptContinuationWith: .running
+            ) {
+                $0.waits.resolve(requestID: requestID)
+                $0.deriveStatus()
             }
         case .turnEnded:
             let assistantPreview = TurnPreviewStore.normalized(event.finalText)
@@ -926,8 +886,7 @@ actor MonitoringRepository {
                 // The product intentionally exposes one terminal state. Stop,
                 // completed, failed, and interrupted all converge to Completed.
                 $0.sessionStatus = $0.sessionStatus.transitioned(on: .completed)
-                $0.pendingInput = nil
-                $0.pendingApproval = nil
+                $0.waits.clearWaits()
                 $0.assistantPreview = assistantPreview
                 // And whether that terminal was the session finishing or the
                 // session pausing, which only its own payload can say. Assigned
@@ -1094,7 +1053,13 @@ actor MonitoringRepository {
         at receivedAt: Date
     ) {
         guard var turn = turnsByThreadID[threadID] else { return }
-        var slots = turn.subagentSlots[agentID] ?? AgentWaitSlots()
+        var slots = turn.subagentSlots[agentID] ?? ProducerWaits()
+        let requestIdentity: (String) -> String = { callID in
+            self.stableIdentifier(event.requestID) ?? callID
+        }
+        let requestAsked: (String) -> AgentRequest? = { callID in
+            event.request?.identified(by: requestIdentity(callID)).answerable(by: event)
+        }
 
         // **Always infer, whichever product this is.** The turn-level rule asks
         // `reportsApprovalDenials`, and for a subagent the honest answer is
@@ -1113,12 +1078,8 @@ actor MonitoringRepository {
              .questionAskedWithoutWaiting:
             announcedCallCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else { break }
-            Self.resolveInferredApproval(
-                &slots.pendingApproval,
-                activityOn: toolUseID,
-                whenInferring: infersDenials
-            )
-            slots.openToolUse = OpenToolUse(id: toolUseID, name: event.toolName)
+            slots.resolveInferredApprovals(exceptCall: toolUseID, whenInferring: infersDenials)
+            slots.announce(OpenToolUse(id: toolUseID, name: event.toolName))
             // `.questionAskedWithoutWaiting` lands here as an ordinary call and
             // records nothing, for the same reason the wait below is tracked
             // and not drawn: whether a subagent's question reaches the user at
@@ -1130,18 +1091,20 @@ actor MonitoringRepository {
                 // whether a subagent's question reaches the user at all has not
                 // been measured, and a hint this product cannot stand behind is
                 // worse than no hint.
-                slots.pendingInput = PendingInput(
+                slots.open(PendingInput(
                     toolUseID: toolUseID,
                     openedAt: receivedAt,
-                    request: event.request?.identified(by: toolUseID).answerable(by: event)
-                )
+                    request: requestAsked(toolUseID),
+                    requestID: requestIdentity(toolUseID)
+                ))
             case .approvalWaitOpened:
-                slots.pendingApproval = PendingApproval(
+                slots.open(PendingApproval(
                     toolUseID: toolUseID,
                     isInferred: false,
                     openedAt: receivedAt,
-                    request: event.request?.identified(by: toolUseID).answerable(by: event)
-                )
+                    request: requestAsked(toolUseID),
+                    requestID: requestIdentity(toolUseID)
+                ))
             default:
                 break
             }
@@ -1149,44 +1112,29 @@ actor MonitoringRepository {
             // The subagent's own open call, never the row's. Measured on both
             // products: `PermissionRequest` carries `tool_name` and no
             // `tool_use_id`, 20-30 ms after the `PreToolUse` that announced the
-            // call it is asking about.
-            guard let openToolUse = slots.openToolUse else { break }
-            guard event.toolName == nil
-                || openToolUse.name == nil
-                || event.toolName == openToolUse.name else {
-                break
-            }
-            slots.pendingApproval = PendingApproval(
+            // call it is asking about. Several it could equally be about is
+            // no pairing, as on the turn's own waits.
+            guard let openToolUse = slots.callToBorrow(forTool: event.toolName) else { break }
+            slots.open(PendingApproval(
                 toolUseID: openToolUse.id,
                 isInferred: true,
                 openedAt: receivedAt,
                 // Same rule as the turn's own borrowed approval: a request that
                 // did not arrive must not blank one the call that opened this
                 // wait already supplied, and must not travel to another call.
-                request: event.request?.identified(by: openToolUse.id).answerable(by: event) ?? (
-                    slots.pendingApproval?.toolUseID == openToolUse.id
-                        ? slots.pendingApproval?.request?.answerable(by: event)
-                        : nil
-                )
-            )
+                request: requestAsked(openToolUse.id)
+                    ?? slots.approvals.first { $0.toolUseID == openToolUse.id }?
+                        .request?.answerable(by: event),
+                requestID: requestIdentity(openToolUse.id)
+            ))
         case .toolCallClosed:
             closedCallCount += 1
             guard let toolUseID = stableIdentifier(event.toolUseID) else { break }
-            if slots.pendingInputToolUseID == toolUseID {
-                slots.pendingInput = nil
-            }
-            if slots.pendingApproval?.toolUseID == toolUseID {
-                slots.pendingApproval = nil
-            } else {
-                Self.resolveInferredApproval(
-                    &slots.pendingApproval,
-                    activityOn: toolUseID,
-                    whenInferring: infersDenials
-                )
-            }
-            if slots.openToolUse?.id == toolUseID {
-                slots.openToolUse = nil
-            }
+            slots.closeCall(toolUseID)
+            slots.resolveInferredApprovals(exceptCall: toolUseID, whenInferring: infersDenials)
+        case .requestResolved:
+            guard let requestID = stableIdentifier(event.requestID ?? event.toolUseID) else { break }
+            slots.resolve(requestID: requestID)
         case .turnStarted, .turnEnded, .subagentStarted, .subagentStopped, .inert:
             // A subagent's own turn boundary names nothing this reducer holds,
             // and the two subagent boundaries answered before this was reached.
@@ -1199,35 +1147,6 @@ actor MonitoringRepository {
             turn.subagentSlots[agentID] = slots
         }
         turnsByThreadID[threadID] = turn
-    }
-
-    /// Ends an inferred approval as soon as another call shows any activity.
-    ///
-    /// An approved call closes with its own `PostToolUse`, but a *denied* one is
-    /// never closed at all -- measured 2026-08-15: the prompt was followed by 67
-    /// seconds of silence and then the turn's `Stop`, with no event whatsoever
-    /// for the denied call. `Stop` alone would therefore be the only way out,
-    /// which leaves the row claiming the user is still being asked for the whole
-    /// rest of a turn that carried on working after the denial.
-    ///
-    /// Activity on a *different* call is proof the human has answered, because
-    /// Codex emits nothing at all while a turn is genuinely blocked on the
-    /// prompt. An approval that owns its `tool_use_id` needs none of this and is
-    /// left strictly alone: it always gets its closing event.
-    /// Takes the wait itself rather than the turn, because a subagent's slot
-    /// needs exactly this rule and has no turn of its own to pass.
-    nonisolated private static func resolveInferredApproval(
-        _ pendingApproval: inout PendingApproval?,
-        activityOn toolUseID: String,
-        whenInferring infersDenials: Bool
-    ) {
-        guard infersDenials,
-              let pending = pendingApproval,
-              pending.isInferred,
-              pending.toolUseID != toolUseID else {
-            return
-        }
-        pendingApproval = nil
     }
 
     private func mutateExactTurn(
@@ -1374,10 +1293,15 @@ actor MonitoringRepository {
                     // subagents waiting, answering the first moves the request
                     // the row draws while `subagentsAwaitingApproval` -- a Bool
                     // -- stands still.
-                    turn.requestAwaitingAnAnswer
-                        .map {
-                            "\($0.id)\u{2}\($0.form.name)\u{2}\($0.canBeAnswered)"
-                        } ?? "",
+                    //
+                    // **Every live request, the one the row opens first**: a
+                    // second request arriving behind the one on screen changes
+                    // nothing the row draws, but it is what the row opens next
+                    // and what the store pins the open one against, so its
+                    // arrival is worth a wake.
+                    turn.requestsAwaitingAnAnswer
+                        .map { "\($0.id)\u{2}\($0.form.name)\u{2}\($0.canBeAnswered)" }
+                        .joined(separator: "\u{3}"),
                     // **Not drawn, and here so that it is settled.** A held
                     // prompt changes nothing a row shows, but the sweep that
                     // can redeem it listens on this same edge, and the record

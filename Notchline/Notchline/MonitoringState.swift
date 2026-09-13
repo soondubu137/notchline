@@ -33,6 +33,13 @@ nonisolated enum MonitoringSignal: Sendable, Equatable {
     case questionAskedWithoutWaiting
     /// An announced call ended, whatever the outcome.
     case toolCallClosed
+    /// The product no longer asks one request: answered in the product,
+    /// withdrawn, or cancelled. Keyed by the request's own identity
+    /// (``MonitoringEvidence/requestID``), or by the call it concerned where
+    /// the product names requests by their calls. It ends that one wait and
+    /// nothing else; a product whose requests end with their calls sends
+    /// ``toolCallClosed`` instead and never needs this.
+    case requestResolved
     /// The turn reached its terminal.
     case turnEnded
     /// A subagent this thread spawned began working.
@@ -94,6 +101,24 @@ nonisolated struct PendingApproval: Sendable, Equatable {
     /// `nil` is an ordinary answer: a wait whose payload carried nothing
     /// readable is still a wait, and the row still says a person is wanted.
     let request: AgentRequest?
+    /// The request's own identity, where the product names requests apart
+    /// from the calls they concern; the call's id otherwise. What a
+    /// replacement replaces and a resolution resolves.
+    let requestID: String
+
+    nonisolated init(
+        toolUseID: String,
+        isInferred: Bool,
+        openedAt: Date,
+        request: AgentRequest?,
+        requestID: String? = nil
+    ) {
+        self.toolUseID = toolUseID
+        self.isInferred = isInferred
+        self.openedAt = openedAt
+        self.request = request
+        self.requestID = requestID ?? toolUseID
+    }
 
     /// The same wait, with its request no longer answerable.
     ///
@@ -103,7 +128,8 @@ nonisolated struct PendingApproval: Sendable, Equatable {
             toolUseID: toolUseID,
             isInferred: isInferred,
             openedAt: openedAt,
-            request: request?.answerable(on: nil)
+            request: request?.answerable(on: nil),
+            requestID: requestID
         )
     }
 }
@@ -123,13 +149,28 @@ nonisolated struct PendingInput: Sendable, Equatable {
     /// What is being asked, where the event carried it. See
     /// ``PendingApproval/request`` for why it lives here rather than beside.
     let request: AgentRequest?
+    /// See ``PendingApproval/requestID``.
+    let requestID: String
+
+    nonisolated init(
+        toolUseID: String,
+        openedAt: Date,
+        request: AgentRequest?,
+        requestID: String? = nil
+    ) {
+        self.toolUseID = toolUseID
+        self.openedAt = openedAt
+        self.request = request
+        self.requestID = requestID ?? toolUseID
+    }
 
     /// The same wait, with its request no longer answerable.
     nonisolated func withdrawingAnswerHandle() -> PendingInput {
         PendingInput(
             toolUseID: toolUseID,
             openedAt: openedAt,
-            request: request?.answerable(on: nil)
+            request: request?.answerable(on: nil),
+            requestID: requestID
         )
     }
 }
@@ -143,9 +184,11 @@ struct OpenToolUse: Sendable, Equatable {
     let name: String?
 }
 
-/// What one agent has open, and what it is waiting for.
+/// What one agent has open, and what it is waiting for: every call it has
+/// announced and not closed, and every request it has put to a person and not
+/// had resolved, in the order they arrived.
 ///
-/// **A Turn used to hold exactly one of these, inline, and that was the whole
+/// **A Turn used to hold exactly one of each, inline, and that was the whole
 /// reason a subagent's events had to be thrown away.** Both products announce a
 /// call and then ask about it in a second event that carries no id of its own
 /// (`PermissionRequest`, measured on Codex `0.149.0-alpha.4.1` and Claude Code
@@ -153,42 +196,192 @@ struct OpenToolUse: Sendable, Equatable {
 /// still open. With one slot on the turn, a subagent's calls would be a second
 /// stream through it: its `PreToolUse` would displace the main agent's open
 /// call, and the main agent's `PostToolUse` would close the subagent's wait.
-/// One per agent is what makes both streams safe, and it is all that makes them
-/// safe.
-nonisolated struct AgentWaitSlots: Sendable, Equatable {
-    /// The open question, if any.
-    var pendingInput: PendingInput?
-    /// The call the human is being asked to approve, if any.
-    var pendingApproval: PendingApproval?
-    /// The most recent call this agent opened and has not yet closed.
-    var openToolUse: OpenToolUse?
+/// One per agent is what makes both streams safe.
+///
+/// **And one slot per kind was the same fault one step in** (package 2 of
+/// `docs/product-generalisation-plan.md`, 2026-09-12): a second approval on the
+/// same agent overwrote the first, its connection was closed by the
+/// reconciliation that followed, and the person who then answered the first
+/// in the product found the row offering the second. So each producer holds a
+/// collection, keyed by the request's identity, and the row's one request is
+/// selected from it (``MonitoredTurnState/requestsAwaitingAnAnswer``).
+/// Resolving one request cannot clear another; a replacement wearing an
+/// existing identity takes that entry's place; status is derived from what is
+/// left rather than stepped by each event.
+nonisolated struct ProducerWaits: Sendable, Equatable {
+    /// The calls announced and not yet closed, oldest first.
+    private(set) var openCalls: [OpenToolUse] = []
+    /// The questions put to a person and not yet answered, oldest first.
+    private(set) var inputs: [PendingInput] = []
+    /// The calls a person is being asked to approve, oldest first.
+    private(set) var approvals: [PendingApproval] = []
+
+    nonisolated init() {}
 
     /// Whether this agent has anything at all left in it.
-    var isEmpty: Bool {
-        pendingInput == nil && pendingApproval == nil && openToolUse == nil
+    var isEmpty: Bool { openCalls.isEmpty && inputs.isEmpty && approvals.isEmpty }
+
+    /// The oldest open question, for the rules that read one.
+    var pendingInput: PendingInput? { inputs.first }
+    /// The oldest open approval, for the rules that read one.
+    var pendingApproval: PendingApproval? { approvals.first }
+    /// The most recent call this agent opened and has not yet closed.
+    var openToolUse: OpenToolUse? { openCalls.last }
+    /// The oldest open question's id, for the rules that only ever wanted that.
+    var pendingInputToolUseID: String? { pendingInput?.toolUseID }
+
+    /// Records a call as open. Announcing an open call again changes nothing
+    /// about its place.
+    mutating func announce(_ call: OpenToolUse) {
+        if let index = openCalls.firstIndex(where: { $0.id == call.id }) {
+            openCalls[index] = call
+        } else {
+            openCalls.append(call)
+        }
     }
 
-    /// The open question's id, for the rules that only ever wanted that.
-    var pendingInputToolUseID: String? { pendingInput?.toolUseID }
+    /// The one open call an approval carrying no id of its own is about.
+    ///
+    /// **Ambiguity fails closed.** The pairing is by tool name against the
+    /// calls still open; one candidate is the answer, none is no pairing, and
+    /// several is a guess -- unless exactly one of them has no approval filed
+    /// yet, which is what a dialogue queued behind another looks like. The
+    /// rule used to be "the latest open call", which under two parallel calls
+    /// of one tool filed the first dialogue under the second call; a wait
+    /// filed under the wrong call is closed by the wrong `PostToolUse`, so no
+    /// wait is the honest answer and the person is still shown the product's
+    /// own dialogue.
+    func callToBorrow(forTool toolName: String?) -> OpenToolUse? {
+        let candidates = openCalls.filter {
+            toolName == nil || $0.name == nil || $0.name == toolName
+        }
+        if candidates.count == 1 { return candidates[0] }
+        let unasked = candidates.filter { call in !approvals.contains { $0.toolUseID == call.id } }
+        return unasked.count == 1 ? unasked[0] : nil
+    }
+
+    /// Files a question, replacing one wearing the same identity in its place.
+    mutating func open(_ input: PendingInput) {
+        if let index = inputs.firstIndex(where: { $0.requestID == input.requestID }) {
+            inputs[index] = input
+        } else {
+            inputs.append(input)
+        }
+    }
+
+    /// Files an approval, replacing one wearing the same identity in its place.
+    mutating func open(_ approval: PendingApproval) {
+        if let index = approvals.firstIndex(where: { $0.requestID == approval.requestID }) {
+            approvals[index] = approval
+        } else {
+            approvals.append(approval)
+        }
+    }
+
+    /// Closes a call and ends every wait about it. Returns whether anything
+    /// was there to close.
+    @discardableResult
+    mutating func closeCall(_ id: String) -> Bool {
+        let before = self
+        openCalls.removeAll { $0.id == id }
+        inputs.removeAll { $0.toolUseID == id }
+        approvals.removeAll { $0.toolUseID == id }
+        return self != before
+    }
+
+    /// Ends the one request the product says it no longer asks.
+    @discardableResult
+    mutating func resolve(requestID: String) -> Bool {
+        let before = self
+        inputs.removeAll { $0.requestID == requestID }
+        approvals.removeAll { $0.requestID == requestID }
+        return self != before
+    }
+
+    /// Ends every inferred approval about some other call than `id`, where
+    /// the product's refusals are inferred from activity.
+    ///
+    /// An approved call closes with its own `PostToolUse`, but a *denied* one is
+    /// never closed at all -- measured 2026-08-15: the prompt was followed by 67
+    /// seconds of silence and then the turn's `Stop`, with no event whatsoever
+    /// for the denied call. Activity on a *different* call is proof the human
+    /// has answered, because Codex emits nothing at all while a turn is
+    /// genuinely blocked on the prompt. An approval that owns its `tool_use_id`
+    /// needs none of this and is left strictly alone: it always gets its
+    /// closing event.
+    @discardableResult
+    mutating func resolveInferredApprovals(exceptCall id: String, whenInferring infersDenials: Bool) -> Bool {
+        guard infersDenials else { return false }
+        let before = approvals.count
+        approvals.removeAll { $0.isInferred && $0.toolUseID != id }
+        return approvals.count != before
+    }
+
+    /// Ends every approval older than a reading that says no dialogue was
+    /// open. See ``MonitoringRepository/endAnsweredApprovalWaits(_:)``.
+    @discardableResult
+    mutating func endApprovals(before moment: Date) -> Bool {
+        let before = approvals.count
+        approvals.removeAll { moment > $0.openedAt }
+        return approvals.count != before
+    }
+
+    /// The turn's own terminal: every wait ends, the calls stay recorded.
+    mutating func clearWaits() {
+        inputs.removeAll()
+        approvals.removeAll()
+    }
+
+    /// Everything, for a turn ended on evidence that is not an event.
+    mutating func clearAll() {
+        openCalls.removeAll()
+        clearWaits()
+    }
+
+    /// Withdraws one connection from whichever request carries it. Returns
+    /// whether any did.
+    @discardableResult
+    mutating func withdraw(_ handle: AnswerHandle) -> Bool {
+        var changed = false
+        for index in inputs.indices where inputs[index].request?.answerHandle == handle {
+            inputs[index] = inputs[index].withdrawingAnswerHandle()
+            changed = true
+        }
+        for index in approvals.indices where approvals[index].request?.answerHandle == handle {
+            approvals[index] = approvals[index].withdrawingAnswerHandle()
+            changed = true
+        }
+        return changed
+    }
+
+    /// Every connection these waits are holding open.
+    var heldAnswerHandles: [AnswerHandle] {
+        inputs.compactMap { $0.request?.answerHandle } + approvals.compactMap { $0.request?.answerHandle }
+    }
 }
 
 struct MonitoredTurnState: Sendable {
     let threadID: String
     let turnID: String
     var sessionStatus: SessionStatus
-    /// The open question, if any.
-    var pendingInput: PendingInput?
-    /// The call the human is being asked to approve, if any.
-    var pendingApproval: PendingApproval?
-    /// The most recent tool call this turn opened and has not yet closed.
+    /// What the turn's own agent has open and is waiting for
+    /// (``ProducerWaits``): its announced calls, and every question and
+    /// approval it has put to a person and not had resolved.
     ///
     /// Codex asks about an ordinary tool with a `PermissionRequest` that names
     /// the tool but carries no `tool_use_id`. The id has to come from the
     /// `PreToolUse` that announced the same call moments earlier -- see
-    /// ``HookEventRepository`` -- so the approval can close on the usual pairing
-    /// instead of a timer.
-    var openToolUse: OpenToolUse?
-    /// The open question's id, for the rules that only ever wanted that.
+    /// ``MonitoringRepository`` -- so the approval can close on the usual
+    /// pairing instead of a timer; the open calls are what that pairing
+    /// borrows from.
+    var waits = ProducerWaits()
+    /// The oldest open question, if any.
+    var pendingInput: PendingInput? { waits.pendingInput }
+    /// The oldest call the human is being asked to approve, if any.
+    var pendingApproval: PendingApproval? { waits.pendingApproval }
+    /// The most recent tool call this turn opened and has not yet closed.
+    var openToolUse: OpenToolUse? { waits.openToolUse }
+    /// The oldest open question's id, for the rules that only ever wanted that.
     var pendingInputToolUseID: String? { pendingInput?.toolUseID }
     var startedAt: Date
     var lastEventAt: Date
@@ -266,7 +459,7 @@ struct MonitoredTurnState: Sendable {
     /// Nothing in here decides turn identity. These events carry the
     /// subagent's own `turn_id` on Codex and the parent's `prompt_id` on Claude
     /// Code, and this table reads neither.
-    var subagentSlots: [String: AgentWaitSlots] = [:]
+    var subagentSlots: [String: ProducerWaits] = [:]
     /// Whether this turn's own terminal event said the session was pausing
     /// rather than finishing.
     ///
@@ -408,8 +601,63 @@ struct MonitoredTurnState: Sendable {
         }
     }
 
+    nonisolated init(
+        threadID: String,
+        turnID: String,
+        sessionStatus: SessionStatus,
+        pendingInput: PendingInput? = nil,
+        pendingApproval: PendingApproval? = nil,
+        openToolUse: OpenToolUse? = nil,
+        startedAt: Date,
+        lastEventAt: Date,
+        retiredTurnIDs: Set<String>,
+        promptPreview: String?,
+        assistantPreview: String?,
+        runningSubagentIDs: Set<String> = [],
+        lastSubagentBoundaryAt: Date? = nil,
+        subagentSlots: [String: ProducerWaits] = [:],
+        threadHasNoTranscript: Bool = false,
+        heldTurnIDs: Set<String> = [],
+        workingDirectory: String? = nil
+    ) {
+        self.threadID = threadID
+        self.turnID = turnID
+        self.sessionStatus = sessionStatus
+        if let openToolUse { waits.announce(openToolUse) }
+        if let pendingInput { waits.open(pendingInput) }
+        if let pendingApproval { waits.open(pendingApproval) }
+        self.startedAt = startedAt
+        self.lastEventAt = lastEventAt
+        self.retiredTurnIDs = retiredTurnIDs
+        self.promptPreview = promptPreview
+        self.assistantPreview = assistantPreview
+        self.runningSubagentIDs = runningSubagentIDs
+        self.lastSubagentBoundaryAt = lastSubagentBoundaryAt
+        self.subagentSlots = subagentSlots
+        self.threadHasNoTranscript = threadHasNoTranscript
+        self.heldTurnIDs = heldTurnIDs
+        self.workingDirectory = workingDirectory
+    }
+
     nonisolated var status: SessionStatus {
         sessionStatus
+    }
+
+    /// Puts the status where the turn's own unresolved waits say it is.
+    ///
+    /// **Derived, not stepped.** Each event used to move the status one step
+    /// with `transitioned(on:)`, which was right while a turn held one wait of
+    /// each kind and could not be right once it held several: resolving one
+    /// approval of two must leave `Approval needed` standing. The rules are
+    /// the ones the steps encoded -- a question outranks an approval within
+    /// one turn (a denied approval is never closed by Codex, so the question
+    /// that follows it is the only proof the person answered), and a finished
+    /// turn absorbs everything -- applied to what is actually left.
+    nonisolated mutating func deriveStatus() {
+        guard sessionStatus != .completed else { return }
+        sessionStatus = !waits.inputs.isEmpty
+            ? .inputNeeded
+            : (!waits.approvals.isEmpty ? .approvalNeeded : .running)
     }
 
     /// How many of this thread's subagents are sitting on a permission prompt.
@@ -470,32 +718,63 @@ struct MonitoredTurnState: Sendable {
     /// surface has nothing to say about it would answer that subagent's
     /// question by silence.
     nonisolated var heldAnswerHandles: [AnswerHandle] {
-        var tickets: [AnswerHandle] = []
-        if let ticket = pendingInput?.request?.answerHandle {
-            tickets.append(ticket)
-        }
-        if let ticket = pendingApproval?.request?.answerHandle {
-            tickets.append(ticket)
-        }
-        for slots in subagentSlots.values {
-            if let ticket = slots.pendingInput?.request?.answerHandle {
-                tickets.append(ticket)
-            }
-            if let ticket = slots.pendingApproval?.request?.answerHandle {
-                tickets.append(ticket)
-            }
-        }
-        return tickets
+        waits.heldAnswerHandles + subagentSlots.values.flatMap(\.heldAnswerHandles)
     }
 
-    nonisolated var requestAwaitingAnAnswer: AgentRequest? {
-        if let request = pendingInput?.request { return request }
-        if let request = pendingApproval?.request { return request }
-        return subagentSlots
+    /// Every request this thread's row could open, in the order it opens them.
+    ///
+    /// **The selection is deterministic and stable under arrivals.** The
+    /// turn's own questions first, then its own approvals, then the approvals
+    /// of subagents still counted as running -- `PRD.md` §6.2's priority with
+    /// its stated exception, which the status already follows. Within a rank
+    /// an answerable request comes before one that is only readable (a
+    /// request just answered from here stays until the product says so, and
+    /// must not stand in front of one the person can still settle), then the
+    /// order they arrived in -- a replacement keeps the place of the request
+    /// it replaced, so a revision does not jump the queue -- with subagents'
+    /// ordered by the instant they opened and then by agent, then the
+    /// request's identity. A newer arrival of equal or lower rank therefore
+    /// never moves the one on screen; only a resolution or a higher rank does.
+    nonisolated var requestsAwaitingAnAnswer: [AgentRequest] {
+        struct Ranked {
+            let request: AgentRequest
+            let order: Double
+            let producer: String
+        }
+        func sorted(_ entries: [Ranked]) -> [AgentRequest] {
+            entries.sorted { lhs, rhs in
+                if lhs.request.canBeAnswered != rhs.request.canBeAnswered { return lhs.request.canBeAnswered }
+                if lhs.order != rhs.order { return lhs.order < rhs.order }
+                if lhs.producer != rhs.producer { return lhs.producer < rhs.producer }
+                return lhs.request.id < rhs.request.id
+            }.map(\.request)
+        }
+        let ownInputs = waits.inputs.enumerated().compactMap { index, wait in
+            wait.request.map { Ranked(request: $0, order: Double(index), producer: "") }
+        }
+        let ownApprovals = waits.approvals.enumerated().compactMap { index, wait in
+            wait.request.map { Ranked(request: $0, order: Double(index), producer: "") }
+        }
+        // A subagent's *question* is deliberately not offered, exactly as its
+        // count is not drawn: whether one reaches a person at all is
+        // unmeasured, and a request this app cannot vouch for is worse than
+        // none.
+        let subagents = subagentSlots
             .filter { agentID, _ in runningSubagentIDs.contains(agentID) }
-            .compactMap { _, slots in slots.pendingApproval }
-            .min { $0.openedAt < $1.openedAt }?
-            .request
+            .flatMap { agentID, slots in
+                slots.approvals.compactMap { wait in
+                    wait.request.map {
+                        Ranked(request: $0, order: wait.openedAt.timeIntervalSinceReferenceDate, producer: agentID)
+                    }
+                }
+            }
+        return sorted(ownInputs) + sorted(ownApprovals) + sorted(subagents)
+    }
+
+    /// The one request this thread's row opens: the first of
+    /// ``requestsAwaitingAnAnswer``.
+    nonisolated var requestAwaitingAnAnswer: AgentRequest? {
+        requestsAwaitingAnAnswer.first
     }
 
     /// The instant this turn's own terminal arrived.

@@ -603,7 +603,7 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
             // has stopped. `lastEventAt` is the Turn's own last moment and is
             // held there against a subagent's chatter.
             finishedAt: turn.status == .completed ? turn.lastEventAt : nil,
-            request: turn.requestAwaitingAnAnswer
+            requests: turn.requestsAwaitingAnAnswer
         )
     }
 

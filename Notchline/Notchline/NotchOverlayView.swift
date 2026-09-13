@@ -3242,7 +3242,7 @@ struct OptionRow: View {
     @State private var isHovered = false
 
     private var selected: Bool { store.isOptionTicked(layout.id) }
-    private var isAnswerable: Bool { store.openSession?.request?.canBeAnswered == true }
+    private var isAnswerable: Bool { store.openRequest?.canBeAnswered == true }
 
     /// **The card is the target, and it is the whole card** (§6.6). The
     /// rectangle the pointer lights up and the rectangle a click lands in are

@@ -1029,7 +1029,7 @@ nonisolated struct ClaudeCodeHookVocabulary: AgentHookVocabulary {
     /// was still looking at -- but that was never disorder. It is what an
     /// asynchronous subagent looks like: the `Agent` call returns at once, the
     /// turn ends, and the subagent asks afterwards. Those two events now land
-    /// in different slots (``AgentWaitSlots``), so neither can reach the
+    /// in different slots (``ProducerWaits``), so neither can reach the
     /// other's wait.
     nonisolated let reportsApprovalDenials = false
     /// The prompt is read here as it is on Codex: it is what a turn that has

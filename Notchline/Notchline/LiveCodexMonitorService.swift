@@ -2196,9 +2196,9 @@ enum CodexSnapshotParser {
             // asked to make is the unsafe direction this reading exists to
             // prevent. `inputNeeded` is the turn's own question and is never
             // reviewed away, so it keeps its request whatever the reviewer is.
-            request: approvalsReachTheUser || status == .inputNeeded
-                ? state.requestAwaitingAnAnswer
-                : nil
+            requests: approvalsReachTheUser || status == .inputNeeded
+                ? state.requestsAwaitingAnAnswer
+                : []
         )
     }
 

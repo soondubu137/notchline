@@ -21,6 +21,10 @@ nonisolated struct MonitoringEvidence: Sendable {
     var turnID: String? = nil
     var agentID: String? = nil
     var toolUseID: String? = nil
+    /// The request's own identity, for a product that names requests apart
+    /// from the calls they concern; nil where the call's id is the identity,
+    /// as on both hook products. A resolution names the same identity.
+    var requestID: String? = nil
     var toolName: String? = nil
     var prompt: String? = nil
     var finalText: String? = nil

@@ -3697,6 +3697,26 @@ final class MonitorStore: ObservableObject {
         return sessions.first { $0.id == openRowID }
     }
 
+    /// The request the open row is showing.
+    ///
+    /// **Pinned to the one the person is reading** (package 2, 2026-09-12): a
+    /// row can hold several requests and the product selects which it opens
+    /// first (``MonitoredSession/requests``), but a selection that moved under
+    /// a reader's eye -- a newer, higher-ranked arrival, or an answer of this
+    /// one from here that leaves it readable but no longer first -- would put
+    /// a different body where the one being read was. So while the request
+    /// the drafts belong to is still among the row's live requests it is the
+    /// one shown; only its resolution moves the row on, to whichever the
+    /// product now puts first.
+    var openRequest: AgentRequest? {
+        guard let openRowID, let session = openSession else { return nil }
+        if let asked = answerProgress[openRowID]?.request,
+           let pinned = session.requests.first(where: { $0.asked == asked }) {
+            return pinned
+        }
+        return session.request
+    }
+
     /// The last body laid out, and what it was laid out from.
     ///
     /// Keyed on its inputs rather than invalidated by hand. The three of them
@@ -3741,7 +3761,7 @@ final class MonitorStore: ObservableObject {
     /// scrolling the list past an open row — measured on Release, 2026-09-07,
     /// at `14 ms` each.
     var openRowBody: RequestBodyLayout? {
-        guard let request = openSession?.request else { return nil }
+        guard let request = openRequest else { return nil }
         let key = RequestBodyKey(
             request: request,
             question: openQuestionIndex,
@@ -3770,7 +3790,7 @@ final class MonitorStore: ObservableObject {
     /// (§5.8), and a view reading the shape off the request without the index
     /// would draw `Next` on the question the set leaves from.
     var openAnswerRow: AnswerRowShape? {
-        openSession?.request?.answerRow(showing: openQuestionIndex)
+        openRequest?.answerRow(showing: openQuestionIndex)
     }
 
     /// How tall the open row is, or nil where no row is open.
@@ -3958,7 +3978,7 @@ final class MonitorStore: ObservableObject {
     func takeAnswer(_ ground: AnswerGround) {
         guard !isAnswerInFlight, isAffirmativeArmed,
               let session = openSession,
-              let request = session.request,
+              let request = openRequest,
               let shape = request.answerRow(showing: openQuestionIndex),
               let ticket = request.answerHandle else { return }
 
@@ -3968,12 +3988,13 @@ final class MonitorStore: ObservableObject {
             // sends is what the person put in — the field's words, or the
             // options they ticked.
             answerTheQuestion(
+                request,
                 of: session,
                 on: ticket,
                 saying: shape.affirmativeNotice
             )
         case .affirmative:
-            send(.grant, for: session, on: ticket, saying: shape.affirmativeNotice)
+            send(.grant, to: request, for: session, on: ticket, saying: shape.affirmativeNotice)
         case .refusal:
             // A form with no refusal has no refusal to take, and one whose
             // refusal takes no words draws no field to have typed into.
@@ -3982,6 +4003,7 @@ final class MonitorStore: ObservableObject {
                 ? "" : answerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
             send(
                 .refuse(note.isEmpty ? nil : note),
+                to: request,
                 for: session,
                 on: ticket,
                 saying: shape.refusalNotice
@@ -4023,7 +4045,7 @@ final class MonitorStore: ObservableObject {
     ///   keyboard assertable without an `NSEvent`.
     @discardableResult
     func takeKey(_ key: PanelKey) -> Bool {
-        guard !isAnswerInFlight, openSession?.request?.answerRow() != nil else { return false }
+        guard !isAnswerInFlight, openRequest?.answerRow() != nil else { return false }
         switch key {
         case .submit:
             guard isAffirmativeArmed, canSubmitCurrentAnswer else { return false }
@@ -4046,7 +4068,7 @@ final class MonitorStore: ObservableObject {
     /// arrival §6.3 guards — something nobody has read appearing under a
     /// pointer already on it — is not the arrival this is.
     var canGoBackAQuestion: Bool {
-        guard !isAnswerInFlight, openSession?.request?.answerRow() != nil else { return false }
+        guard !isAnswerInFlight, openRequest?.answerRow() != nil else { return false }
         return openQuestionIndex > 0
     }
 
@@ -4058,7 +4080,7 @@ final class MonitorStore: ObservableObject {
     /// gate the affirmative uses, because leaving a question unanswered is what would
     /// let a short set go back to the product.
     var canGoForwardAQuestion: Bool {
-        guard !isAnswerInFlight, openSession?.request?.answerRow() != nil,
+        guard !isAnswerInFlight, openRequest?.answerRow() != nil,
               let openRowID, let progress = answerProgress[openRowID] else { return false }
         return progress.questionIndex < progress.furthestQuestionReached
             && canSubmitCurrentAnswer
@@ -4110,7 +4132,7 @@ final class MonitorStore: ObservableObject {
     /// opposite of both.
     private func drawQuestion(_ index: Int) {
         guard let openRowID,
-              let questions = openSession?.request?.askedQuestions,
+              let questions = openRequest?.askedQuestions,
               index >= 0, index < questions.count,
               var progress = answerProgress[openRowID],
               progress.questionIndex != index else { return }
@@ -4142,7 +4164,7 @@ final class MonitorStore: ObservableObject {
     }
 
     var canSubmitCurrentAnswer: Bool {
-        guard let request = openSession?.request else { return false }
+        guard let request = openRequest else { return false }
         let questions = request.askedQuestions
         guard !questions.isEmpty else { return true }
         guard let openRowID else { return false }
@@ -4197,11 +4219,12 @@ final class MonitorStore: ObservableObject {
     /// snapshot would be the older of the two answers to a question they
     /// deliberately came back to change.
     private func answerTheQuestion(
+        _ request: AgentRequest,
         of session: MonitoredSession,
         on ticket: AnswerHandle,
         saying notice: String
     ) {
-        guard let request = session.request, let openRowID else { return }
+        guard let openRowID else { return }
         let questions = request.askedQuestions
         guard !questions.isEmpty else { return }
         var progress = answerProgress[openRowID] ?? AnswerProgress()
@@ -4241,6 +4264,7 @@ final class MonitorStore: ObservableObject {
                     Self.answer(to: questions[$0], from: progress.draft(forQuestion: $0))
                 }
             ),
+            to: request,
             for: session,
             on: ticket,
             saying: notice
@@ -4290,6 +4314,7 @@ final class MonitorStore: ObservableObject {
     /// Sends one answer, and turns what comes back into a row (§8).
     private func send(
         _ answer: AgentAnswer,
+        to request: AgentRequest,
         for session: MonitoredSession,
         on ticket: AnswerHandle,
         saying notice: String
@@ -4298,7 +4323,7 @@ final class MonitorStore: ObservableObject {
         // ordinarily already true; it is checked here so that no caller of
         // this method -- a key, a click, a specimen -- can send what the
         // connection was never declared for. The boundary checks it again.
-        guard let request = session.request, request.operations.permits(answer),
+        guard request.operations.permits(answer),
               // And once per handle, whatever comes back.
               spentAnswerHandles.insert(ticket).inserted else { return }
         isAnswerInFlight = true
@@ -4362,7 +4387,8 @@ final class MonitorStore: ObservableObject {
         // Nothing was written and nothing spent; the channel may still take
         // what it does carry.
         if outcome == .unsupportedOperation { spentAnswerHandles.remove(handle) }
-        if let current = sessions.first(where: { $0.id == rowID })?.request, current.asked != asked {
+        if let current = sessions.first(where: { $0.id == rowID }), !current.requests.isEmpty,
+           !current.requests.contains(where: { $0.asked == asked }) {
             requestRefresh()
             return
         }
@@ -4383,10 +4409,19 @@ final class MonitorStore: ObservableObject {
         //
         // Only on an answer that arrived. Advancing past a row that has just
         // said `Not sent` would hide the one line explaining why, and there is
-        // nothing to advance *from*: nothing was answered.
-        if arrived,
-           let next = sessions.first(where: { $0.id != rowID && $0.request != nil }) {
-            openRow(next.id)
+        // nothing to advance *from*: nothing was answered. The next may be on
+        // this same row: another request the product put behind the one just
+        // answered, which the row now opens to.
+        if arrived, let next = sessions.lazy.compactMap({ session -> (row: String, request: AgentRequest?)? in
+            if session.id == rowID {
+                guard let other = session.requests.first(where: { $0.asked != asked && $0.canBeAnswered }) else {
+                    return nil
+                }
+                return (session.id, other)
+            }
+            return session.request == nil ? nil : (session.id, nil)
+        }).first {
+            openRow(next.row, showing: next.request)
         }
         // The ticket has been spent either way, so what the mark says about this
         // row is now out of date by one publish. Asking for the refresh is
@@ -4424,8 +4459,13 @@ final class MonitorStore: ObservableObject {
     }
 
     /// Opens one row, and starts the arrival its affirmative is armed by.
-    private func openRow(_ id: String) {
-        let asked = sessions.first(where: { $0.id == id })?.request?.asked
+    ///
+    /// - Parameter request: which of the row's requests to open, where the
+    ///   caller knows better than the product's own first -- the next one on
+    ///   a row whose first was just answered from here. The default is the
+    ///   product's first.
+    private func openRow(_ id: String, showing request: AgentRequest? = nil) {
+        let asked = (request ?? sessions.first(where: { $0.id == id })?.request)?.asked
         if answerProgress[id]?.request != asked {
             answerProgress[id] = AnswerProgress(request: asked)
             answerDraftGeneration &+= 1
@@ -4457,7 +4497,7 @@ final class MonitorStore: ObservableObject {
     /// Puts the ground where what has been typed says it is.
     private func refreshAnswerGround() {
         let ground = AnswerGround.where(
-            openSession?.request,
+            openRequest,
             carriesText: !answerDraft.isEmpty
         )
         if answerGround != ground { answerGround = ground }
@@ -4485,9 +4525,16 @@ final class MonitorStore: ObservableObject {
     /// on reaching this app with nothing on screen to say why (§8 state 04).
     private func closeARowWhoseRequestHasGone() {
         guard let openRowID, !isAnswerInFlight else { return }
-        if let request = sessions.first(where: { $0.id == openRowID })?.request {
-            // The same id wearing another body is another request: a tick
-            // taken on the old set does not travel onto the new one.
+        if let session = sessions.first(where: { $0.id == openRowID }), let request = session.request {
+            // The request being read is still among the row's, so it stays
+            // on screen whatever the product now puts first (``openRequest``).
+            if let asked = answerProgress[openRowID]?.request,
+               session.requests.contains(where: { $0.asked == asked }) {
+                return
+            }
+            // Otherwise the row moves on to the product's first: the same id
+            // wearing another body is another request, and a tick taken on
+            // the old set does not travel onto the new one.
             if answerProgress[openRowID]?.request != request.asked {
                 answerProgress[openRowID] = AnswerProgress(request: request.asked)
                 answerDraftGeneration &+= 1
@@ -4520,7 +4567,7 @@ final class MonitorStore: ObservableObject {
         // A spent handle is remembered for as long as some row still offers
         // it; once no product publishes it, nothing could send on it again.
         spentAnswerHandles = spentAnswerHandles.filter { handle in
-            sessions.contains { $0.request?.answerHandle == handle }
+            sessions.contains { $0.requests.contains { $0.answerHandle == handle } }
         }
     }
 
@@ -5183,7 +5230,7 @@ final class MonitorStore: ObservableObject {
         showingQuestion index: Int = 0
     ) {
         guard services.isEmpty, let openRowID,
-              let request = openSession?.request else { return }
+              let request = openRequest else { return }
         // A form that is not a question is a set of one living at `0`, which is
         // what ``AnswerProgress/showing`` already assumes.
         let questions = request.askedQuestions

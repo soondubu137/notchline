@@ -521,7 +521,14 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// nothing and sends the person to the product, exactly as every row does
     /// today. That is the fail-closed direction: an absent request is a row that
     /// behaves as it always has, never a row that draws an empty body.
+    ///
+    /// The first of ``requests``.
     let request: AgentRequest?
+    /// Every request this row could open, in the order it opens them
+    /// (``MonitoredTurnState/requestsAwaitingAnAnswer``). The row draws one at
+    /// a time; the rest are what it opens next, and what the store pins the
+    /// open one against while a person reads it.
+    let requests: [AgentRequest]
 
     nonisolated init(
         agent: AgentKind = .codex,
@@ -536,7 +543,8 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         subagentsAwaitingApprovalCount: Int = 0,
         isPausedForBackgroundWork: Bool = false,
         finishedAt: Date? = nil,
-        request: AgentRequest? = nil
+        request: AgentRequest? = nil,
+        requests: [AgentRequest]? = nil
     ) {
         self.agent = agent
         self.threadID = threadID
@@ -550,7 +558,8 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         self.subagentsAwaitingApprovalCount = subagentsAwaitingApprovalCount
         self.isPausedForBackgroundWork = isPausedForBackgroundWork
         self.finishedAt = finishedAt
-        self.request = request
+        self.requests = requests ?? request.map { [$0] } ?? []
+        self.request = self.requests.first
     }
 
     /// Whether the row says work is still in flight beside its own turn.

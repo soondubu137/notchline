@@ -29569,6 +29569,92 @@ for line in sys.stdin:
         #expect(!store.isAnswerInFlight)
     }
 
+    /// The request a person is reading stays on screen while it is still
+    /// among the row's, whatever the product now puts first.
+    ///
+    /// Package 2: a row can hold several requests and the product selects the
+    /// one it opens first; a selection that moved under a reader's eye would
+    /// put a different body where the one being read was. Only the request's
+    /// own resolution moves the row on, and switching what is drawn sends
+    /// nothing.
+    @Test @MainActor
+    func theOpenRequestIsPinnedWhileItIsStillAmongTheRows() async throws {
+        let first = AgentRequest(id: "c-1", toolName: "Bash", form: .command("ls"), answerHandle: AnswerHandle(ticket: 1))
+        let second = AgentRequest(id: "c-2", toolName: "Bash", form: .command("pwd"), answerHandle: AnswerHandle(ticket: 2))
+        func row(_ requests: [AgentRequest]) -> MonitoredSession {
+            MonitoredSession(
+                agent: .claudeCode, threadID: "t-1", turnID: "u-1", projectName: "notchline",
+                title: "Something", preview: nil, status: .approvalNeeded,
+                startedAt: Date(timeIntervalSince1970: 1_700_000_000), requests: requests
+            )
+        }
+        let service = AnsweringMonitoringStub(agent: .claudeCode, sessions: [row([first, second])])
+        let store = MonitorStore(
+            displays: [], services: [service],
+            initialSnapshot: AgentSnapshot(
+                agent: .claudeCode, availability: .ready, sessions: [row([first, second])],
+                quota: .unavailable, diagnostic: nil
+            )
+        )
+        store.toggleOpenRow(row([first, second]))
+        #expect(store.openRequest?.id == "c-1")
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.answerDraftChanged(to: "half a reason")
+
+        // The product now puts the second first; the person is still reading the first.
+        await service.publish([row([second, first])])
+        store.refreshNow()
+        #expect(await eventually { store.sessions.first?.request?.id == "c-2" })
+        #expect(store.openRequest?.id == "c-1")
+        #expect(store.answerDraft == "half a reason")
+        #expect(store.isAffirmativeArmed, "nothing arrived that a person has not read")
+        #expect(await service.handlesUsed().isEmpty, "switching what is drawn sends nothing")
+
+        // The first resolves; the row moves on to what is left, unarmed and empty.
+        await service.publish([row([second])])
+        store.refreshNow()
+        #expect(await eventually { store.openRequest?.id == "c-2" })
+        #expect(store.openRowID == "claudeCode:t-1:u-1")
+        #expect(store.answerDraft.isEmpty)
+        #expect(await service.handlesUsed().isEmpty)
+    }
+
+    /// Answering one of a row's requests opens the next one on the same row.
+    ///
+    /// §8.2's *the next request opens itself*, one row in: the answered
+    /// request stays until the product says so, and the row opens to the one
+    /// the person can still settle rather than back onto the one just sent.
+    @Test @MainActor
+    func answeringOneOfTwoRequestsOpensTheOtherOnTheSameRow() async throws {
+        let first = AgentRequest(id: "c-1", toolName: "Bash", form: .command("ls"), answerHandle: AnswerHandle(ticket: 1))
+        let second = AgentRequest(id: "c-2", toolName: "Bash", form: .command("pwd"), answerHandle: AnswerHandle(ticket: 2))
+        let row = MonitoredSession(
+            agent: .claudeCode, threadID: "t-1", turnID: "u-1", projectName: "notchline",
+            title: "Something", preview: nil, status: .approvalNeeded,
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000), requests: [first, second]
+        )
+        let service = AnsweringMonitoringStub(agent: .claudeCode, sessions: [row])
+        let store = MonitorStore(
+            displays: [], services: [service],
+            initialSnapshot: AgentSnapshot(
+                agent: .claudeCode, availability: .ready, sessions: [row], quota: .unavailable, diagnostic: nil
+            )
+        )
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { store.answerNotices[row.id]?.text == "Approved" })
+        #expect(await service.handlesUsed() == [AnswerHandle(ticket: 1)])
+        // The same row, open again, on the request that was not answered.
+        #expect(store.openRowID == row.id)
+        #expect(store.openRequest?.id == "c-2")
+        #expect(!store.isAffirmativeArmed)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { await service.handlesUsed().count == 2 })
+        #expect(await service.handlesUsed().last == AnswerHandle(ticket: 2))
+    }
+
     /// A result arriving after another request has taken the row annotates
     /// nothing about that request.
     ///
@@ -32445,7 +32531,7 @@ for line in sys.stdin:
     /// that answering `No` produces no event of any kind. And the delivery that
     /// looked unordered was not — that is simply what an asynchronous subagent
     /// looks like, and its events now land in a slot of their own
-    /// (``AgentWaitSlots``) where they cannot reach the turn's wait at all.
+    /// (``ProducerWaits``) where they cannot reach the turn's wait at all.
     ///
     /// So the rule is one rule: a borrowed wait ends on activity against any
     /// other call, on both products. What `PermissionDenied` still does is
