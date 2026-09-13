@@ -138,12 +138,26 @@ struct NotchlineApp: App {
     private static let mainWindowID = "main"
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var store = MonitorStore.shared
+
+    /// The one store, handed to each scene's views -- and **not observed
+    /// here.**
+    ///
+    /// It was a `@StateObject`, which made every publish re-evaluate these
+    /// scenes: the overlay's latest line, the quota, the hover. Nothing below
+    /// reads the store for more than the launch behaviour, but re-evaluating a
+    /// scene hands its open window a new root view, and the Settings window
+    /// re-laid itself out and re-measured its content-size limits for each one
+    /// -- most of the `14`–`18 ms` of CPU a publish cost with Settings open
+    /// (Release). The views that draw from the store observe it themselves.
+    ///
+    /// Computed rather than stored: a stored default would build the store
+    /// before ``init()`` has run.
+    private var store: MonitorStore { .shared }
 
     /// Here rather than in the delegate, because this runs first.
     ///
-    /// The store is what starts the App Server transport, and SwiftUI builds it
-    /// when it first evaluates the scenes below -- which is after this
+    /// The store is what starts the App Server transport, and it is built the
+    /// first time the scenes below are evaluated -- which is after this
     /// initialiser and before `applicationDidFinishLaunching(_:)`. Nothing in
     /// this process may write to a pipe before ``BrokenPipeSignal/ignore()``
     /// has run, and this is the earliest point that is true of.

@@ -43,8 +43,11 @@ enum SettingsPane: String, CaseIterable {
     }
 }
 
+/// **No store here.** This view draws the toolbar and the window's title, and
+/// neither reads the store — but observing it rebuilt the three toolbar
+/// symbols and re-titled the window on every publish. Each pane reads what it
+/// needs itself; see "Reading the store" below.
 struct AppSettingsView: View {
-    @EnvironmentObject private var store: MonitorStore
     @AppStorage(SettingsPane.defaultsKey) private var pane: SettingsPane = .products
 
     var body: some View {
@@ -180,6 +183,27 @@ struct SettingsClosingRow: View {
     }
 }
 
+// MARK: - Reading the store
+//
+// How a pane reads `MonitorStore` without redrawing for what it does not show.
+//
+// The store publishes for everything the overlay draws — a row's latest line,
+// the quota, the hover — and a publish re-evaluates every view observing it,
+// whatever changed. A view here that re-evaluates can re-lay out and re-measure
+// the whole window, and an open ⓘ popover is handed its content again.
+// Measured on a Release build at ten publishes a second, by differencing
+// cumulative CPU time, a publish cost this window 14–18 ms on any pane; it is
+// now 1–2 ms. Most of it was the app observing the store (see
+// `NotchlineApp.store`), the rest the panes.
+//
+// So a pane observes the store in one small view that reads what the pane
+// draws into an `Equatable` value, and hands that value to the view that draws
+// it behind `.equatable()`. A publish that leaves the value alone stops at the
+// comparison. The drawing view keeps the store as a plain reference, which
+// observes nothing, so its switches can write through it. Their bindings still
+// read the store itself; the value carries each switch's position only so that
+// a change to it redraws.
+
 // MARK: - Products
 
 /// Every product is a row in one card, not a group of its own, and the card
@@ -188,19 +212,49 @@ struct SettingsClosingRow: View {
 /// Rows come from ``ProductRegistry/builtIn``. Four products or ten, it is one
 /// card of one-line rows; what a product cannot do is behind its ⓘ.
 struct ProductsSettingsPane: View {
-    @EnvironmentObject private var store: MonitorStore
-
     var body: some View {
         SettingsGroup {
             ProductConnectionRows()
         } footnote: {
             SettingsFootnote(SettingsCaption.productsFootnote) {
-                Button("Recheck") {
-                    store.refreshNow()
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
+                RecheckButton()
             }
+        }
+    }
+}
+
+/// Asks every product for its state again, now.
+///
+/// A view of its own so that it alone takes the store from the environment,
+/// for the one action it needs: the pane around it draws nothing a publish can
+/// change, and first run's connection group uses the same button.
+///
+/// **The button itself is behind `.equatable()` too**, though it draws nothing
+/// from the store. A `Button` rebuilt with a fresh action closure updates the
+/// AppKit button under it, and that re-laid out the whole window: measured,
+/// `4.5 ms` of CPU per publish in a Debug build, most of what the Products
+/// pane still cost once nothing else in it redrew.
+struct RecheckButton: View {
+    @EnvironmentObject private var store: MonitorStore
+
+    var body: some View {
+        Drawing(store: store)
+            .equatable()
+    }
+
+    private struct Drawing: View, Equatable {
+        let store: MonitorStore
+
+        static func == (lhs: Self, rhs: Self) -> Bool {
+            lhs.store === rhs.store
+        }
+
+        var body: some View {
+            Button("Recheck") {
+                store.refreshNow()
+            }
+            .buttonStyle(.bordered)
+            .buttonBorderShape(.capsule)
         }
     }
 }
@@ -219,22 +273,93 @@ struct DisplaySettingsPane: View {
     @EnvironmentObject private var store: MonitorStore
 
     var body: some View {
-        SettingsGroup {
-            showOnRow
-            SettingsSeparator()
-            privacyModeRow
-            SettingsSeparator()
-            outlineRow
+        DisplaySettingsGroups(settings: DisplaySettings(store), store: store)
+            .equatable()
+    }
+}
+
+/// What the Display pane draws, read off the store in one place.
+struct DisplaySettings: Equatable {
+    /// A display as the picker offers it.
+    struct Choice: Equatable, Identifiable {
+        let id: String
+        let title: String
+    }
+
+    let displays: [Choice]
+    let selectedDisplayID: String
+    let selectedDisplayDescription: String
+    let privacyMode: Bool
+    let drawsSurfaceOutline: Bool
+    let hidesCompactWings: Bool
+    let canHideCompactWings: Bool
+    let geometry: DisplayGeometry
+    let namesWorkOnPill: Bool
+    let canNameWorkOnPill: Bool
+    let groupsSessionsByProduct: Bool
+
+    init(_ store: MonitorStore) {
+        displays = store.displays.map { Choice(id: $0.id, title: $0.pickerTitle) }
+        selectedDisplayID = store.selectedDisplayID
+        selectedDisplayDescription = Self.description(of: store.selectedDisplay)
+        privacyMode = store.privacyMode
+        drawsSurfaceOutline = store.drawsSurfaceOutline
+        hidesCompactWings = store.hidesCompactWings
+        canHideCompactWings = store.canHideCompactWings
+        geometry = store.geometry
+        namesWorkOnPill = store.namesWorkOnPill
+        canNameWorkOnPill = store.canNameWorkOnPill
+        groupsSessionsByProduct = store.groupsSessionsByProduct
+    }
+
+    private static func description(of display: DisplayOption?) -> String {
+        guard let display else {
+            return "Connect a display to choose where the component appears."
         }
 
-        SettingsGroup(header: "Collapsed") {
-            hideWingsRow
-            SettingsSeparator()
-            nameWorkRow
-        }
+        let geometry = display.geometry == .notched
+            ? "Notch display"
+            : "Display without a notch"
+        // The band the component is drawn at, named for what it is here: on a
+        // notched display that is the cut-out, which is a couple of points
+        // shorter than the menu bar around it.
+        let band = display.geometry == .notched ? "pt notch" : "pt menu bar"
+        return "\(geometry) · \(Int(display.panelBandHeight.rounded())) \(band)"
+    }
+}
 
-        SettingsGroup(header: "Expanded") {
-            groupByProductRow
+/// The Display pane's three cards, drawn from ``DisplaySettings``.
+struct DisplaySettingsGroups: View, Equatable {
+    let settings: DisplaySettings
+    /// Written through by the controls, and never read to draw.
+    let store: MonitorStore
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.settings == rhs.settings
+    }
+
+    var body: some View {
+        // Their own stack, at the pane's `22`. Behind `.equatable()` the three
+        // cards reach the stack in ``SettingsPaneContent`` as one view, and
+        // it lost the space between them — measured, the cards closed up.
+        VStack(alignment: .leading, spacing: 22) {
+            SettingsGroup {
+                showOnRow
+                SettingsSeparator()
+                privacyModeRow
+                SettingsSeparator()
+                outlineRow
+            }
+
+            SettingsGroup(header: "Collapsed") {
+                hideWingsRow
+                SettingsSeparator()
+                nameWorkRow
+            }
+
+            SettingsGroup(header: "Expanded") {
+                groupByProductRow
+            }
         }
     }
 
@@ -243,19 +368,19 @@ struct DisplaySettingsPane: View {
     private var showOnRow: some View {
         SettingsRow(
             title: "Show Notchline on",
-            caption: selectedDisplayDescription,
+            caption: settings.selectedDisplayDescription,
             help: "Notchline appears on one display at a time. The caption gives "
                 + "that display's shape and the height of the band the component "
                 + "is drawn in."
         ) {
-            if store.displays.isEmpty {
+            if settings.displays.isEmpty {
                 Text("No display available")
                     .font(.system(size: 11))
                     .foregroundStyle(MacOSWindowColor.secondaryText)
             } else {
                 Picker("Display for Notchline", selection: displaySelection) {
-                    ForEach(store.displays) { display in
-                        Text(display.pickerTitle).tag(display.id)
+                    ForEach(settings.displays) { display in
+                        Text(display.title).tag(display.id)
                     }
                 }
                 .labelsHidden()
@@ -290,7 +415,7 @@ struct DisplaySettingsPane: View {
                 + "uncovers that row, and the panel waits for a click instead of "
                 + "opening when the pointer merely crosses it."
         ) {
-            Toggle("Privacy Mode", isOn: $store.privacyMode)
+            Toggle("Privacy Mode", isOn: binding(\.privacyMode))
                 .labelsHidden()
                 .toggleStyle(.switch)
         }
@@ -308,7 +433,7 @@ struct DisplaySettingsPane: View {
             help: "Traces the sides and lower corners in a grey just off "
                 + "Notchline's own black, collapsed and expanded alike."
         ) {
-            Toggle("Outline the panel", isOn: $store.drawsSurfaceOutline)
+            Toggle("Outline the panel", isOn: binding(\.drawsSurfaceOutline))
                 .labelsHidden()
                 .toggleStyle(.switch)
         }
@@ -329,8 +454,8 @@ struct DisplaySettingsPane: View {
         SettingsRow(
             title: "Hide the wings",
             caption: SettingsCaption.hideWings(
-                canHide: store.canHideCompactWings,
-                geometry: store.geometry
+                canHide: settings.canHideCompactWings,
+                geometry: settings.geometry
             ),
             help: "Leaves the collapsed component as the cut-out alone, with no "
                 + "clock beside it. The mark and its counts slide out while a "
@@ -340,7 +465,7 @@ struct DisplaySettingsPane: View {
                 + "— not on a display without a notch, nor on one that reports a "
                 + "notch but not where it is."
         ) {
-            Toggle("Hide the wings", isOn: $store.hidesCompactWings)
+            Toggle("Hide the wings", isOn: binding(\.hidesCompactWings))
                 .labelsHidden()
                 .toggleStyle(.switch)
         }
@@ -353,14 +478,14 @@ struct DisplaySettingsPane: View {
     private var nameWorkRow: some View {
         SettingsRow(
             title: "Name the work",
-            caption: SettingsCaption.nameWork(canName: store.canNameWorkOnPill),
+            caption: SettingsCaption.nameWork(canName: settings.canNameWorkOnPill),
             help: "Names each project with a live turn in the middle of the "
                 + "collapsed component, five seconds apiece; the component keeps "
                 + "its width either way. Takes effect on a display without a "
                 + "notch — on a notched one the cut-out is where the name would "
                 + "stand."
         ) {
-            Toggle("Name the work", isOn: $store.namesWorkOnPill)
+            Toggle("Name the work", isOn: binding(\.namesWorkOnPill))
                 .labelsHidden()
                 .toggleStyle(.switch)
         }
@@ -384,25 +509,18 @@ struct DisplaySettingsPane: View {
                 + "list is one list in order of urgency, and every row carries "
                 + "its own badge."
         ) {
-            Toggle("Group by product", isOn: $store.groupsSessionsByProduct)
+            Toggle("Group by product", isOn: binding(\.groupsSessionsByProduct))
                 .labelsHidden()
                 .toggleStyle(.switch)
         }
     }
 
-    private var selectedDisplayDescription: String {
-        guard let display = store.selectedDisplay else {
-            return "Connect a display to choose where the component appears."
-        }
-
-        let geometry = display.geometry == .notched
-            ? "Notch display"
-            : "Display without a notch"
-        // The band the component is drawn at, named for what it is here: on a
-        // notched display that is the cut-out, which is a couple of points
-        // shorter than the menu bar around it.
-        let band = display.geometry == .notched ? "pt notch" : "pt menu bar"
-        return "\(geometry) · \(Int(display.panelBandHeight.rounded())) \(band)"
+    /// One of the store's own switches, read and written on the store.
+    private func binding(_ keyPath: ReferenceWritableKeyPath<MonitorStore, Bool>) -> Binding<Bool> {
+        Binding(
+            get: { store[keyPath: keyPath] },
+            set: { store[keyPath: keyPath] = $0 }
+        )
     }
 
     private var displaySelection: Binding<String> {
@@ -424,19 +542,50 @@ struct QuotaSettingsPane: View {
     @EnvironmentObject private var store: MonitorStore
 
     var body: some View {
-        quotaTableGroup
+        QuotaSettingsGroups(settings: QuotaSettings(store), store: store)
+            .equatable()
+    }
+}
 
-        // Only the products that leave anything have a key; the presence of the
-        // key is what decides whether the row is drawn (CC-020), so this is not
-        // a filter on the value, and a machine where nothing does has no group.
-        if !store.diskFootprints.isEmpty {
-            SettingsGroup(header: "Quota readings") {
-                ForEach(Array(store.diskFootprints.keys.sorted().enumerated()), id: \.element) { index, agent in
-                    if let report = store.diskFootprints[agent] {
-                        if index > 0 {
-                            SettingsSeparator()
+/// What the Quota pane draws, read off the store in one place.
+struct QuotaSettings: Equatable {
+    let productsHiddenFromQuotaTable: Set<AgentKind>
+    let diskFootprints: [AgentKind: AgentDiskFootprintReport]
+
+    init(_ store: MonitorStore) {
+        productsHiddenFromQuotaTable = store.productsHiddenFromQuotaTable
+        diskFootprints = store.diskFootprints
+    }
+}
+
+/// The Quota pane's cards, drawn from ``QuotaSettings``.
+struct QuotaSettingsGroups: View, Equatable {
+    let settings: QuotaSettings
+    /// Written through by the switches, and never read to draw.
+    let store: MonitorStore
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.settings == rhs.settings
+    }
+
+    var body: some View {
+        // Their own stack, for the reason ``DisplaySettingsGroups`` gives.
+        VStack(alignment: .leading, spacing: 22) {
+            quotaTableGroup
+
+            // Only the products that leave anything have a key; the presence
+            // of the key is what decides whether the row is drawn (CC-020), so
+            // this is not a filter on the value, and a machine where nothing
+            // does has no group.
+            if !settings.diskFootprints.isEmpty {
+                SettingsGroup(header: "Quota readings") {
+                    ForEach(Array(settings.diskFootprints.keys.sorted().enumerated()), id: \.element) { index, agent in
+                        if let report = settings.diskFootprints[agent] {
+                            if index > 0 {
+                                SettingsSeparator()
+                            }
+                            transcriptRow(report, for: agent)
                         }
-                        transcriptRow(report, for: agent)
                     }
                 }
             }
@@ -598,31 +747,17 @@ struct ProductConnectionRows: View {
             if index > 0 {
                 SettingsSeparator()
             }
-            row(for: descriptor)
-        }
-    }
-
-    private func row(for descriptor: ProductDescriptor) -> some View {
-        let copy = copy(for: descriptor)
-        return SettingsRow(
-            title: descriptor.settingsTitle,
-            status: SettingsRowStatus(color: copy.color, text: copy.status),
-            diagnostic: copy.diagnostic
-        ) {
-            HStack(spacing: 6) {
-                if descriptor.setup.isConfigurable {
-                    Toggle(
-                        "\(descriptor.displayName) integration",
-                        isOn: integrationSelection(for: descriptor.kind)
-                    )
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .disabled(store.isIntegrationBusy(for: descriptor.kind))
-                    .help(descriptor.setup.switchHelp)
-                }
-
-                ProductInfoButton(content: ProductInfoContent(descriptor: descriptor))
-            }
+            ProductConnectionRow(
+                descriptor: descriptor,
+                copy: copy(for: descriptor),
+                isOn: store.integrationSwitchIsOn(for: descriptor.kind),
+                isBusy: store.isIntegrationBusy(for: descriptor.kind),
+                store: store
+            )
+            // Per row rather than around the card: a publish about one product
+            // redraws that product's row, and an open ⓘ on another row is left
+            // alone.
+            .equatable()
         }
     }
 
@@ -638,9 +773,49 @@ struct ProductConnectionRows: View {
             diagnostic: store.diagnostic(for: descriptor.kind)
         )
     }
+}
 
-    private func integrationSelection(for agent: AgentKind) -> Binding<Bool> {
-        Binding(
+/// One product's row, drawn from what ``ProductConnectionRows`` read for it.
+struct ProductConnectionRow: View, Equatable {
+    let descriptor: ProductDescriptor
+    let copy: ProductSettingsCopy
+    /// Where the switch sits. The switch reads the store itself; this is here
+    /// so that the row redraws when it moves.
+    let isOn: Bool
+    let isBusy: Bool
+    /// Written through by the switch, and never read to draw.
+    let store: MonitorStore
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.descriptor.kind == rhs.descriptor.kind
+            && lhs.copy == rhs.copy
+            && lhs.isOn == rhs.isOn
+            && lhs.isBusy == rhs.isBusy
+    }
+
+    var body: some View {
+        SettingsRow(
+            title: descriptor.settingsTitle,
+            status: SettingsRowStatus(color: copy.color, text: copy.status),
+            diagnostic: copy.diagnostic
+        ) {
+            HStack(spacing: 6) {
+                if descriptor.setup.isConfigurable {
+                    Toggle("\(descriptor.displayName) integration", isOn: integrationSelection)
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .disabled(isBusy)
+                        .help(descriptor.setup.switchHelp)
+                }
+
+                ProductInfoButton(content: ProductInfoContent(descriptor: descriptor))
+            }
+        }
+    }
+
+    private var integrationSelection: Binding<Bool> {
+        let agent = descriptor.kind
+        return Binding(
             get: { store.integrationSwitchIsOn(for: agent) },
             set: { store.setIntegrationEnabled($0, for: agent) }
         )

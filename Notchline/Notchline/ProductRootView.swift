@@ -186,11 +186,7 @@ struct OnboardingView: View {
                     + "\(ProductRegistry.spokenConfigurationFiles) and take them out "
                     + "again when off. Each file is backed up first."
             ) {
-                Button("Recheck") {
-                    store.refreshNow()
-                }
-                .buttonStyle(.bordered)
-                .buttonBorderShape(.capsule)
+                RecheckButton()
             }
         }
     }

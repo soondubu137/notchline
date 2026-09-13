@@ -10,6 +10,7 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 - **Settings is three toolbar panes: Products, Display and Quota.** The window is one size for every pane, with the version and Quit always in the same place, and it opens on the last pane used. Every caption is one line, with the rest in the row's tooltip. What a product watches, what it cannot show and its hooks file are behind an ⓘ. A reported failure still shows in the row. (`docs/figma-design.md` §8.)
 - **Finishing onboarding opens Settings in its own window** and closes the welcome window, rather than turning the welcome window into Settings.
+- **An open Settings window no longer redraws for changes it does not show.** Every update to a row, the quota or the hover used to re-lay out the whole window and hand an open ⓘ its content again: 14–18 ms of CPU each on a Release build. It now costs 1–2 ms, and a pane redraws only when something it shows changes.
 
 ## 0.4.0 Alpha — 2026-09-13
 
