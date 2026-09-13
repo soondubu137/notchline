@@ -84,13 +84,13 @@ struct AnswerHandle: Hashable, Sendable {
     let issuer: UUID
     /// The issuer's own name for the held connection, meaningless anywhere
     /// else.
-    let ticket: HookReplyRegistry.Ticket
+    let ticket: UInt64
 
     /// A handle minted by no channel, for a fixture that only records what it
     /// was handed. It addresses nothing on any live channel.
     static let unissued = UUID(uuid: (0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0))
 
-    init(ticket: HookReplyRegistry.Ticket, issuer: UUID = AnswerHandle.unissued) {
+    init(ticket: UInt64, issuer: UUID = AnswerHandle.unissued) {
         self.ticket = ticket
         self.issuer = issuer
     }

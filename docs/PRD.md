@@ -456,3 +456,8 @@ If Project, unread membership or exact navigation cannot be met, V1 must not fak
 ### Source setup and shutdown
 
 A product requiring no setup is monitored without a configuration switch or file link. Observation availability remains independent of setup; unavailable evidence never claims successful registration. Existing managed Hooks switches retain their current file-editing semantics. Removing configuration or stopping observation stops owned readers/watchers and parks their refresh deadlines. Reconnection does not replay the previous observation's Turns. A transient source failure preserves trustworthy state and retries conservatively rather than inferring a Turn ended.
+
+
+## Generalisation conformance follow-up (2026-09-12)
+
+Reading-only requests support complete question-set browsing without input or an answer channel. A row with several live requests offers previous/next request controls with a position count; changing the selection sends nothing and preserves each live request's own question position and draft. Resolution, replacement and observation reset cannot transfer that state to another request. Existing answerable sets retain their answer-validation rules when advancing. No native support level changes.

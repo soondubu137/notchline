@@ -98,7 +98,7 @@ Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/h
 
 ## 6. 实现与验证
 
-共享入口现在是提交到 `MonitoringRepository` 的有类型 `MonitoringEvidence`；`HookEvidenceBoundary` 在提交前解释原生 Hooks。`ProductMonitoringRuntime` 接受任意 `MonitoringLifecycleSource`，`HookProductProvider` 提供 Hooks 组合。[MonitoringEvidenceConformanceTests](../Notchline/NotchlineTests/MonitoringEvidenceConformanceTests.swift) 使用不依赖 Hooks、JSON 或 socket 的来源，验证生命周期、进展、等待投影与解除、subagent 隔离和旧观察周期事件拒绝。这不改变任何产品的支持范围：并发请求集合、与传输无关的回答句柄和结果，仍是[实施计划](product-generalisation-plan.md)中的独立工作项。
+共享入口现在是提交到 `MonitoringRepository` 的有类型 `MonitoringEvidence`；`HookEvidenceBoundary` 在提交前解释原生 Hooks。`ProductMonitoringRuntime` 接受任意 `MonitoringLifecycleSource`，`HookProductProvider` 提供 Hooks 组合。[MonitoringEvidenceConformanceTests](../Notchline/NotchlineTests/MonitoringEvidenceConformanceTests.swift) 使用不依赖 Hooks、JSON 或 socket 的来源，验证生命周期、进展、等待投影与解除、subagent 隔离和旧观察周期事件拒绝。[实施计划](product-generalisation-plan.md)中的五个工作包已实现；后续验收记录区分了最初的测试证据与补齐后的独立请求、身份隔离和只读浏览覆盖。
 
 工作包 3（2026-09-12）加入了有类型的问题答案、逐题约束和按连接声明的允许操作（`AnswerOperations`），并在 store 和回复注册表两层校验；其测试是 [StructuredAnswerTests](../Notchline/NotchlineTests/StructuredAnswerTests.swift)。工作包 4 使回答句柄不透明并绑定到签发它的通道，并以 `AnswerOutcome` 报告交付结果——对 Hooks 通道是*已发送*而非*已接受*，对端消失、窗口耗尽、句柄已用、操作不受支持和写入结果不确定各自如实报告；其测试是 [AnswerChannelTests](../Notchline/NotchlineTests/AnswerChannelTests.swift) 以及主测试集中的一个合成异步通道。L6 中"报告交付结果"现在正是指该结果。工作包 2 让每个生产者以各自的标识持有其全部未决请求，逐个解除，从剩余请求推导状态，并让行按稳定顺序打开它们；其测试是 [RequestCollectionTests](../Notchline/NotchlineTests/RequestCollectionTests.swift)。L5 要求的"并发请求与替换"现在由共享 reducer 对所有产品满足。第 9 节的跨工作包夹具是 [SyntheticProductConformanceTests](../Notchline/NotchlineTests/SyntheticProductConformanceTests.swift)。这些是共享实现能力，不是更高的原生支持级别；上表中任何产品的覆盖范围都没有改变。有一条规则收窄：无 id 的 `PermissionRequest` 若可能同等对应同一工具的两个未关闭调用，则不建立等待，此前它会归到最新的调用下。
 
@@ -123,3 +123,5 @@ Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/h
 
 
 泛化改造第五项增加了明确的无需配置类型、可选的来源生命周期与刷新时间组合，以及权限受限的分阶段补充证据接口。这些是共享实现能力，不代表原生产品支持等级提高。第二至第四项（请求集合、结构化回答及回答通道）仍待实施。
+
+泛化补齐后，只读问题集可浏览所有问题，同一行也可切换任一并发请求，浏览本身不提交答案。草稿和问题浏览位置按请求实例隔离；原生请求可以没有关联工具调用。可选定时读取在后台完成，以已持有的可信值参与当前刷新，不阻塞生命周期刷新。这些改动不增加原生事件来源、回答操作或产品支持等级。

@@ -271,3 +271,8 @@ reference bar, spent in the state where a fresh install lives.
 - [x] Collapsing and re-expanding leaves it open; a second click on the mark is the only thing that closes it.
 - [x] The lockup stands in the composition's own place, nothing is drawn in either margin, and the band's closing rule is drawn at the top (`theAboutPanelSpendsItsHeightWhereItSaysItDoes`).
 - [x] The mark draws `#7C7C80` while the list is showing and white at `0.98` while the About panel is, with a ground under it only when the pointer is on it.
+
+
+## Generalisation conformance follow-up (2026-09-12)
+
+An open row with concurrent requests reserves `requestNavigationHeight` (24 pt) plus `sessionRowLineSpacing` above its body. The body keeps its existing width, cap and scrolling behaviour; the store's open-row and list heights include the strip. A single-request row retains its previous geometry. Reading-only question navigation occupies the existing answer-ground height.

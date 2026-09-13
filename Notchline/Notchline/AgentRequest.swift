@@ -23,6 +23,35 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// (measured on both, 2026-08-23). It is what the open row is keyed by, and
     /// what an answer will have to name when there is a way to send one.
     let id: String
+    /// The reducer's request occurrence, independent of native IDs and handles.
+    /// Product isolation comes from the repository epoch and the containing row.
+    private(set) var identity: Identity? = nil
+
+    nonisolated struct Identity: Sendable, Equatable, Hashable {
+        let epoch: MonitoringEpoch
+        let threadID: String
+        let turnID: String?
+        let producerID: String?
+        let requestID: String
+        let nativeRevision: String?
+        var occurrence = UUID()
+    }
+
+    /// Repeated observations and channel changes retain an occurrence. A body
+    /// revision or a newly opened wait receives a fresh one, even if native IDs
+    /// and visible words have been reused.
+    nonisolated func scoped(_ identity: Identity, preserving previous: AgentRequest?) -> AgentRequest {
+        var result = self
+        result.identity = identity
+        if let previous, let old = previous.identity {
+            var candidate = identity
+            candidate.occurrence = old.occurrence
+            result.identity = candidate
+            if result.asked == previous.asked { return result }
+        }
+        result.identity = identity
+        return result
+    }
     /// The tool as the product named it.
     ///
     /// For the accessible name (§13.3) and for naming the destination of a form
@@ -153,7 +182,7 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
         on answerHandle: AnswerHandle?,
         permitting operations: AnswerOperations
     ) -> AgentRequest {
-        AgentRequest(
+        var result = AgentRequest(
             id: id,
             toolName: toolName,
             form: form,
@@ -162,6 +191,8 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
             answerHandle: answerHandle,
             operations: operations
         )
+        result.identity = identity
+        return result
     }
 
     /// The request with nothing on it that changes as its connection does.
@@ -176,11 +207,13 @@ nonisolated struct AgentRequest: Identifiable, Sendable, Equatable {
     /// Bind a boundary-projected body to the correlation identity established
     /// by the reducer. Borrowed hook approvals learn that identity after decode.
     nonisolated func identified(by id: String) -> AgentRequest {
-        AgentRequest(
+        var result = AgentRequest(
             id: id, toolName: toolName, form: form,
             argumentFields: argumentFields, offeredRules: offeredRules,
             answerHandle: answerHandle, operations: operations
         )
+        result.identity = identity
+        return result
     }
 
     nonisolated enum Form: Sendable, Equatable {
@@ -1210,9 +1243,8 @@ nonisolated struct RequestBodyLayout: Sendable, Equatable {
     /// Lays out one request's body at the width the row draws it in.
     ///
     /// `question` selects which of a set is shown, because a set is answered one
-    /// at a time and the count says so (§5.2, §5.3). In the reading form only
-    /// the first is reachable, and the count is what tells a reader there are
-    /// more — which is exactly what §11's single control is for.
+    /// at a time and the count says so (§5.2, §5.3). Reading-only sets can
+    /// browse every question without selecting or submitting an answer.
     nonisolated static func laidOut(
         _ request: AgentRequest,
         showing question: Int = 0,

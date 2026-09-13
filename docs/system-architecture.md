@@ -1164,3 +1164,12 @@ Option titles and descriptions are measured in `RequestBodyLayout.Option` and th
 
 
 Package 5 Release burst measurement (`getrusage`, cumulative process CPU): 1,000 composition refresh/deadline cycles cost 0.40–0.88 ms with one parked reader (one actual read), and 3.21–3.46 ms with a reader due on every cycle (1,000 actual reads). The reader was in-memory; native I/O, full row construction and UI are excluded. This is not a pre/post comparison or idle-CPU measurement. The fixture checks that no stopped deadline remains. Sample details and the validation record are in [the handover](product-generalisation-plan.md#package-5-implementation-handover-2026-09-12).
+
+
+## Generalisation conformance follow-up (2026-09-12)
+
+Request identity now reaches the presentation contract as `AgentRequest.Identity`: repository epoch, Thread, native Turn, producer, request ID, optional native revision and occurrence UUID. Repeated identical observations and handle changes preserve the occurrence; changed bodies, native revisions and reopening receive a fresh one. Occurrences participate in the reducer's change projection, so an unchanged form name cannot hide a changed body. Standalone waits retain an optional tool-call association and never announce a fabricated call.
+
+Scheduled source reads now run independently behind held evidence. `MonitoringSourceComposition` launches at most one read per source, excludes in-flight deadlines and emits a completion edge after storing the next deadline or failure backoff. Edges arriving during a read stay due. Stop cancels owned reads; old-generation completions cannot publish or restore deadlines. Sources still own protection of their cached values against cancellation-insensitive upstream completions. Start/stop hooks and ordinary held-value readers must remain short.
+
+The follow-up's optimised source harness measured cumulative process CPU for 1,000 composition refresh/deadline cycles: **6.89–7.27 ms** with a parked reader and **18.65–20.91 ms** with one read due per cycle (three samples each). A simulated 200 ms read no longer held the refresh call. [The execution record](product-generalisation-plan.md#11-conformance-follow-up-2026-09-12) gives the baseline, compiler settings and limits; these are source-composition measurements, excluding native I/O and overlay rendering.

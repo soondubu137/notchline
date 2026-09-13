@@ -46,3 +46,8 @@ Separately, `default.profraw` in the repository root is a coverage artefact from
 
 
 Generalisation package 5 adds no production artifact, preference or native configuration path. The explicit no-setup case creates no hook registration or helper. Disconnect/removal releases owned watcher descriptors and cancels source reads; it does not delete product records, transcripts or user files. Existing managed-file backup and narrow-edit rules are unchanged.
+
+
+## Generalisation conformance follow-up (2026-09-12)
+
+Request occurrence identities, selection, saved per-request drafts and question positions are process memory only. They are pruned with the live requests and rows and are never persisted. The generalisation follow-up adds no native configuration, helper, socket, file path or on-disk artefact.

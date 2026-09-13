@@ -974,3 +974,8 @@ reopening cancels that removal. It takes no interaction while closing.
 Hover dwells, top attachment and final dimensions are unchanged.
 Apple documents the grouping behaviour in
 [`geometryGroup()`](https://developer.apple.com/documentation/swiftui/view/geometrygroup()).
+
+
+## Generalisation conformance follow-up (2026-09-12)
+
+The open request row gains a 24 pt navigation strip below the Thread title only when more than one live request exists. It uses the existing row spacing, request-control font and theme ink; arrow buttons have explicit accessible names and unavailable directions are disabled. The strip reads `Request n of m`. Reading-only question sets show quiet `Back`/`Next` controls beside the return-to-product action, without a bright affirmative or an input field. This specifies the implementation; no Figma file was edited.

@@ -41,7 +41,7 @@ struct SyntheticProductConformanceTests {
     /// back later, and when it does can only say it is unsure.
     private actor SyntheticChannel {
         let issuer = UUID()
-        private var next: HookReplyRegistry.Ticket = 1
+        private var next: UInt64 = 1
         private(set) var answers: [(handle: AnswerHandle, answer: AgentAnswer)] = []
         private var pending: [CheckedContinuation<AnswerOutcome, Never>] = []
 

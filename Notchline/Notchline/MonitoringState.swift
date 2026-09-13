@@ -63,7 +63,7 @@ nonisolated enum MonitoringSignal: Sendable, Equatable {
 /// ``HookEventRepository``, off the main actor. It is a plain `Sendable` value,
 /// so there is nothing for the isolation to protect.
 nonisolated struct PendingApproval: Sendable, Equatable {
-    let toolUseID: String
+    let toolUseID: String?
     /// Whether the id was borrowed from the open call rather than belonging to
     /// an approval tool of its own.
     ///
@@ -105,19 +105,25 @@ nonisolated struct PendingApproval: Sendable, Equatable {
     /// from the calls they concern; the call's id otherwise. What a
     /// replacement replaces and a resolution resolves.
     let requestID: String
+    let nativeRevision: String?
 
     nonisolated init(
-        toolUseID: String,
+        toolUseID: String?,
         isInferred: Bool,
         openedAt: Date,
         request: AgentRequest?,
-        requestID: String? = nil
+        requestID: String? = nil,
+        nativeRevision: String? = nil
     ) {
         self.toolUseID = toolUseID
         self.isInferred = isInferred
         self.openedAt = openedAt
         self.request = request
-        self.requestID = requestID ?? toolUseID
+        guard let identity = requestID ?? toolUseID else {
+            preconditionFailure("A wait requires a request identity or a tool call identity")
+        }
+        self.requestID = identity
+        self.nativeRevision = nativeRevision
     }
 
     /// The same wait, with its request no longer answerable.
@@ -129,7 +135,7 @@ nonisolated struct PendingApproval: Sendable, Equatable {
             isInferred: isInferred,
             openedAt: openedAt,
             request: request?.answerable(on: nil),
-            requestID: requestID
+            requestID: requestID, nativeRevision: nativeRevision
         )
     }
 }
@@ -141,27 +147,32 @@ nonisolated struct PendingApproval: Sendable, Equatable {
 /// rule that only ever wanted the id still gets one, from the computed
 /// `pendingInputToolUseID` beside each slot.
 nonisolated struct PendingInput: Sendable, Equatable {
-    /// This event's own `tool_use_id` -- unlike an approval's, never borrowed:
-    /// both `AskUserQuestion` and `request_user_input` are ordinary tool calls
-    /// and carry one.
-    let toolUseID: String
+    /// An associated native tool call, if the request belongs to one.
+    /// Standalone native questions require only their own request identity.
+    let toolUseID: String?
     let openedAt: Date
     /// What is being asked, where the event carried it. See
     /// ``PendingApproval/request`` for why it lives here rather than beside.
     let request: AgentRequest?
     /// See ``PendingApproval/requestID``.
     let requestID: String
+    let nativeRevision: String?
 
     nonisolated init(
-        toolUseID: String,
+        toolUseID: String?,
         openedAt: Date,
         request: AgentRequest?,
-        requestID: String? = nil
+        requestID: String? = nil,
+        nativeRevision: String? = nil
     ) {
         self.toolUseID = toolUseID
         self.openedAt = openedAt
         self.request = request
-        self.requestID = requestID ?? toolUseID
+        guard let identity = requestID ?? toolUseID else {
+            preconditionFailure("A wait requires a request identity or a tool call identity")
+        }
+        self.requestID = identity
+        self.nativeRevision = nativeRevision
     }
 
     /// The same wait, with its request no longer answerable.
@@ -170,7 +181,7 @@ nonisolated struct PendingInput: Sendable, Equatable {
             toolUseID: toolUseID,
             openedAt: openedAt,
             request: request?.answerable(on: nil),
-            requestID: requestID
+            requestID: requestID, nativeRevision: nativeRevision
         )
     }
 }
@@ -291,10 +302,10 @@ nonisolated struct ProducerWaits: Sendable, Equatable {
 
     /// Ends the one request the product says it no longer asks.
     @discardableResult
-    mutating func resolve(requestID: String) -> Bool {
+    mutating func resolve(requestID: String, revision: String? = nil) -> Bool {
         let before = self
-        inputs.removeAll { $0.requestID == requestID }
-        approvals.removeAll { $0.requestID == requestID }
+        inputs.removeAll { $0.requestID == requestID && (revision == nil || $0.nativeRevision == revision) }
+        approvals.removeAll { $0.requestID == requestID && (revision == nil || $0.nativeRevision == revision) }
         return self != before
     }
 

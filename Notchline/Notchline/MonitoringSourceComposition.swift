@@ -27,7 +27,8 @@ actor MonitoringSourceComposition {
     private let clock: any MonitorClock
     nonisolated private let edges = MonitoringSourceEdges()
     private var readEdges: [ObjectIdentifier: Int] = [:]
-    private var pending: [ObjectIdentifier: Task<Date?, Error>] = [:]
+    private var pending: [ObjectIdentifier: Task<Void, Never>] = [:]
+    nonisolated private let completions = MonitoringChangeBroadcast()
     private var active = false
     private var generation = 0
     private var deadlines: [ObjectIdentifier: Date] = [:]
@@ -42,7 +43,7 @@ actor MonitoringSourceComposition {
     }
 
     nonisolated var changeEvents: [AsyncStream<Void>] {
-        sources.flatMap { source in
+        [completions.events()] + sources.flatMap { source in
             source.sourceChanges.map { edges.forward($0, for: ObjectIdentifier(source)) }
         }
     }
@@ -68,27 +69,37 @@ actor MonitoringSourceComposition {
             let edge = edges.count(for: id)
             if failures[id] == nil, readEdges[id] == edge,
                deadlines[id].map({ $0 > now }) ?? true { continue }
-            let task = Task { try await scheduled.refresh(at: now) }
-            pending[id] = task
-            do {
-                let next = try await task.value
-                guard active, generation == token else { return }
-                pending[id] = nil
-                // A source cannot spin the store by returning a consumed deadline.
-                let completedAt = max(now, clock.now())
-                deadlines[id] = next.map { $0 > completedAt ? $0 : completedAt.addingTimeInterval(5) }
-                readEdges[id] = edge
-                failures[id] = nil
-                diagnostics[id] = nil
-            } catch {
-                guard active, generation == token else { return }
-                pending[id] = nil
-                let attempts = min((failures[id] ?? 0) + 1, 5)
-                failures[id] = attempts
-                deadlines[id] = max(now, clock.now()).addingTimeInterval(min(5 * pow(2, Double(attempts - 1)), 60))
-                diagnostics[id] = "A monitoring source could not be read: \(error.localizedDescription)"
+            // The ordinary refresh reads held evidence immediately. A slow
+            // optional source never holds lifecycle reduction or another source.
+            pending[id] = Task { [weak self] in
+                let result: Result<Date?, Error>
+                do { result = .success(try await scheduled.refresh(at: now)) }
+                catch { result = .failure(error) }
+                await self?.completed(result, id: id, edge: edge, generation: token, startedAt: now)
             }
         }
+    }
+
+    private func completed(_ result: Result<Date?, Error>, id: ObjectIdentifier, edge: Int,
+                           generation token: Int, startedAt now: Date) {
+        guard active, generation == token else { return }
+        pending[id] = nil
+        let completedAt = max(now, clock.now())
+        switch result {
+        case let .success(next):
+            deadlines[id] = next.map { $0 > completedAt ? $0 : completedAt.addingTimeInterval(5) }
+            readEdges[id] = edge
+            failures[id] = nil
+            diagnostics[id] = nil
+        case let .failure(error):
+            let attempts = min((failures[id] ?? 0) + 1, 5)
+            failures[id] = attempts
+            deadlines[id] = completedAt.addingTimeInterval(min(5 * pow(2, Double(attempts - 1)), 60))
+            diagnostics[id] = "A monitoring source could not be read: \(error.localizedDescription)"
+        }
+        // Counted source edges are consumed only up to the beginning of the
+        // read. An edge during it stays due when this completion wakes the store.
+        completions.signal()
     }
 
     func nextDeadline() -> Date? {

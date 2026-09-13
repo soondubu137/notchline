@@ -2012,6 +2012,7 @@ struct OpenRow: View {
 
             VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
                 head
+                if store.openRequestCount > 1 { requestNavigation }
                 body(for: store.openRowBody)
                 Spacer(minLength: 0)
                 answerRow
@@ -2028,6 +2029,40 @@ struct OpenRow: View {
         .onHover { isHovered = $0 }
         .accessibilityElement(children: .contain)
         .accessibilityLabel(accessibilityText)
+    }
+
+    private var requestNavigation: some View {
+        HStack(spacing: 8) {
+            requestStep("chevron.left", label: "Previous request", enabled: store.canGoBackARequest) {
+                store.stepRequest(-1)
+            }
+            Text("Request \((store.openRequestIndex ?? 0) + 1) of \(store.openRequestCount)")
+                .font(Font(PanelMetrics.requestControlFont).monospacedDigit())
+                .foregroundStyle(NotchPalette.reading)
+                .accessibilityLabel("Request \((store.openRequestIndex ?? 0) + 1) of \(store.openRequestCount)")
+            requestStep("chevron.right", label: "Next request", enabled: store.canGoForwardARequest) {
+                store.stepRequest(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: PanelMetrics.requestNavigationHeight)
+    }
+
+    private func requestStep(_ symbol: String, label: String, enabled: Bool,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(Font(PanelMetrics.requestControlFont))
+                .frame(width: PanelMetrics.requestNavigationHeight, height: PanelMetrics.requestNavigationHeight)
+                .contentShape(Rectangle())
+                .overlay(PointingHandCursor())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(NotchPalette.reading)
+        .opacity(enabled ? 1 : 0.45)
+        .disabled(!enabled)
+        .accessibilityLabel(label)
+        .help(label)
     }
 
     /// The caption and the title, unmoved, with the chevron where the mark was.
@@ -2102,6 +2137,9 @@ struct OpenRow: View {
     private func body(for layout: RequestBodyLayout?) -> some View {
         if let layout {
             ScrollingRequestBody(layout: layout)
+                // Equal native IDs and bodies from another producer are still
+                // another request: discard the previous body's scroll state.
+                .id(store.openRequest?.identity)
         }
     }
 
@@ -2133,7 +2171,7 @@ struct OpenRow: View {
     /// the bright ground is the return key made visible, and `⏎` has nothing
     /// to do here.
     private var readingControl: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             Button {
                 store.open(session)
             } label: {
@@ -2164,6 +2202,14 @@ struct OpenRow: View {
             }
             .buttonStyle(.plain)
             Spacer(minLength: 0)
+            if store.canGoBackAQuestion {
+                AnswerControl(label: "Back", holdsGround: false, waitsForArrival: false,
+                              spoken: "Read the previous question") { store.goBackAQuestion() }
+            }
+            if store.canGoForwardAQuestion {
+                AnswerControl(label: "Next", holdsGround: false, waitsForArrival: false,
+                              spoken: "Read the next question") { store.goForwardAQuestion() }
+            }
         }
         .frame(height: PanelMetrics.answerRowHeight)
         .padding(.top, 10 - PanelMetrics.sessionRowLineSpacing)

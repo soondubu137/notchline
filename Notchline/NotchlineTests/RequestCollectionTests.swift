@@ -50,6 +50,91 @@ struct RequestCollectionTests {
         try #require(await repository.drainDeliveredEvents().turns.first { $0.threadID == thread })
     }
 
+    @Test func standaloneRequestsNeedNoToolCallAndResolveByTheirOwnIdentity() async throws {
+        let repository = MonitoringRepository(policy: .explicit)
+        started(repository)
+        let epoch = repository.observationEpoch
+        for (index, signal) in [MonitoringSignal.inputWaitOpened, .approvalWaitOpened].enumerated() {
+            repository.submit(MonitoringEvidence(signal: signal, threadID: "thread",
+                observedAt: t0.addingTimeInterval(Double(index + 1)), turnID: "turn",
+                requestID: "request-\(index)", request: AgentRequest(id: "native", toolName: nil,
+                    form: signal == .inputWaitOpened ? .question("Which region?") : .document("Review this plan"))), in: epoch)
+        }
+        var state = try await turn(repository)
+        #expect(state.waits.openCalls.isEmpty)
+        #expect(state.requestsAwaitingAnAnswer.map(\.id) == ["request-0", "request-1"])
+        #expect(state.waits.inputs.first?.toolUseID == nil)
+        #expect(state.waits.approvals.first?.toolUseID == nil)
+        // An unrelated tool result is no resolution of a standalone request.
+        close(repository, call: "request-0", at: 3)
+        #expect(try await turn(repository).requestsAwaitingAnAnswer.count == 2)
+        repository.submit(MonitoringEvidence(signal: .requestResolved, threadID: "thread",
+            observedAt: t0.addingTimeInterval(4), turnID: "turn", requestID: "request-0"), in: epoch)
+        state = try await turn(repository)
+        #expect(state.status == .approvalNeeded)
+        #expect(state.requestsAwaitingAnAnswer.map(\.id) == ["request-1"])
+        repository.submit(MonitoringEvidence(signal: .turnEnded, threadID: "thread",
+            observedAt: t0.addingTimeInterval(5), turnID: "turn"), in: epoch)
+        #expect(try await turn(repository).requestsAwaitingAnAnswer.isEmpty)
+    }
+
+    @Test func requestOccurrencesSeparateProducersRevisionsAndReopenedIdentities() async throws {
+        let repository = MonitoringRepository(policy: .explicit)
+        started(repository)
+        repository.submit(MonitoringEvidence(signal: .subagentStarted, threadID: "thread",
+            observedAt: t0, turnID: "child-turn", agentID: "child"), in: repository.observationEpoch)
+        func ask(_ time: Double, producer: String? = nil, revision: String = "v1") {
+            repository.submit(MonitoringEvidence(signal: .approvalWaitOpened, threadID: "thread",
+                observedAt: t0.addingTimeInterval(time), turnID: producer == nil ? "turn" : "child-turn",
+                agentID: producer, requestID: "same", requestRevision: revision,
+                request: AgentRequest(id: "same", toolName: nil, form: .document("Identical words"))),
+                in: repository.observationEpoch)
+        }
+        ask(1)
+        ask(2, producer: "child")
+        var state = try await turn(repository)
+        let original = try #require(state.requestsAwaitingAnAnswer.first)
+        #expect(state.requestsAwaitingAnAnswer.count == 2)
+        #expect(original.asked != state.requestsAwaitingAnAnswer[1].asked)
+        #expect(state.subagentSlots["child"]?.openCalls.isEmpty == true)
+        ask(3)
+        #expect(try await turn(repository).requestsAwaitingAnAnswer.first?.identity == original.identity)
+        ask(4, revision: "v2")
+        let revised = try #require(try await turn(repository).requestsAwaitingAnAnswer.first)
+        #expect(revised.identity != original.identity)
+        repository.submit(MonitoringEvidence(signal: .requestResolved, threadID: "thread",
+            observedAt: t0.addingTimeInterval(5), turnID: "turn", requestID: "same", requestRevision: "v1"),
+            in: repository.observationEpoch)
+        #expect(try await turn(repository).requestsAwaitingAnAnswer.first?.identity == revised.identity)
+        repository.submit(MonitoringEvidence(signal: .requestResolved, threadID: "thread",
+            observedAt: t0.addingTimeInterval(6), turnID: "turn", requestID: "same", requestRevision: "v2"),
+            in: repository.observationEpoch)
+        _ = try await turn(repository)
+        ask(7, revision: "v2")
+        state = try await turn(repository)
+        #expect(state.requestsAwaitingAnAnswer.first?.identity != revised.identity)
+        #expect(state.subagentsAwaitingApprovalCount == 1)
+        await repository.resetIntegrationObservation(clearTurns: true)
+        started(repository)
+        ask(8, revision: "v2")
+        #expect(try await turn(repository).requestsAwaitingAnAnswer.first?.identity?.epoch != original.identity?.epoch)
+    }
+
+    @Test func anUnreadableStandaloneWaitStillResolvesItsNativeRevision() async throws {
+        let repository = MonitoringRepository(policy: .explicit)
+        started(repository)
+        let epoch = repository.observationEpoch
+        repository.submit(MonitoringEvidence(signal: .inputWaitOpened, threadID: "thread",
+            observedAt: t0.addingTimeInterval(1), turnID: "turn", requestID: "r", requestRevision: "v2"), in: epoch)
+        #expect(try await turn(repository).status == .inputNeeded)
+        repository.submit(MonitoringEvidence(signal: .requestResolved, threadID: "thread",
+            observedAt: t0.addingTimeInterval(2), turnID: "turn", requestID: "r", requestRevision: "v1"), in: epoch)
+        #expect(try await turn(repository).status == .inputNeeded)
+        repository.submit(MonitoringEvidence(signal: .requestResolved, threadID: "thread",
+            observedAt: t0.addingTimeInterval(3), turnID: "turn", requestID: "r", requestRevision: "v2"), in: epoch)
+        #expect(try await turn(repository).status == .running)
+    }
+
     /// Two approvals on one producer are both held, both drawn in turn, and
     /// resolved one at a time; the status stands until the last one goes.
     @Test func twoApprovalsOnOneProducerResolveOneAtATime() async throws {

@@ -29569,6 +29569,90 @@ for line in sys.stdin:
         #expect(!store.isAnswerInFlight)
     }
 
+    @Test @MainActor
+    func readingOnlySetsAndConcurrentRequestsCanBeBrowsedWithoutAnswers() async throws {
+        let questions = (0..<3).map { index in
+            AgentQuestion(id: index, header: "Question", text: "Read question \(index)", options: [],
+                          allowsSeveralAnswers: false)
+        }
+        let first = AgentRequest(id: "read-1", toolName: nil, form: .questions(questions))
+        let second = AgentRequest(id: "read-2", toolName: nil, form: .document("A separate request"))
+        let row = MonitoredSession(agent: .claudeCode, threadID: "reading", turnID: "turn", projectName: "Demo",
+            title: "Read requests", preview: nil, status: .inputNeeded, startedAt: Date(), requests: [first, second])
+        let service = AnsweringMonitoringStub(agent: .claudeCode, sessions: [row])
+        let store = MonitorStore(displays: [], services: [service], initialSnapshot:
+            AgentSnapshot(agent: .claudeCode, availability: .ready, sessions: [row], quota: .noneReported, diagnostic: nil))
+        store.toggleOpenRow(row)
+        #expect(store.openAnswerRow == nil)
+        #expect(store.openRequestCount == 2)
+        #expect(store.canGoForwardAQuestion)
+        store.goForwardAQuestion()
+        #expect(store.openRowBody?.position?.index == 2)
+        #expect(store.takeKey(.step(1)))
+        #expect(store.openRowBody?.position?.index == 3)
+        #expect(!store.canGoForwardAQuestion)
+        #expect(!store.takeKey(.submit))
+        store.stepRequest(1)
+        #expect(store.openRequest?.id == "read-2")
+        #expect(!store.canGoForwardAQuestion)
+        store.stepRequest(-1)
+        #expect(store.openQuestionIndex == 2, "each request keeps its reading position")
+        store.goBackAQuestion()
+        #expect(store.openQuestionIndex == 1)
+        let width = PanelMetrics.requestBodyWidth + 2 * PanelMetrics.sessionRowPadding
+        let height = try #require(store.openRowHeight)
+        let host = NSHostingView(rootView: OpenRow(session: row).environmentObject(store).frame(width: width))
+        host.frame.size = NSSize(width: width, height: height)
+        host.layoutSubtreeIfNeeded()
+        #expect(abs(host.fittingSize.height - height) < 1)
+        if let output = ProcessInfo.processInfo.environment["NOTCHLINE_REQUEST_FIGURE"] {
+            try AnatomyFigureRenderer.png(OpenRow(session: row).environmentObject(store),
+                size: CGSize(width: width, height: height), to: URL(fileURLWithPath: output))
+        }
+        #expect(await service.handlesUsed().isEmpty)
+        #expect(store.sessions.first?.status == .inputNeeded)
+    }
+
+    @Test @MainActor
+    func equalNativeRequestsKeepSeparateDraftsAndLateOutcomes() async throws {
+        let epoch = MonitoringEpoch()
+        let first = AgentRequest(id: "same", toolName: "Bash", form: .command("ls"), answerHandle: AnswerHandle(ticket: 1))
+            .scoped(AgentRequest.Identity(epoch: epoch, threadID: "t-1", turnID: "u-1", producerID: "a",
+                requestID: "same", nativeRevision: nil), preserving: nil)
+        let second = AgentRequest(id: "same", toolName: "Bash", form: .command("ls"), answerHandle: AnswerHandle(ticket: 2))
+            .scoped(AgentRequest.Identity(epoch: epoch, threadID: "t-1", turnID: "u-1", producerID: "b",
+                requestID: "same", nativeRevision: nil), preserving: nil)
+        func row(_ requests: [AgentRequest]) -> MonitoredSession {
+            MonitoredSession(agent: .claudeCode, threadID: "t-1", turnID: "u-1", projectName: "Demo",
+                title: "Concurrent requests", preview: nil, status: .approvalNeeded, startedAt: Date(), requests: requests)
+        }
+        let service = AnsweringMonitoringStub(agent: .claudeCode, sessions: [row([first, second])])
+        let store = MonitorStore(displays: [], services: [service], initialSnapshot:
+            AgentSnapshot(agent: .claudeCode, availability: .ready, sessions: [row([first, second])], quota: .noneReported, diagnostic: nil))
+        store.toggleOpenRow(row([first, second]))
+        store.answerDraftChanged(to: "draft A")
+        store.stepRequest(1)
+        #expect(store.openRequest?.identity == second.identity)
+        #expect(store.answerDraft.isEmpty)
+        store.answerDraftChanged(to: "draft B")
+        store.stepRequest(-1)
+        #expect(store.answerDraft == "draft A")
+        await service.holdAnswers()
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.refusal)
+        #expect(await eventually { await service.isHoldingAnAnswer })
+        store.stepRequest(1)
+        #expect(store.openRequest?.identity == first.identity, "no browsing during submission")
+        await service.publish([row([second])])
+        store.refreshNow()
+        #expect(await eventually { store.sessions.first?.requests.count == 1 })
+        await service.release(with: .sent)
+        #expect(await eventually { !store.isAnswerInFlight && store.openRequest?.identity == second.identity })
+        #expect(store.answerDraft == "draft B")
+        #expect(store.answerNotices["claudeCode:t-1:u-1"] == nil)
+        #expect(await service.handlesUsed() == [AnswerHandle(ticket: 1)])
+    }
+
     /// The request a person is reading stays on screen while it is still
     /// among the row's, whatever the product now puts first.
     ///

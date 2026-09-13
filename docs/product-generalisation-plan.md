@@ -6,7 +6,7 @@ This is an authorised implementation plan, dated 2026-09-12, following an audit 
 
 The objective is to integrate another coding-agent product, and its supported higher-level capabilities, by adding boundary adapters and composition code. Reimplementing ordering, Turn reduction, request selection, answer drafts, dismissal or aggregation for each product is not acceptable. A new native protocol still needs an adapter; generalisation cannot manufacture evidence the product does not provide.
 
-The user authorised documenting all five work packages and implementing work package 1, then explicitly requested **work package 5 next**. On 2026-09-12 the remaining three were audited, re-ordered and implemented as 3, 4 and 2 (the audit record below says why), each with its own handover. All five are complete; §9's fixture landed with package 2. The rule that a package must not quietly broaden into another's scope still governs any later change here.
+The user authorised documenting all five work packages and implementing work package 1, then explicitly requested **work package 5 next**. On 2026-09-12 the remaining three were audited, re-ordered and implemented as 3, 4 and 2 (the audit record below says why), each with its own handover. All five packages landed; §9's original fixture landed with package 2. A subsequent review found incomplete conformance at the standalone-request and presentation boundaries; §11 records the correction. The rule that a package must not quietly broaden into another's scope still governs any later change here.
 
 Read `../AGENTS.md` and `../CONTEXT.md` first. All paths below are relative to the repository root. Documentation and user-readable strings use British English. Use the current source and tests over an outdated line reference or this plan's proposed type names.
 
@@ -313,3 +313,19 @@ Before committing each complete package:
 6. Commit the complete package directly on `master` under repository policy. Do not push without separate authorisation.
 
 Resume at the first incomplete package. Re-read its execution record and current source before coding; never infer that a future package was completed merely because its planned type name appeared during an earlier refactor.
+
+## 11. Conformance follow-up (2026-09-12)
+
+The earlier “all complete” record overstated the acceptance evidence: native request IDs still required a tool call; producer identity was lost in `AgentRequest.asked`; and the synthetic answering fixture did not test full reading-only browsing. The follow-up keeps the five-package architecture and closes those gaps rather than adding another Provider abstraction.
+
+Standalone waits no longer invent tool calls. Requests carry scoped occurrence identities, native revisions are optional and versioned resolutions are matched precisely. Body replacements and identity reuse invalidate old drafts and late outcomes. All questions in a reading-only set and all requests on a row can be browsed without sending; each live request preserves its own question position and draft state.
+
+The previously recorded slow scheduled-read limitation is also superseded: reads run behind held evidence and wake the runtime on completion. Single-flight, backoff, consumed deadlines, pending-edge accounting and disconnect generation guards remain. The answer handle no longer refers to a Hooks-owned type alias.
+
+Rejected: fabricating a call ID for standalone requests; using visible words as cross-producer identity; enabling answer controls merely to browse; discarding drafts on request switching; an unconditional polling loop; and a new native integration. Existing main/subagent selection policy and native encoders remain unchanged.
+
+The focused suite passed. The first full run passed 905 of 906 test definitions, with one existing App Server test (`lateResponseDuringGracePeriodPreventsLivenessProbe`) failing at `initialize`; the later full run passed 907 definitions and 910 executions with zero failures or skips, including the added unreadable-request revision case. Release app build passed. The actual `OpenRow` was rasterised offscreen and inspected: concurrent-request navigation, question 2 of 3, and reading-only Back/Next controls fit without overlap. The final full run after scroll-state isolation also passed 907 definitions and 910 executions, with zero failures or skips. The non-public integration registry was checked: no private source, schema, native operation or discovery path changes in this follow-up.
+
+Optimised source measurement used the actual before/after `MonitoringSourceComposition` with `swiftc -O`, Swift 5, main-actor default isolation and `NonisolatedNonsendingByDefault`, matching the Release concurrency settings. Cumulative process CPU (`getrusage`) covered 1,000 refresh/deadline cycles in each of three samples. A parked source read once: before **8.12–9.65 ms**, after **6.89–7.27 ms**. A source due every cycle completed exactly 1,000 additional reads: before **24.36–25.38 ms**, after **18.65–20.91 ms**. These are small synthetic source-composition measurements, not app idle CPU or native I/O measurements; the ranges do not establish a general speedup. A separate source suspended for 200 ms: the previous refresh returned after **200.79 ms**, and the new refresh returned after **0.018 ms**, with completion awaited separately. This verifies removal of the blocking dependency, not a native transport latency guarantee.
+
+Request-body scroll state is also scoped to the request occurrence: switching between identical native IDs and words from separate producers resets the body rather than inheriting the previous request's offset. Only the question index and drafts are restored on returning to a live request.

@@ -25,6 +25,8 @@ nonisolated struct MonitoringEvidence: Sendable {
     /// from the calls they concern; nil where the call's id is the identity,
     /// as on both hook products. A resolution names the same identity.
     var requestID: String? = nil
+    /// Where the native protocol versions a request separately from its ID.
+    var requestRevision: String? = nil
     var toolName: String? = nil
     var prompt: String? = nil
     var finalText: String? = nil
@@ -71,7 +73,7 @@ nonisolated struct MonitoringStatistics: Sendable {
 
 /// Capture when subscribing to a native stream. Resetting observation rejects
 /// callbacks still carrying the previous subscription's token.
-nonisolated struct MonitoringEpoch: Sendable, Equatable {
+nonisolated struct MonitoringEpoch: Sendable, Hashable {
     fileprivate let id = UUID()
 }
 
