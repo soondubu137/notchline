@@ -1139,7 +1139,7 @@ private struct AboutUpdateControl: View {
         }
         .buttonStyle(.plain)
         .animation(
-            .easeOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration),
+            .easeOut(duration: NotchPalette.RowEmphasis.controlHoverDuration),
             value: isHovered
         )
     }
@@ -1642,12 +1642,6 @@ private struct FooterSpendLineContent: View {
             maxWidth: .infinity,
             minHeight: PanelMetrics.recentSeamHeight,
             maxHeight: PanelMetrics.recentSeamHeight
-        )
-        .animation(
-            isHovered
-                ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
-                : .easeInOut(duration: NotchPalette.RowEmphasis.hoverExitDuration),
-            value: isHovered
         )
     }
 }
@@ -3624,12 +3618,6 @@ private struct SeamContent: View {
         )
         .animation(.easeOut(duration: 0.16), value: store.isRecentExpanded)
         .animation(
-            isHovered
-                ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
-                : .easeInOut(duration: NotchPalette.RowEmphasis.hoverExitDuration),
-            value: isHovered
-        )
-        .animation(
             isPressed
                 ? .easeInOut(duration: NotchPalette.RowEmphasis.pressEnterDuration)
                 : .easeInOut(duration: NotchPalette.RowEmphasis.pressExitDuration),
@@ -3771,12 +3759,6 @@ private struct RetiredRowContent: View {
             maxWidth: .infinity,
             minHeight: PanelMetrics.retiredRowHeight,
             maxHeight: PanelMetrics.retiredRowHeight
-        )
-        .animation(
-            isHovered
-                ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
-                : .easeInOut(duration: NotchPalette.RowEmphasis.hoverExitDuration),
-            value: isHovered
         )
         .animation(
             isPressed
@@ -3952,12 +3934,6 @@ struct SessionRowContent: View {
             maxHeight: PanelMetrics.sessionRowHeight
         )
         .animation(
-            isHovered
-                ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
-                : .easeInOut(duration: NotchPalette.RowEmphasis.hoverExitDuration),
-            value: isHovered
-        )
-        .animation(
             isPressed
                 ? .easeInOut(duration: NotchPalette.RowEmphasis.pressEnterDuration)
                 : .easeInOut(duration: NotchPalette.RowEmphasis.pressExitDuration),
@@ -4113,15 +4089,9 @@ private struct SessionStatusControl: View {
                 )
                 .fill(ground)
             )
-            // The row's own curve, on the row's own values: a chip that lit at
-            // a different speed from the row it sits on would read as two
-            // things answering one pointer.
-            .animation(
-                isMarkHovered
-                    ? .easeInOut(duration: NotchPalette.RowEmphasis.hoverEnterDuration)
-                    : .easeInOut(duration: NotchPalette.RowEmphasis.hoverExitDuration),
-                value: isMarkHovered
-            )
+            // No curve, like the row it sits on: a chip that lit at a
+            // different speed from its row would read as two things answering
+            // one pointer (``NotchPalette/RowEmphasis/controlHoverDuration``).
             // An overlay rather than a background, and it declines every hit:
             // a view behind the content never wins the hit test, and this one
             // must not win it anyway -- the tap below is the target.

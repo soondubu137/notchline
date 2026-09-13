@@ -215,12 +215,18 @@ enum NotchPalette {
         static let plainControlRestFillOpacity: Double = 0.14
         static let plainControlHoverFillOpacity: Double = 0.18
 
-        /// Ease-in-out both ways -- the same gentle acceleration and
-        /// deceleration whether the emphasis is arriving or leaving -- and
-        /// still faster to leave than to arrive, the one asymmetry worth
-        /// keeping.
-        static let hoverEnterDuration: Double = 0.13
-        static let hoverExitDuration: Double = 0.09
+        /// ~~Ease-in-out both ways, `0.13` in and `0.09` out.~~ **Superseded:
+        /// a row's hover wash does not animate.** A list is swept, not
+        /// visited: a pointer crossing a row in `40` ms left the wash a fifth
+        /// of the way up, and the fade out lit a trail of rows behind it, so a
+        /// fast pass read as the panel lagging the hand. With no curve exactly
+        /// one row is lit and it is lit fully, the way a menu answers. This
+        /// holds for every row, both folding bars and the waiting mark on a
+        /// row -- anything the pointer passes through on its way somewhere.
+        ///
+        /// A lone control that is aimed at rather than swept keeps a short
+        /// fade in (``AboutUpdateControl``).
+        static let controlHoverDuration: Double = 0.13
         static let pressEnterDuration: Double = 0.08
         static let pressExitDuration: Double = 0.10
     }
