@@ -1,14 +1,36 @@
 # Changelog
 
-## Unreleased
-
-- Add Trae Desktop at L5 for the verified 3.5.91 local IDE build: native Thread/Turn identity, displayed context and progress, reading-only ordinary commands and structured questions, and exact Thread navigation. Install the companion in Settings and reopen Trae. Answers, read removal, quota, subagents, cold-start recovery, SOLO, remote and Plan/Spec are outside this release.
-- **Choose which products the quota table shows.** Settings has a new `Quota table` card with one switch per product, all on by default. A product switched off loses its block in the table. Today's total still counts every connected product. With every product off, the footer shows the total alone, with no chevron. (`docs/quota-footer-v2.md` §13.)
-
-
 What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
+
+## 0.4.0 Alpha — 2026-09-13
+
+**Notchline watches a fourth product, Trae Desktop, at L5.** In Trae 3.5.91's local IDE mode, a row shows each Turn with Trae's own title, the workspace folder and the text Trae is displaying. When Trae asks for a command approval or poses a question, the row shows the full request, to be answered in Trae. It is the first product watched without hooks, through a companion extension that Notchline installs. (`docs/product-support.md`, `docs/trae-integration.md`.)
+
+### Added
+
+- **Trae Desktop, at L5.** Switch on `Trae Desktop` in Settings, then reopen Trae's windows. Notchline installs its companion extension through Trae's own CLI and removes it when switched off. It modifies nothing in Trae's bundle, hooks or workspace. Rows cover local IDE root Threads, from native Turn start to completion, failure or cancellation.
+- **Trae requests are read on the notch.** Ordinary manual command approvals show the command and its arguments. Question sets show every question in order, with descriptions, single or multiple choice, the Others field and Trae's text limits. Controls are reading-only; answer in Trae.
+- **A Trae row opens its exact Thread.** A click selects the observed Thread in its owning window and confirms the selection. If that cannot be confirmed, it says only that Trae was raised.
+- **Choose which products the quota table shows.** Settings has a new `Quota table` card with one switch per product, all on by default. A product switched off loses its block in the table. Today's total still counts every connected product. When no connected product is kept, the footer shows the total alone, with no chevron. (`docs/quota-footer-v2.md` §13.)
+
+### Changed
+
+- **A swept row lights its hover wash on the frame the pointer reaches it.** Crossing a row takes about 40 ms, so the old 0.13 s fade left each row barely lit and trailed a wash behind the pointer. Rows, folding bars and the waiting mark now highlight instantly. Press feedback keeps its own curve.
+- **`docs/product-support.md` opens with a dated one-table summary of every product and scope,** in English and Simplified Chinese.
+
+### Fixed
+
+- **A Claude Code question no longer reads `Request 1 of 2`.** Claude Code opens a question with two events about one call, so the question's own permission prompt was listed as a second request. It now counts as part of that question.
+
+### Known limitations
+
+- **Trae is pinned to the verified 3.5.91 build.** The companion checks Trae's version and file fingerprints before it connects. Any other build is not watched until it has been verified.
+- **Only Turns that start after the companion connects appear.** Already-running and historical Turns are never admitted. A finished Trae row stays until its next Turn or a right-click: there is no read removal, quota, token count or subagent activity.
+- **IDE-hosted SOLO has no declared level.** Lifecycle and question reading were verified natively, but the tested Turns supplied no preview text and no manual command approval was induced. Standalone SoloLite, remote workspaces, Plan/Spec and rich permission forms are excluded. (`docs/technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md`.)
+
+Everything listed under `0.3.0` and earlier still stands, unchanged.
 
 ## 0.3.0 Alpha — 2026-09-12
 
