@@ -173,7 +173,7 @@ The shipped transport is a `type: "command"` handler running a four-line helper 
 
 ### 5.2 Event count
 
-The proposal was 4 registrations, possibly 3, with one `Notification` registration covering every notification type by `notification_type`. What shipped is different and larger, for reasons measured later (CC-011 withdrew `Notification` once its types were measured, and subagent boundaries were added). **Count `managedDefinitions` in `HookIntegration.swift` rather than trusting a number in prose.**
+The proposal was 4 registrations, possibly 3, with one `Notification` registration covering every notification type by `notification_type`. What shipped is different and larger, for reasons measured later (CC-011 withdrew `Notification` once its types were measured, and subagent boundaries were added). **Count `managedDefinitions` in `ClaudeCodeHookVocabulary.swift` rather than trusting a number in prose.**
 
 ### 5.3 Session discovery: event-driven, not polled
 
@@ -372,6 +372,6 @@ Its original exclusion was that it is the one event whose failure writes to the 
 - Official CLI reference (including `claude agents --json`): <https://code.claude.com/docs/en/cli-reference>
 - Official deep links: <https://code.claude.com/docs/en/deep-links>
 - Official Desktop app: <https://code.claude.com/docs/en/desktop>
-- Current domain state, hook reducer and orchestrator: [`MonitorDomain.swift`](../../../Notchline/Notchline/MonitorDomain.swift), [`HookIntegration.swift`](../../../Notchline/Notchline/HookIntegration.swift), [`LiveCodexMonitorService.swift`](../../../Notchline/Notchline/LiveCodexMonitorService.swift)
+- Current domain state, hook reducer and orchestrator: [`MonitorDomain.swift`](../../../Notchline/Notchline/MonitorDomain.swift), [`HookIntegration.swift`](../../../Notchline/Notchline/HookIntegration.swift), [`LiveCodexMonitorService.swift`](../../../Notchline/Notchline/Products/Codex/LiveCodexMonitorService.swift)
 - Current architecture: [`system-architecture.md`](../../system-architecture.md)
 - Non-public dependency registration rules: [`AGENTS.md`](../../../AGENTS.md)

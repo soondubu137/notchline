@@ -87,7 +87,7 @@ Notchline 不提供持久权限规则。请求形态、编码限制和交付语�
 
 ## 5. 当前产品支持范围
 
-此矩阵描述当前实现，不代表每个已安装的产品版本。已有测量和限制仍记录在链接指向的实现文档中。新版本或新模式在核对证据前属于尚未验证。尤其需要注意：当前[回答编码](../Notchline/Notchline/RequestAnswering.swift)会拒绝 Codex 的问题答案；能够识别或绘制问题，不代表存在写入路径。
+此矩阵描述当前实现，不代表每个已安装的产品版本。已有测量和限制仍记录在链接指向的实现文档中。新版本或新模式在核对证据前属于尚未验证。尤其需要注意：当前[回答编码](../Notchline/Notchline/Products/Codex/CodexHookVocabulary.swift)会拒绝 Codex 的问题答案；能够识别或绘制问题，不代表存在写入路径。
 
 | 功能 | Codex Desktop | Claude Code（Desktop 与 CLI） | Antigravity（Desktop 与 CLI） | Trae Desktop（本地 IDE） |
 | --- | --- | --- | --- | --- |

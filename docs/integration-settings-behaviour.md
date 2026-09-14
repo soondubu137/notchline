@@ -30,7 +30,7 @@ Same store path and convergence, different setup actor: `ManagedHooksSetup.insta
 - A pre-ADR-0013 `http` handler is recognised by its `/codex-in-notch/hook` marker and **removed** while the current handler is written.
 - There is no trust step. The socket binds at the next refresh's `HookLifecycleSource.gate(productName:)`, which writes the helper before it reads the status and binds only once that status is `active`.
 
-> Count these in `HookIntegration.swift`'s two `managedDefinitions`, never from prose: this line has read six, five, eleven and twelve at various times, and each was a document lagging an event being added.
+> Count these in the two `managedDefinitions`, in `CodexHookVocabulary.swift` and `ClaudeCodeHookVocabulary.swift`, never from prose: this line has read six, five, eleven and twelve at various times, and each was a document lagging an event being added.
 
 ## 3. Turning either switch off
 

@@ -87,7 +87,7 @@ Metadata and progress also retain their detailed declarations even though they c
 
 ## 5. Current product coverage
 
-This matrix describes the current implementation, not every installed product version. Existing measurements and limits remain in the linked implementation documents. A new version or mode is unverified until its evidence has been checked. In particular, Codex question answers are rejected by the current [answer encoding](../Notchline/Notchline/RequestAnswering.swift); detecting or rendering a question does not establish a write path.
+This matrix describes the current implementation, not every installed product version. Existing measurements and limits remain in the linked implementation documents. A new version or mode is unverified until its evidence has been checked. In particular, Codex question answers are rejected by the current [answer encoding](../Notchline/Notchline/Products/Codex/CodexHookVocabulary.swift); detecting or rendering a question does not establish a write path.
 
 | Feature | Codex Desktop | Claude Code (Desktop and CLI) | Antigravity (Desktop and CLI) | Trae Desktop (local IDE) |
 | --- | --- | --- | --- | --- |

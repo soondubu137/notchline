@@ -47,7 +47,7 @@ Sources: [Notchline overview](../../README.md), [Notchline answers](../answer-in
 | **5. Claude quota without requiring an interactive terminal status line** | Invokes `claude -p "/usage" --output-format json` and parses the returned quota text. This can obtain quota while using Claude Desktop without first seeding a terminal status-line cache. It also recognises model-specific weekly windows when present. | Reads cached `five_hour` and `seven_day` windows written by its managed status-line bridge. Its README explicitly notes that Claude Desktop alone does not refresh that cache. No equivalent model-specific weekly window is represented by `ClaudeUsageSnapshot`. [N6][n-claude-usage] [O5][oi-claude-usage] [O6][oi-statusline] |
 | **6. Today's token totals, per product and combined** | The footer shows daily token totals as well as quota. Codex comes from `account/usage/read`; Claude Code counts transcript usage, including cache reads, with incomplete readings reported as unavailable. | The inspected usage models and settings expose rate-limit percentages and resets, without an equivalent daily token counter or combined Today total. [N7][n-tokens] [N8][n-footer] [N9][n-usage-design] [O5][oi-claude-usage] [O7][oi-codex-usage] |
 | **7. Processing time for the current Turn** | Shows a Turn's elapsed wall-clock time, including waiting and sleep, then its finished duration. The compact surface can show the longest running Turn. | Shows activity age and Claude subagent elapsed readings. No equivalent parent-Turn processing-time readout, including its stopped duration, was found. These readings answer different questions. [N8][n-footer] [N10][n-store] [O1][oi-presence] [O8][oi-panel] |
-| **8. An editable explanation when refusing an ordinary permission request** | The answer field can carry a refusal reason or an instruction about what to do instead. Both Codex and Claude answer encoders preserve that message. | The ordinary approval card exposes Deny, Allow Once and a tool-level Always Allow action. The app supplies a fixed denial message; that card has no equivalent editable refusal field. This is separate from its typed answers to questions. [N11][n-answer-code] [N8][n-footer] [O8][oi-panel] [O3][oi-model] |
+| **8. An editable explanation when refusing an ordinary permission request** | The answer field can carry a refusal reason or an instruction about what to do instead. Both Codex and Claude answer encoders preserve that message. | The ordinary approval card exposes Deny, Allow Once and a tool-level Always Allow action. The app supplies a fixed denial message; that card has no equivalent editable refusal field. This is separate from its typed answers to questions. [N11][n-answer-claude-code] [N11][n-answer-codex] [N8][n-footer] [O8][oi-panel] [O3][oi-model] |
 
 Important limits on these differences:
 
@@ -96,7 +96,7 @@ Sources: [Notchline README](../../README.md), [Notchline changelog](../../CHANGE
 | OpenCode permission/question requests | Product not supported | Plugin and bridge paths exist for both |
 | New prompt after completion | Not provided | Optional tmux/Ghostty terminal text submission |
 
-Sources: [Notchline request forms][n-request], [answer encoders][n-answer-code], [Open Island Codex installer][oi-codex-installer], [Codex hook schema][oi-codex-hooks], [rollout interpretation][oi-rollout], [bridge][oi-bridge], [OpenCode plugin][oi-opencode] and [terminal text sender][oi-text].
+Sources: [Notchline request forms][n-request], answer encoders ([Claude Code][n-answer-claude-code], [Codex][n-answer-codex]), [Open Island Codex installer][oi-codex-installer], [Codex hook schema][oi-codex-hooks], [rollout interpretation][oi-rollout], [bridge][oi-bridge], [OpenCode plugin][oi-opencode] and [terminal text sender][oi-text].
 
 Two corrections matter when interpreting Open Island's documentation:
 
@@ -118,16 +118,17 @@ No CPU, memory, latency or battery ranking is asserted here. Both projects conta
 This change adds only a comparison document. It adds, modifies, migrates or removes **no non-public Codex integration**. Existing private dependencies were checked against the [integration registry](../non-public-codex-integration-features.md); the tables describe them without changing their contracts.
 
 [n-read]: ../adr/0012-read-state-is-answered-per-product-or-not-at-all.md
-[n-project]: ../../Notchline/Notchline/CodexDesktopProjectMetadata.swift
-[n-reviewer]: ../../Notchline/Notchline/CodexDesktopApprovalRouting.swift
+[n-project]: ../../Notchline/Notchline/Products/Codex/CodexDesktopProjectMetadata.swift
+[n-reviewer]: ../../Notchline/Notchline/Products/Codex/CodexDesktopApprovalRouting.swift
 [n-aggregation]: ../../Notchline/Notchline/MonitorDomain.swift
 [n-hooks]: ../../Notchline/Notchline/HookIntegration.swift
-[n-claude-usage]: ../../Notchline/Notchline/ClaudeCodeUsageReader.swift
-[n-tokens]: ../../Notchline/Notchline/ClaudeCodeTokenCounter.swift
+[n-claude-usage]: ../../Notchline/Notchline/Products/ClaudeCode/ClaudeCodeUsageReader.swift
+[n-tokens]: ../../Notchline/Notchline/Products/ClaudeCode/ClaudeCodeTokenCounter.swift
 [n-footer]: ../../Notchline/Notchline/NotchOverlayView.swift
 [n-usage-design]: ../tech-design.md
 [n-store]: ../../Notchline/Notchline/MonitorStore.swift
-[n-answer-code]: ../../Notchline/Notchline/RequestAnswering.swift
+[n-answer-claude-code]: ../../Notchline/Notchline/Products/ClaudeCode/ClaudeCodeHookVocabulary.swift
+[n-answer-codex]: ../../Notchline/Notchline/Products/Codex/CodexHookVocabulary.swift
 [n-prd]: ../PRD.md
 [n-claude-jump]: ../../Notchline/Notchline/ProcessHostNavigator.swift
 [n-settings]: ../../Notchline/Notchline/SettingsWindow.swift

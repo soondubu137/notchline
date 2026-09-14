@@ -478,7 +478,7 @@ The registered events are `UserPromptSubmit`, `PermissionRequest`, `SubagentStar
 
 Installation health requires exactly one current handler for each registered definition, with the command and the timeout matching that definition's exactly and the group carrying no matcher; any subset, a duplicate definition, or an altered field must fail closed to `mismatched` (shown on the card as `repairRequired`) rather than Ready.
 
-> The count is deliberately not restated in prose anywhere in this file — it has read five, six and seven at various points. Count `managedDefinitions` in `HookIntegration.swift`.
+> The count is deliberately not restated in prose anywhere in this file — it has read five, six and seven at various points. Count `managedDefinitions` in each product's `Products/<Name>/<Name>HookVocabulary.swift`.
 
 Two merge rules, both justified by the measured shape of the trust key — 2026-08-20 this machine held `[hooks.state."…/hooks.json:pre_tool_use:0:0"]`, whose third segment is the group's **index** in the array:
 
