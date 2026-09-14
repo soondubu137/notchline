@@ -43,6 +43,8 @@ The cut commit, tag and pre-release stay as they were. Then:
 
 The upload comes first. A feed pushed ahead of its archive offers every copy a download that does not exist yet.
 
+`scripts/release/cut-release.sh <version>` takes the whole cut in this order, from the version bump to a signed-out check of the published feed. Before it pushes the feed, it checks that the release carries an archive of the feed's length.
+
 ## Considered and rejected
 
 - **A hand-rolled updater** (GitHub API, CryptoKit, a swap script). It would have to re-implement what Sparkle already handles:
