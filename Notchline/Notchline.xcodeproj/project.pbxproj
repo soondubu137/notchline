@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		38131100302AE10900286EBC /* LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = 38131101302AE10900286EBC /* LICENSE */; };
+		38131200302AE10900286EBC /* Sparkle in Frameworks */ = {isa = PBXBuildFile; productRef = 38131201302AE10900286EBC /* Sparkle */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -57,6 +58,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				38131200302AE10900286EBC /* Sparkle in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -118,6 +120,7 @@
 			);
 			name = Notchline;
 			packageProductDependencies = (
+				38131201302AE10900286EBC /* Sparkle */,
 			);
 			productName = Notchline;
 			productReference = 38130FF6302AE10800286EBC /* Notchline.app */;
@@ -201,6 +204,9 @@
 			);
 			mainGroup = 38130FED302AE10800286EBC;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				38131202302AE10900286EBC /* XCRemoteSwiftPackageReference "Sparkle" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 38130FF7302AE10800286EBC /* Products */;
 			projectDirPath = "";
@@ -406,6 +412,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Notchline;
 				INFOPLIST_KEY_CFBundleName = Notchline;
 				INFOPLIST_KEY_LSUIElement = YES;
@@ -416,6 +423,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.4.3;
+				NOTCHLINE_UPDATE_CHECKS_AUTOMATICALLY = NO;
+				NOTCHLINE_UPDATE_FEED_URL = "https://raw.githubusercontent.com/soondubu137/notchline/master/appcast.xml";
+				NOTCHLINE_UPDATE_PUBLIC_ED_KEY = "";
 				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.Notchline;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -440,6 +450,7 @@
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Notchline;
 				INFOPLIST_KEY_CFBundleName = Notchline;
 				INFOPLIST_KEY_LSUIElement = YES;
@@ -450,6 +461,9 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 0.4.3;
+				NOTCHLINE_UPDATE_CHECKS_AUTOMATICALLY = YES;
+				NOTCHLINE_UPDATE_FEED_URL = "https://raw.githubusercontent.com/soondubu137/notchline/master/appcast.xml";
+				NOTCHLINE_UPDATE_PUBLIC_ED_KEY = "";
 				PRODUCT_BUNDLE_IDENTIFIER = com.yinfenglu.Notchline;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
@@ -578,6 +592,25 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		38131202302AE10900286EBC /* XCRemoteSwiftPackageReference "Sparkle" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sparkle-project/Sparkle";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.10.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		38131201302AE10900286EBC /* Sparkle */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 38131202302AE10900286EBC /* XCRemoteSwiftPackageReference "Sparkle" */;
+			productName = Sparkle;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 38130FEE302AE10800286EBC /* Project object */;
 }

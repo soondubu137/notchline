@@ -22,6 +22,8 @@ Two more kinds of file are written **outside** the app's own directory — the u
 
 Preferences live in `~/Library/Preferences/com.yinfenglu.Notchline.plist`, with ten keys: `selectedDisplayID`, `privacyMode`, `hidesCompactWings` (`Hide Notchline`; the key kept its name through the rename), `namesWorkOnPill`, `drawsSurfaceOutline`, `groupsSessionsByProduct`, `quotaExpanded`, `quotaHiddenProducts`, `recentExpanded` and `hasCompletedOnboarding`. `quotaHiddenProducts` is the products switched off under Settings' `Quota table`, as an array of product identifiers, and is absent until one is switched off ([`quota-footer-v2.md`](quota-footer-v2.md) §13). `recentExpanded` remembers whether the Recent queue is open; like `quotaExpanded` it is absent until somebody opens that block, and the queue it governs is never itself persisted.
 
+Sparkle keeps its own `SU…` keys in the same file; see [§ Updates](#updates).
+
 **Further keys may be there and are never read.** `productAttribution` retired with the `Distinguish products` picker ([`colour-v2.md`](colour-v2.md) §6), `quotaFolded` with the footer's inverted default ([`quota-footer-v2.md`](quota-footer-v2.md) §8.1), and `aggregateInk` with the `Theme colour` picker itself — the app now draws one fixed ink (`NotchStatusMatrix.swift`'s `NotchPalette.themeInk`) rather than a stored choice. None is deleted from an install that has one. That is what "ignored rather than migrated" means on disk: reading a stale key back would be the migration the decision says there is not, and a plist key nothing reads costs nothing.
 
 Hook payloads are never written to disk at all — they go straight into the in-memory reducer, so there is no preview cache, event queue or session state file ([ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)).
@@ -67,3 +69,17 @@ The companion emits bounded local frames; production stores no transcript, nativ
 ## Product monitoring intent preferences
 
 The existing preferences store now holds `productMonitoringIntent.codex`, `.claudeCode`, `.antigravity` and `.trae`, each `enabled` or `disabled`. These are user choices, never installation or connection evidence. No new marker file is created. Actual setup reads remain product-owned; Trae also reads its companion `package.json` beneath the extension manifest location. See [Product connection checks](product-connections.md).
+
+## Updates
+
+Sparkle ([ADR 0022](adr/0022-update-through-sparkle-signed-with-our-own-certificate.md)) writes these. Only a build with a public key starts it, and nothing is written while hosting tests.
+
+| Location | Contents | Removed |
+| --- | --- | --- |
+| `~/Library/Preferences/com.yinfenglu.Notchline.plist` | `SUHasLaunchedBefore` and `SULastCheckTime`, written at the first launch, which checks at once. `SUUpdateGroupIdentifier` is written by a check that finds an update. The rest appear only on a user's choice in Sparkle's window: `SUSkippedVersion` (and its major-version siblings), `SUAutomaticallyUpdate`, and `SUEnableAutomaticChecks` when it differs from the build's default | Never |
+| `~/Library/Caches/com.yinfenglu.Notchline/` | `org.sparkle-project.Sparkle/`, holding the downloaded archive and its extraction while an update is prepared, plus `URLSession`'s `Cache.db`. After an install, the rehearsal left the empty `Installation/` and `PersistentDownloads/` directories and 124 KB in total | Sparkle empties its own directories; the system may purge caches at any time |
+| `~/Library/HTTPStorages/com.yinfenglu.Notchline/` | `URLSession`'s cookie store for the feed request | Never |
+
+Replacing the bundle keeps its path, so nothing else in this inventory moves: hook helpers are rewritten when their bytes differ from the new build's, and the sockets and records under `Application Support` are the new build's to reuse.
+
+The repository carries two related files the app never writes: `appcast.xml`, the feed every copy reads from `master`, and `scripts/release/designated-requirement.txt`, the requirement every release must satisfy.

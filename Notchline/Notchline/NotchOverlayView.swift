@@ -790,14 +790,14 @@ struct AboutPanelContent: View {
     }
 }
 
-/// The About panel's update control. No update mechanism is wired in yet; drawn live rather
-/// than disabled, since disabled says *not available here*.
+/// The About panel's update control. Sparkle draws the check's progress and result in its own
+/// window, so this stays one live button.
 private struct AboutUpdateControl: View {
     @State private var isHovered = false
 
     var body: some View {
         Button {
-            // Deliberately empty until an update mechanism exists.
+            AppUpdater.shared.checkForUpdates()
         } label: {
             Text("Check for Updates")
                 .font(Font(PanelMetrics.requestControlFont))

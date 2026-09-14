@@ -25,6 +25,8 @@ xcodebuild build -project Notchline/Notchline.xcodeproj -scheme Notchline -desti
 xcodebuild test  -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS' -only-testing:NotchlineTests
 ```
 
+Release archives are built and signed by `scripts/release/build-release.sh`, run on the tagged cut commit. It needs the `Notchline Release` certificate and Sparkle's EdDSA key in the login keychain, which `scripts/release/create-release-identity.sh` created once. Never create either a second time ([ADR 0022](docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md)). The feed, `appcast.xml`, is read by every shipped copy from `master` and must not move.
+
 The unit suite takes a few seconds on a warm build. Anything performance-related must be measured under **Release** (`-configuration Release`); Debug numbers mean nothing here.
 
 **There is no CI and no lint configuration.** Running the tests locally before committing is the only gate.

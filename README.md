@@ -64,7 +64,7 @@ My screens are already full of editors, browsers and communication tools. Notchl
 
 ## Requirements, Installation, and Development
 
-Requires **macOS 26.5+**. Move `Notchline.app` to Applications and open it. It is not notarised; if blocked, use **System Settings → Privacy & Security → Open Anyway** ([instructions](https://support.apple.com/en-ie/102445)).
+Requires **macOS 26.5+**. Move `Notchline.app` to Applications and open it. It is not notarised; if blocked, use **System Settings → Privacy & Security → Open Anyway** ([instructions](https://support.apple.com/en-ie/102445)). That is needed once: Notchline checks for updates daily, or from **About → Check for Updates**, and installs them in place without asking again.
 
 Enable products in onboarding or Settings. Trust Codex hooks using `/hooks`. Enabling Trae installs its companion; reopen Trae’s windows afterwards.
 
@@ -80,7 +80,8 @@ With **Xcode 26.6+**, open `Notchline/Notchline.xcodeproj` and select the **Notc
 | `~/.codex/hooks.json`, `~/.claude/settings.json`, `~/.gemini/config/hooks.json` | Managed hook entries; unrelated settings preserved, existing files backed up beside them as `.notchline-backup` |
 | Trae’s extension storage | Installs/removes `notchline.trae-companion`; removal may also edit its entry in `~/.trae/extensions/extensions.json` |
 | `~/Library/Application Support/Notchline/` | Helpers, local sockets and installation records |
-| `~/Library/Preferences/com.yinfenglu.Notchline.plist` | Preferences |
+| `~/Library/Preferences/com.yinfenglu.Notchline.plist` | Preferences, including the updater's |
+| `~/Library/Caches/com.yinfenglu.Notchline/` | Update downloads while one is prepared |
 | `~/.claude/projects/` | Quota-check transcripts; size shown in Settings, never deleted by Notchline |
 | Memory only | Monitored state, previews and Recent; [full file inventory](docs/artifacts.md) |
 

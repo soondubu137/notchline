@@ -64,7 +64,7 @@
 
 ## 要求、安装与开发
 
-需要 **macOS 26.5+**。将 `Notchline.app` 移至“应用程序”并打开。目前未经公证；若被阻止，请使用 **系统设置 → 隐私与安全 → 仍要打开**（[操作说明](https://support.apple.com/en-ie/102445)）。
+需要 **macOS 26.5+**。将 `Notchline.app` 移至“应用程序”并打开。目前未经公证；若被阻止，请使用 **系统设置 → 隐私与安全 → 仍要打开**（[操作说明](https://support.apple.com/en-ie/102445)）。这一步只需一次：Notchline 每天检查更新，也可在 **关于 → Check for Updates** 中手动检查，更新会原地安装，无需再次确认。
 
 在首次引导或设置中启用产品。Codex 需通过 `/hooks` 信任 Hooks。启用 Trae 会安装配套扩展，随后请重新打开 Trae 窗口。
 
@@ -80,7 +80,8 @@
 | `~/.codex/hooks.json`、`~/.claude/settings.json`、`~/.gemini/config/hooks.json` | 管理 Hook 条目；保留无关设置，修改已有文件前在旁边保存 `.notchline-backup` 备份 |
 | Trae 扩展目录 | 安装／移除 `notchline.trae-companion`；移除时也可能修改 `~/.trae/extensions/extensions.json` 中该扩展的条目 |
 | `~/Library/Application Support/Notchline/` | 辅助程序、本地套接字和安装记录 |
-| `~/Library/Preferences/com.yinfenglu.Notchline.plist` | 偏好设置 |
+| `~/Library/Preferences/com.yinfenglu.Notchline.plist` | 偏好设置，包括更新器的设置 |
+| `~/Library/Caches/com.yinfenglu.Notchline/` | 准备更新时下载的文件 |
 | `~/.claude/projects/` | 配额查询产生的对话记录；设置中显示大小，Notchline 从不删除它们 |
 | 仅内存 | 监控状态、预览和最近记录；[完整文件清单](docs/artifacts.md) |
 

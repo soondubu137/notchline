@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | Researched and partly measured on 2026-09-13 (macOS 26.6.2 25G83, Xcode 26.6); nothing implemented |
+| Status | Researched and measured on 2026-09-13 (macOS 26.6.2 25G83, Xcode 26.6); **built the same day** as [ADR 0022](../../adr/0022-update-through-sparkle-signed-with-our-own-certificate.md), with the feed on `master` (§5.3 option 1). The rehearsal is §10; §7's first-install path is still unmeasured |
 | First recorded | 2026-09-13 |
 | Question | How can Notchline check for, download and install its own updates while it stays unnotarised, without the user re-trusting it on every update? |
 | Audience | Whoever implements the updater and the release pipeline next |
@@ -212,3 +212,34 @@ The apparatus was deleted afterwards, and nothing touched `/Applications`, trust
 - ocade-dictee, ad-hoc to self-signed — <https://github.com/ocade-graciet-system/ocade-dictee/issues/29>
 - Homebrew 5.0.0 — <https://brew.sh/2025/11/12/homebrew-5.0.0/>; Gatekeeper cask deadline — <https://github.com/Homebrew/brew/issues/20755>
 - Xcode and Apple SDKs Agreement — <https://www.apple.com/legal/sla/docs/xcode.pdf>
+
+## 10. Rehearsal record (2026-09-13, after the build)
+
+This rehearsal used the committed scripts with a throwaway keychain and a throwaway EdDSA key file, passed through the scripts' environment overrides. The user's keychain, `/Applications` and the running Debug Notchline were not touched.
+
+- **`create-release-identity.sh` ran end to end with no prompt.**
+  - It wrote a `.p12` backup that opens with the chosen passphrase.
+  - It recorded `identifier "com.yinfenglu.Notchline" and certificate leaf = H"…"`.
+  - A second run refused.
+  - Two things the first draft got wrong:
+    - `security import` refuses the PKCS#8 key `openssl req` writes ("Unknown format in import") and accepts the traditional RSA form.
+    - Sparkle 2.10's key file is the bare 32-byte seed, base64. Seed plus public key is rejected, with the self-contradicting message "must be 64 bytes … Instead it is 64 bytes".
+- **`build-release.sh` built Release twice (builds 16 and 17).**
+  - Every Mach-O in the bundle ended up signed as `Notchline Release`, flags `0x0`.
+  - `Sparkle.framework` no longer contains `XPCServices`.
+  - Of the entitlements, only `files.user-selected.read-only` remained; `get-task-allow` is gone.
+  - The requirement check passed, and `codesign --verify --strict --deep` reported "satisfies its Designated Requirement".
+  - The feed gained two items, newest first, carrying the 0.4.3 changelog section as Markdown.
+- **The install path, on a stand-in host.** Relaunching a real Notchline outside a redirected home would have bound the live hook sockets of the Debug copy on screen, so an `LSUIElement` host linking the same `Sparkle.framework` was used instead. It went through the same `sign_app`, `ditto`, `sign_update` and `add_feed_item.py` steps.
+  - Build 1 found build 2, and Autoupdate logged "OK: EdDSA signature is correct for update".
+  - The update installed in place and relaunched as build 2, all within one second.
+  - The installed bundle carries no `com.apple.quarantine`, still satisfies the same certificate requirement, and verifies strictly.
+  - `syspolicyd` registered each launched bundle "for protection" and, after the scan, logged "Unregistering bundle for protection after scan … (team: (null))". This is the log-level reason §3.3's rows without a Team ID were never protected.
+  - Nothing logged a denial.
+- **Notchline itself, re-signed.** The Release build (build 17) was launched for 7 seconds under `CFFIXED_USER_HOME` and `HOME` pointing at a throwaway home.
+  - It stayed up, and Sparkle started without a configuration error.
+  - The first launch checked the feed **at once**; with no server listening, that failed silently to the log.
+  - Sparkle wrote `SUHasLaunchedBefore` and `SULastCheckTime` into the real preferences domain, which `CFFIXED_USER_HOME` does not redirect. They were removed afterwards, and the domain diffed equal to its snapshot.
+- **`AppUpdaterTests`' feed test was checked against bad feeds.**
+  - With the rehearsal's localhost URLs it fails, and with an older build listed first it fails; with release URLs in the right order it passes.
+  - `#expect(!(x ?? "").isEmpty)` reported a failure while printing the value present, so the check is written `x?.isEmpty == false`.

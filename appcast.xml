@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>Notchline</title>
+    <link>https://github.com/soondubu137/notchline/releases</link>
+    <description>Notchline's update feed, read by every copy through SUFeedURL. Items are added by scripts/release/build-release.sh, newest first; do not rename or move this file.</description>
+    <language>en</language>
+  </channel>
+</rss>

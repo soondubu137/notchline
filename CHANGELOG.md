@@ -4,6 +4,12 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## Unreleased
+
+### Added
+
+- **Notchline updates itself.** It checks once a day, and About → Check for Updates checks now. An update downloads, verifies and installs in place, then relaunches. It asks for no second Open Anyway, and it keeps the Automation permission, because every release is signed with the same certificate. The first version with the updater has to be installed by hand, and asks for Automation once more. (`docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md`.)
+
 ## 0.4.3 Alpha — 2026-09-13
 
 **A product's switch now records whether you want it watched, and its row says what is actually wrong, if anything.** Products keeps installation, setup, presence and observation apart: a closed app is no longer a warning, an unused one is no longer Connected, and a broken setup offers Repair instead of switching itself off. (`docs/product-connections.md`, `docs/integration-settings-behaviour.md`.)
