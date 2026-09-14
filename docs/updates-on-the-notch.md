@@ -164,3 +164,8 @@ Translocation should be detected when the check starts, so that 13 replaces 04 b
 - **Performance.** Progress reaches the views at most four times a second. `UpdateStatus` is `@Observable` and writes a property only when it changes, so the About mark, which reads only the dot, is not redrawn by a download.
 
 **Verified.** Every state was rendered offscreen from the real views and compared with the board, the dot's corner at 6× included. A Release build, launched in a throwaway home, started the notch-drawn driver. Its first scheduled check failed against the still-private feed and drew nothing: no window, no dot, no recorded answer.
+
+**Rehearsed in the real app (2026-09-14).** 0.4.90 was installed from Safari into `~/Applications`, and 0.4.91 was offered from a feed on localhost ([`self-update` exploration](technical-explorations/self-update/README.md) §11).
+- The scheduled check drew the dot, spoken as `0.4.91 Rehearsal available`, and nothing else.
+- About showed 04, then 06 `Downloading 0.0 of 3.9 MB`, then 08 `Ready. Relaunches once the running turn finishes.` The held Turn was the Claude Code session driving the rehearsal.
+- When that Turn's `Stop` arrived, the relaunch went by itself (rule 7) and came up as 0.4.91. Its first About drew 09, and the receipt key cleared once About closed.

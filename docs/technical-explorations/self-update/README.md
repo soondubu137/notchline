@@ -243,3 +243,25 @@ This rehearsal used the committed scripts with a throwaway keychain and a throwa
 - **`AppUpdaterTests`' feed test was checked against bad feeds.**
   - With the rehearsal's localhost URLs it fails, and with an older build listed first it fails; with release URLs in the right order it passes.
   - `#expect(!(x ?? "").isEmpty)` reported a failure while printing the value present, so the check is written `x?.isEmpty == false`.
+
+## 11. End-to-end rehearsal in the real app (2026-09-14)
+
+§7's check was run on this Mac (macOS 26.6.2). Two Release builds of `master` at `e949578`, 0.4.90 (90) and 0.4.91 (91), were made with `build-release.sh`, using the real bundle ID. A throwaway `Notchline Rehearsal` certificate and EdDSA key signed them, and the feed was served from `127.0.0.1`. The only departure from §7: the install went into `~/Applications`, which left the user's older copy in `/Applications` alone.
+
+| §7 step | Result |
+| --- | --- |
+| Safari download | Unzipped with `com.apple.quarantine` (`01c3;…;Safari`) and the rehearsal certificate's requirement |
+| Gatekeeper | The "could not verify" prompt, then **Open Anyway was offered and worked** for an untrusted self-signed, unnotarised app. §3.1's caveat is answered for 26.6.2. `syspolicyd`: "Unregistering bundle for protection after scan … (team: (null))" |
+| Automation | Granted from 0.4.90 after `tccutil reset AppleEvents com.yinfenglu.Notchline` (see the caveat below) |
+| Update | Scheduled check → dot → About 04 → Install → 06 → Autoupdate "OK: EdDSA signature is correct for update" → 08 held by a running Turn → relaunched by itself when it finished |
+| After the relaunch | 0.4.91 (91) in place, **no `com.apple.quarantine`**, the same requirement, valid signature, only the overlay window. Gatekeeper's re-scan showed no prompt |
+| Automation after the update | The same Terminal row came forward with **no prompt**; `tccd` answered `authValue: 2` to the new process |
+| App Management | Notchline not listed in Privacy & Security; no "prevented from modifying apps" |
+
+**Caveat: a grant that should not have matched, but did.** Before the reset, clicking a Terminal row in 0.4.90 prompted nothing: `tccd` answered `authValue: 2` from a record that predated the rehearsal certificate. That record's stored requirement could not be read, because `TCC.db` needs Full Disk Access. So on 26.6.2, an Apple Events grant made by one signer answered for a build signed by another. Either the record held no requirement, or Apple Events does not enforce one here.
+
+The design is unaffected, because a stable certificate is right either way: Apple documents requirement matching, and Accessibility enforces it. But §3.2's claim that ad-hoc updates *lose* the Automation grant is unconfirmed for Apple Events on this machine. Settling it would take one Full Disk Access read of the record, or a fresh grant made by an ad-hoc build and tested against a second ad-hoc build.
+
+**Also noted.**
+- The rehearsal copy did not check at its first launch: an earlier run had written `SULastCheckTime` 13 minutes before. Sparkle's once-a-day schedule is per preferences domain, shared by every copy with the bundle ID.
+- A rehearsal must clear that key to watch a scheduled check, and restore the domain afterwards. It was restored here, to the snapshot taken before the rehearsal.
