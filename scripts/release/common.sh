@@ -19,6 +19,7 @@ REPOSITORY_URL=https://github.com/soondubu137/notchline
 : "${SPARKLE_KEY_FILE:=}"
 : "${DR_FILE:=$REPO_ROOT/scripts/release/designated-requirement.txt}"
 : "${FEED_FILE:=$REPO_ROOT/appcast.xml}"
+: "${CHANGELOG_FILE:=$REPO_ROOT/CHANGELOG.md}"
 : "${BUILD_ROOT:=$REPO_ROOT/build/release}"
 : "${DERIVED_DATA:=$BUILD_ROOT/DerivedData}"
 : "${DOWNLOAD_URL_PREFIX:=$REPOSITORY_URL/releases/download}"

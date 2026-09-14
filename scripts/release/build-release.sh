@@ -55,7 +55,7 @@ step "Adding it to $(basename "$FEED_FILE")"
 tag="v$version"
 python3 "$REPO_ROOT/scripts/release/add_feed_item.py" \
     --feed "$FEED_FILE" \
-    --changelog "$REPO_ROOT/CHANGELOG.md" \
+    --changelog "$CHANGELOG_FILE" \
     --version "$version" \
     --build "$build" \
     --minimum-system-version "$minimum_system_version" \
