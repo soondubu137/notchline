@@ -69,12 +69,14 @@ indirect enum JSONValue: Codable, Equatable, Sendable {
         return value
     }
 
+    /// Truncated toward zero, so `42.5` reads `42`. A number the type cannot hold is nil: valid JSON
+    /// such as `1e300` would otherwise trap in `Int.init(_: Double)` and end the process.
     nonisolated var intValue: Int? {
-        doubleValue.map(Int.init)
+        doubleValue.flatMap { Int(exactly: $0.rounded(.towardZero)) }
     }
 
     nonisolated var int64Value: Int64? {
-        doubleValue.map(Int64.init)
+        doubleValue.flatMap { Int64(exactly: $0.rounded(.towardZero)) }
     }
 
     nonisolated var boolValue: Bool? {
