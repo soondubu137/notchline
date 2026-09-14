@@ -6,6 +6,27 @@
     <description>Notchline's update feed, read by every copy through SUFeedURL. Items are added by scripts/release/build-release.sh, newest first; do not rename or move this file.</description>
     <language>en</language>
     <item>
+      <title>Notchline 0.5.1 Beta</title>
+      <pubDate>Mon, 14 Sep 2026 16:55:39 GMT</pubDate>
+      <sparkle:version>18</sparkle:version>
+      <sparkle:shortVersionString>0.5.1</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/soondubu137/notchline/releases/tag/v0.5.1</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown"><![CDATA[**A malformed number from Codex can no longer crash Notchline, and this is the first version 0.5.0 installs by itself.** About offers it after the daily check or Check for Updates. After Install, it relaunches once no Turn is running or waiting for an answer. (`docs/technical-explorations/self-update/README.md` §12.)
+
+### Fixed
+
+- **A number too large for an integer no longer ends the process.** Every message from Codex's App Server reads its request id, error code and quota figures through one conversion, which crashed on valid JSON such as `1e300`. Such a number now reads as missing, and the paths that already ignore a malformed message take it from there. Fractions are still truncated, so quota readings are unchanged. (Issue #69.)
+
+### Known limitations
+
+- **Automation may not be asked for again after all.** `0.5.0` said the permission given to earlier versions does not carry over. On macOS 26.6 it carried over twice, between builds signed with different certificates, so moving up from `0.4.3` may ask once or not at all. (`docs/technical-explorations/self-update/README.md` §12.)
+
+Everything else listed under `0.5.0` and earlier still stands, unchanged.
+]]></description>
+      <enclosure url="https://github.com/soondubu137/notchline/releases/download/v0.5.1/Notchline-0.5.1.zip" type="application/octet-stream" sparkle:edSignature="pna5uFRAnN3gn7/3DX5UBz1ueJHIjpE5GXMYIjlqgG+gozzkps0h90ULh7InbB7iUF1fHemukN6xSK5fP2cLDw==" length="3973151"/>
+    </item>
+    <item>
       <title>Notchline 0.5.0 Beta</title>
       <pubDate>Mon, 14 Sep 2026 08:19:00 GMT</pubDate>
       <sparkle:version>17</sparkle:version>
