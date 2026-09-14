@@ -36,6 +36,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// Codex's hook transport; reducer and registrar are also kept by name.
     private let hooks: HookLifecycleSource
     private let hookEvents: HookEventRepository
+    private let hookActivation: CodexHookActivation
+    private var hookActivationRetryAllowed = false
     private let hookRegistrar: CodexHookRegistrar
     private let projectMetadata: any DesktopProjectMetadataProviding
     private let unreadState: any DesktopUnreadStateProviding
@@ -148,6 +150,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         self.client = client
         self.hookEvents = hookEvents
         self.hookRegistrar = hookRegistrar
+        let hookActivation = CodexHookActivation(paths: hookRegistrar.integrationPaths, clock: clock)
+        self.hookActivation = hookActivation
         // The transport belongs to this service, so the store stays a reducer with an inbox.
         // Delivery on the listener's serial read queue keeps arrival order.
         self.hooks = HookLifecycleSource(
@@ -182,6 +186,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             hookEvents.changeEvents(),
             // The registration changing: the user running `/hooks` or editing the file.
             hookRegistrar.changeEvents(),
+            hookActivation.changeEvents(),
             unreadState.changeEvents(),
             // The screen returning re-arms re-checks booked off while locked, instead of waiting out
             // the heartbeat after an unlock.
@@ -199,6 +204,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
 
     func recheckConnection() async {
         await hookRegistrar.invalidateRegistration()
+        await hookActivation.invalidate()
         await connectionMonitor?.invalidate()
     }
 
@@ -210,6 +216,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             return AgentSnapshot(agent: .codex, availability: .disconnected, sessions: [], quota: .unavailable,
                                  diagnostic: nil, setupStatus: snapshot.setupStatus, presence: .unknown)
         }
+        hookActivationRetryAllowed = checked.availability == .ready && checked.presence == .open
         return checked
     }
 
@@ -253,7 +260,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             hookState: hookState,
             desktopProcessIdentifier: desktopProcessIdentifier
         )
-        let setupStatus = IntegrationSetupStatus.card(
+        var setupStatus = IntegrationSetupStatus.card(
             registration: await hookRegistrar.registration(),
             hasObservedEvent: hookState.hasObservedEvent
         )
@@ -277,6 +284,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         do {
             try await connectToAppServer()
             appServerResponded = true
+            if presence == .open, let verified = await hookActivation.verified(using: client) {
+                setupStatus = verified ? .active : .reviewRequired
+            }
             let projectSnapshot = await projectMetadata.snapshot()
 
             if hasLiveHookObservation {
@@ -457,6 +467,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         guard !observationStopped else { return nil }
         var deadlines: [Date] = []
         if let deadline = await connectionMonitor?.nextDeadline() { deadlines.append(deadline) }
+        if hookActivationRetryAllowed, let deadline = await hookActivation.nextDeadline() {
+            deadlines.append(deadline)
+        }
         // Asked once, so both entries that consult it agree with their schedulers.
         let screenIsAvailable = screenAvailability.isAvailable()
 
@@ -528,8 +541,10 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
 
     func disconnect() async {
         connectionRevision += 1
+        await hookActivation.stop()
         await connectionMonitor?.reset()
         observationStopped = true
+        hookActivationRetryAllowed = false
         hooks.disconnect()
         await hookEvents.resetIntegrationObservation(clearTurns: true, preserveBoundaryObservation: true)
         hookTrackedThreadIDs = []
@@ -648,6 +663,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     }
 
     func installIntegration() async throws {
+        await hookActivation.invalidate()
         try await hooks.install()
         // On a first run the socket could not bind at launch; binding now keeps the first turn from
         // waiting out a refresh deadline.

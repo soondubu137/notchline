@@ -60,17 +60,19 @@ A confirmed observation failure has a ten-second recovery interval before the sh
 
 Existing connection retries and lifecycle evidence expiry remain product-owned. No additional continuous UI animation, whole-machine process polling or Turn reconstruction is introduced.
 
+Codex's Provider owns `CodexHookActivation`. Changes to `hooks.json` or `config.toml` wake a fresh public API check; those files supply change signals, not trust semantics. An unverified or failed check retries after five seconds while Codex is open and the App Server is available. Verified readings are cached until a file edge, explicit Recheck, setup change or disconnect. Reads are single-flight with a three-second timeout; edits and reset generations reject stale results. No trust receipt or Turn is persisted by this check.
+
 ## Boundaries
 
 - Application discovery is bounded. `App not found` is deliberately weaker than `Not installed`.
 - Trae's registration reader covers the existing local default extension manifest. It checks both the manifest entry and the actual companion package's identity/version. Missing files, invalid JSON, unreadable files and version mismatch have different results. Other profiles, remote extension hosts and extensions disabled through unobserved private state are not guessed.
 - Partial Trae coverage reports only peers discovered by the transport; it cannot promise an inventory of every native window. An undiscovered window is not invented as a failure.
-- No new private trust-state read is added for Codex. A previously received event is historical delivery evidence, not proof that every current Hook is trusted. New definitions with no delivery evidence remain unverified.
-- Setup history is limited to user intent. Historical connection times and per-definition activation receipts are not fabricated where the underlying source cannot establish them.
+- Codex activation uses the public `hooks/list` response, verified against CLI `0.154.0-alpha.6.2`. Every managed definition must match its source path, event, command, matcher and timeout, and be enabled and trusted. All definitions trusted means activation is verified without a Turn; Connected still requires presence and a working App Server. Missing, disabled, modified, malformed or failed readings remain unverified. Only an unsupported method retains the legacy delivery-based fallback. No private trust keys or hashes are read.
+- Setup history is limited to user intent. Historical connection times and per-definition activation receipts are not fabricated where the underlying source cannot establish them. The public activation check creates no files; disconnect cancels its pending read and pauses its file watchers.
 
 ## Verification
 
-`ProductConnectionTests` covers normal choices, absent versus unreadable setup, closure versus reload advice, missing products versus repair, presence requirements, silence, recovery, capability notice scope, discovery invalidation, persisted intent and timestamp equality. Existing setup, convergence, transport and product conformance tests exercise actual boundary behaviour. `TraeConformanceTests` verifies extension manifest and package absence/corruption/mismatch. The full `NotchlineTests` suite remains the commit gate.
+`CodexHookActivationTests` covers trust without a Turn, atomic configuration replacement, off/on revalidation, exact definition matching, missing and malformed responses, unsupported servers, caching, late-result rejection and retry suspension after connection failure. `ProductConnectionTests` covers normal choices, absent versus unreadable setup, closure versus reload advice, missing products versus repair, presence requirements, silence, recovery, capability notice scope, discovery invalidation, persisted intent and timestamp equality. Existing setup, convergence, transport and product conformance tests exercise actual boundary behaviour. `TraeConformanceTests` verifies extension manifest and package absence/corruption/mismatch. The full `NotchlineTests` suite remains the commit gate.
 
 ### Release measurement
 
@@ -84,4 +86,6 @@ Mean cached four-product check: 0.103 ms CPU
 
 The Products layout was rendered from the actual SwiftUI views in light and dark appearances. Normal closure has no warning line; an enabled product whose setup needs repair retains its switch. The temporary CPU probe and rendered images are removed after verification; the layout and state tests remain.
 
-Final validation: 960 of 960 unit tests passed, with no skipped tests. The final application source also passed a Release build. Local Markdown links and diff whitespace checks passed.
+Original connection-check validation: 960 of 960 unit tests passed, with no skipped tests. The final application source also passed a Release build. Local Markdown links and diff whitespace checks passed.
+
+Hook activation validation (2026-09-13): the full unit suite passed with 968 successful test executions and no failures. In an isolated `CODEX_HOME`, the installed CLI `0.154.0-alpha.6.2` returned `untrusted` before the trust fixture was saved and `trusted` afterwards through the same App Server, without creating a Thread or Turn. A separate read-only check of the current installation returned all seven Notchline definitions enabled and trusted. No production private trust-state parser was added. The final source passed a Release build; local Markdown links and diff whitespace checks passed.

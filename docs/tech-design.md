@@ -487,6 +487,8 @@ Two merge rules, both justified by the measured shape of the trust key — 2026-
 
 The reducer additionally uses "`PostToolUse` seen without `PreToolUse`" as a run-time probe for lost trust and emits a diagnostic. With definitions frozen this app can no longer reach that state itself, and the probe is left for the cases it cannot create: a user editing `config.toml` by hand, or a Codex update re-hashing. Removal removes only the fragment this app manages.
 
+`LiveCodexMonitorService` also owns `CodexHookActivation`, a read-only public `hooks/list` adapter. It matches the entire managed set against source path, event, command, matcher and timeout, requiring `enabled: true` and `trustStatus: trusted`. Configuration file edges invalidate the cached answer; pending/failed activation retries after five seconds, with a three-second RPC timeout and single-flight/generation guards. Unsupported methods alone use the legacy delivery-based status. The adapter never writes trust, an install receipt or monitoring evidence. See [connection checks](product-connections.md) and [regression tests](../Notchline/NotchlineTests/CodexHookActivationTests.swift).
+
 ### 7.2 Launch and reconnect
 
 ```text

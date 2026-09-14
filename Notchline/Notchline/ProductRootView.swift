@@ -158,7 +158,7 @@ struct OnboardingView: View {
     }
 
     /// The connections, in the rows Settings uses. `Recheck` is in the footnote: Codex asks the user
-    /// to trust hooks before running them, so its row says Connected only after a trusted event.
+    /// to trust hooks before running them; the Provider verifies activation through `hooks/list`.
     private var connectGroup: some View {
         SettingsGroup(header: "Connect your agents") {
             ProductConnectionRows()

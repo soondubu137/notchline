@@ -12,8 +12,8 @@ nonisolated enum HookRegistration: Sendable, Equatable {
     case complete
 }
 
-/// What the settings card says, projected here and nowhere else from registration (a file)
-/// and delivery (arriving events).
+/// Base setup status from registration and delivery. Codex public activation evidence may
+/// refine the complete registration in its Provider, independently of Turn evidence.
 enum IntegrationSetupStatus: Equatable, Sendable {
     case notRequired
     case unreadable
@@ -837,6 +837,8 @@ actor CodexHookRegistrar: HookRegistrationSetup {
         )
     }
 
+    nonisolated var integrationPaths: HookIntegrationPaths { paths }
+
     nonisolated var socketURL: URL {
         paths.hookSocket
     }
@@ -895,8 +897,8 @@ actor CodexHookRegistrar: HookRegistrationSetup {
         return true
     }
 
-    /// The settings card's status: the registration, projected against whether any definition has
-    /// been seen to fire, the only evidence Codex's trust step was completed.
+    /// Legacy setup status from registration and delivery. The Codex Provider refines it with
+    /// public `hooks/list` activation evidence on servers supporting that method.
     func status(observedBy repository: HookEventRepository) async -> IntegrationSetupStatus {
         IntegrationSetupStatus.card(
             registration: registration(),
