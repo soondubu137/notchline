@@ -1247,7 +1247,7 @@ struct NotchlineTests {
         #expect(store.compactReadingSpan?.start != nil)
         #expect(store.currentPanelSize.width > display.centerOcclusionWidth)
 
-        store.hidesCompactWings = true
+        store.hidesNotchline = true
 
         #expect(store.givesUpCompactWings)
         #expect(!store.drawsCompactMarks)
@@ -1275,7 +1275,7 @@ struct NotchlineTests {
             hasNotch: true
         )
         let store = MonitorStore(displays: [display], services: [])
-        store.hidesCompactWings = true
+        store.hidesNotchline = true
 
         func apply(codex: SessionStatus, claudeCode: SessionStatus) {
             for (agent, status) in [
@@ -1331,12 +1331,12 @@ struct NotchlineTests {
         #expect(store.currentPanelTrailingAnchor == display.centerOcclusionMaxX)
         // The counts beside the mark are ungated.
         #expect(store.aggregateSessionCount == 2)
-        store.hidesCompactWings = false
+        store.hidesNotchline = false
         #expect(store.compactTrailingReading != .empty)
         #expect(store.aggregateSubagentCount == 4)
         #expect(store.compactTimerText != nil)
         #expect(store.compactReadingSpan?.start != nil)
-        store.hidesCompactWings = true
+        store.hidesNotchline = true
         #expect(store.compactReadingSpan?.start == nil)
 
         // One mark for both products, so a second waiting product does not widen the wing.
@@ -1379,7 +1379,7 @@ struct NotchlineTests {
             hasNotch: true
         )
         let store = MonitorStore(displays: [display], services: [])
-        store.hidesCompactWings = true
+        store.hidesNotchline = true
 
         let started = Date(timeIntervalSinceNow: -90)
         store.applyForTesting(
@@ -1416,10 +1416,11 @@ struct NotchlineTests {
         #expect(store.spokenBuriedCompletionText == nil)
     }
 
-    /// A no-notch pill has nothing to hide behind, so drawing stands down there; the preference is
-    /// never blocked or cleared, including across a trip to an external monitor.
+    /// One preference, two forms: a notched display gives up its wings and a notch-less one tucks
+    /// its pill. The preference is never blocked or cleared, including across a trip to an
+    /// external monitor.
     @Test @MainActor
-    func onlyANotchedDisplayHonoursTheWingPreferenceAndTheOtherOneDoesNotClearIt() {
+    func hideNotchlineTakesEachDisplaysOwnFormAndSwitchingDisplaysDoesNotClearIt() {
         let defaults = UserDefaults(suiteName: "wings-\(UUID().uuidString)")!
         let notched = makeDisplay(
             id: "notched",
@@ -1436,26 +1437,95 @@ struct NotchlineTests {
         let store = MonitorStore(
             displays: [notched, external],
             services: [],
+            // Not the preview rows, which wait on a person and would keep the pill down.
+            initialSnapshot: makeSessionSnapshot([]),
             preferences: defaults
         )
-        #expect(!store.hidesCompactWings)
-        #expect(store.canHideCompactWings)
+        #expect(!store.hidesNotchline)
+        #expect(store.canHideNotchline)
 
-        store.hidesCompactWings = true
+        store.hidesNotchline = true
         #expect(store.givesUpCompactWings)
         #expect(
             MonitorStore(displays: [notched], services: [], preferences: defaults)
-                .hidesCompactWings
+                .hidesNotchline
         )
 
         store.selectDisplay(id: external.id)
-        #expect(!store.canHideCompactWings)
+        #expect(store.canHideNotchline)
         #expect(!store.givesUpCompactWings)
-        #expect(store.drawsCompactMarks)
-        #expect(store.hidesCompactWings)
+        #expect(store.tucksCompactPill)
+        #expect(!store.drawsCompactMarks)
+        #expect(store.hidesNotchline)
 
         store.selectDisplay(id: notched.id)
         #expect(store.givesUpCompactWings)
+        #expect(!store.tucksCompactPill)
+    }
+
+    /// The notch-less form: the pill keeps its width and place and gives up all but a `4` pt lip
+    /// of its height, drawing nothing inside it. A Turn to attend to brings it back whole, reading
+    /// included, where a notched display holds its reading back; hover opens the full panel.
+    @Test @MainActor
+    func hideNotchlineTucksThePillIntoTheTopEdgeUntilATurnNeedsAPerson() {
+        let display = makeDisplay(id: "flat", ordinal: 1, menuBarHeight: 24, hasNotch: false)
+        let store = MonitorStore(displays: [display], services: [])
+        func apply(_ status: SessionStatus) {
+            store.applyForTesting(
+                makeAgentSnapshot(
+                    .codex,
+                    sessions: [
+                        makeSession(
+                            threadID: "t",
+                            status: status,
+                            startedAt: Date(timeIntervalSinceNow: -90)
+                        )
+                    ]
+                )
+            )
+        }
+        apply(.running)
+
+        let shown = store.currentPanelSize
+        #expect(shown.height == 24)
+        #expect(store.drawsCompactMarks)
+        #expect(store.drawsCompactMiddle)
+        #expect(store.compactReadingSpan?.start != nil)
+
+        store.hidesNotchline = true
+        #expect(store.tucksCompactPill)
+        #expect(store.currentPanelSize == CGSize(width: shown.width, height: PanelMetrics.tuckedPillHeight))
+        #expect(!store.drawsCompactMarks)
+        #expect(!store.drawsCompactMiddle)
+        // `?.start` because the span is a tuple; nothing ticks out of sight.
+        #expect(store.compactReadingSpan?.start == nil)
+        #expect(store.currentPanelTrailingAnchor == nil)
+
+        let frame = OverlayPanelLayout.frame(
+            on: display.frame,
+            panelSize: store.currentPanelSize,
+            surfaceShoulder: store.surfaceShoulderRadius
+        )
+        #expect(frame.maxY == display.frame.maxY)
+        #expect(frame.height == PanelMetrics.tuckedPillHeight)
+        #expect(frame.midX == display.frame.midX)
+
+        for waiting in [SessionStatus.approvalNeeded, .inputNeeded, .completed] {
+            apply(waiting)
+            #expect(!store.tucksCompactPill, "\(waiting)")
+            #expect(store.currentPanelSize == shown, "\(waiting)")
+            #expect(store.drawsCompactMarks, "\(waiting)")
+            #expect(store.drawsCompactMiddle, "\(waiting)")
+            if waiting != .completed {
+                #expect(store.compactReadingSpan?.start != nil, "\(waiting)")
+            }
+        }
+
+        apply(.running)
+        #expect(store.tucksCompactPill)
+        store.isExpanded = true
+        #expect(!store.tucksCompactPill)
+        #expect(store.currentPanelSize.height > shown.height)
     }
 
     /// `cover-the-words.md`: what is covered, and the pill's middle goes quiet
@@ -1887,10 +1957,10 @@ struct NotchlineTests {
         #expect(unplaceable.centerOcclusionWidth == 0)
 
         let store = MonitorStore(displays: [unplaceable], services: [])
-        #expect(!store.canHideCompactWings)
+        #expect(!store.canHideNotchline)
 
         // The emulated pill keeps its mark: hiding it would leave nothing on screen.
-        store.hidesCompactWings = true
+        store.hidesNotchline = true
         #expect(!store.givesUpCompactWings)
         #expect(store.drawsCompactMarks)
         #expect(store.currentPanelSize.width > 0)
@@ -1947,7 +2017,7 @@ struct NotchlineTests {
                 ]
             )
         )
-        store.hidesCompactWings = true
+        store.hidesNotchline = true
         #expect(store.givesUpCompactWings)
         #expect(!store.drawsCompactMarks)
         #expect(!store.showsSurfaceOutline)
@@ -3405,7 +3475,7 @@ struct NotchlineTests {
             ("hiding the About panel", { store.toggleAbout() }),
             ("folding the queue", { store.toggleRecent() }),
             ("closing the panel", { store.isExpanded = false }),
-            ("giving up the wings", { store.hidesCompactWings.toggle() })
+            ("giving up the wings", { store.hidesNotchline.toggle() })
         ]
 
         for (name, mutate) in mutations {
@@ -5163,7 +5233,7 @@ struct NotchlineTests {
         #expect(PanelMetrics.compactTrailingWingWidth(trailing: .empty) == 0)
     }
 
-    /// `Hide the wings` with one mark: the leading wing is present or absent; the reading never shows,
+    /// `Hide Notchline` with one mark: the leading wing is present or absent; the reading never shows,
     /// but the unread-finish dot does, since it wants a person (`compact-view-v2.md` §9).
     @Test @MainActor
     func hidingTheWingsLeavesTheCutOutTheMarkOrTheMarkAndTheDot() {
@@ -5236,7 +5306,7 @@ struct NotchlineTests {
         #expect(store.statusDisplayName == MonitorStatus.running.displayName)
 
         // What is spoken ignores the preference: hiding the wings changes what is drawn, not counted (§9).
-        store.hidesCompactWings = true
+        store.hidesNotchline = true
         #expect(store.givesUpCompactWings)
         #expect(store.spokenCollapsedCountsText == "2 sessions, 2 subagents")
     }
@@ -5364,8 +5434,8 @@ struct NotchlineTests {
         #expect(store.currentPanelSize.width == named)
         store.namesWorkOnPill = true
 
-        // Not drawn where it cannot apply (the mirror of `Hide the wings`); both rows stay visible and
-        // settable on every kind of display.
+        // Not drawn where it cannot apply; both rows stay visible and settable on every kind of
+        // display, and `Hide Notchline` now applies on both.
         let notched = MonitorStore(
             displays: [
                 makeDisplay(id: "notched", ordinal: 1, menuBarHeight: 46, hasNotch: true)
@@ -5374,9 +5444,9 @@ struct NotchlineTests {
             initialSnapshot: makeSessionSnapshot([])
         )
         #expect(!notched.canNameWorkOnPill)
-        #expect(notched.canHideCompactWings)
+        #expect(notched.canHideNotchline)
         #expect(store.canNameWorkOnPill)
-        #expect(!store.canHideCompactWings)
+        #expect(store.canHideNotchline)
     }
 
     /// The pill's middle names each Project in the panel's row order, deduplicated with the first
@@ -31622,9 +31692,9 @@ extension NotchlineTests {
         #expect(store.aggregateSubagentCount == 3)
         #expect(store.compactTrailingReading == .empty)
 
-        // The numerals are ungated by `Hide the wings` (`compact-view-v2.md` §9); the spoken badge
+        // The numerals are ungated by `Hide Notchline` (`compact-view-v2.md` §9); the spoken badge
         // total still answers to it.
-        store.hidesCompactWings = true
+        store.hidesNotchline = true
         #expect(store.givesUpCompactWings, "the display can honour it")
         #expect(store.aggregateSubagentCount == 3)
         #expect(store.aggregateSessionCount == 2)

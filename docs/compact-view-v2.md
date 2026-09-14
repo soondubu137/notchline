@@ -300,6 +300,8 @@ Three things, all consequences rather than choices:
 
 ## 9. `Hide the wings`, under one mark
 
+> **Renamed `Hide Notchline` on 2026-09-13**, when it gained a form on a display without a notch (§9.1). Everything below about the notched bar stands unchanged; the stored key is still `hidesCompactWings`.
+
 The setting survives, simplified. With one aggregate mark the leading wing is **simply present or absent**; §8.4's per-product table and its "which mark it is, is said by hue" sentence both go.
 
 **What brings the wing out is unchanged.** Approval, input, and a Completed turn nobody has read — and the buried case still counts, with the mark drawing Loom, exactly as §8.4 already has it per product. `Working…` alone asks for nobody and keeps the bar at the cut-out.
@@ -322,7 +324,28 @@ surface that must not depend on how the surface is configured.
 | A turn wants a person | **248** — `47.2 + 200`, mark and the totals at one digit |
 | …with a buried finish beside it | **272** — trailing wing `8 + 4 + 12 = 24` |
 
-The setting still requires a *measurable* cut-out, so it is disabled on every screen the pill is drawn on. Nothing in §6 reaches it.
+~~The setting still requires a *measurable* cut-out, so it is disabled on every screen the pill is drawn on. Nothing in §6 reaches it.~~ A notched display still needs its cut-out measured; a notch-less one now has a form of its own (§9.1).
+
+### 9.1 The notch-less form: the pill tucks into the top edge
+
+*(2026-09-13. Built. The board is the Figma file `Hide Notchline`, `I9IMOwBPML3nW3zYWJyQe9`.)*
+
+Every earlier version of this document, and [`figma-design.md`](figma-design.md) §8.4 with it, said the preference could not apply to the pill: collapsing it would take its place in the menu bar with it and leave nothing to hover. **Both halves were about collapsing, and collapsing is not the only way to hide.** The pill now slides up into the display's top edge and leaves a lip of itself on screen.
+
+| State | Body |
+| --- | --- |
+| Nothing waiting | **`230 × 4`**: the pill's own width and place, `PanelMetrics.tuckedPillHeight` of its height |
+| A turn wants a person | **`230 ×` the menu bar**: the whole pill, reading and name included |
+| Hovered | The panel, exactly as from the whole pill |
+
+- **The lip is the whole hover target.** A pointer thrown at the top edge stops on the screen's top row, which is inside it, so a `4` pt target is found without aiming; keeping the pill's full-height hover region was considered and rejected, because it would go on covering the menu titles a crowded menu bar puts under the pill, which is what the preference is for.
+- **It keeps the width and the place.** A lip that shrank towards the middle would move the target away from where the pill taught somebody to look.
+- **Nothing is drawn inside it.** The mark, the counts, the name and the reading all leave (`drawsCompactMarks`, `drawsCompactMiddle`, `compactReadingSpan`), so no animation and no ticking readout runs out of sight (`AGENTS.md` §7). The header rides the window's shrinking bottom edge while they fade, so the pill reads as sliding up rather than being cut off.
+- **What brings it back is exactly what brings a notched wing out**: approval, input, or a finished turn nobody has read, buried or not (`PresenceMark.hasATurnToAttendTo`). The difference is deliberate: the notched bar's wing is a new shape beside the hardware, so it comes out as small as it can; the pill already had a whole shape and a fixed width (§6.1), and coming back as anything less would be a third collapsed form for nothing. The reading comes back with it.
+- **The outline stays** where `Outline the panel` is on. On the notched form it stands down because it would trace two hooks beside a shape the hardware already draws; a lip is not such a shape, and being found against a dark menu bar is the outline's whole reason to exist.
+- **A notch the display reports but cannot place still waits.** That screen is laid out as an emulated notch, and a lip drawn where the cut-out may be could not be seen.
+
+Pinned by `hideNotchlineTucksThePillIntoTheTopEdgeUntilATurnNeedsAPerson` and `hideNotchlineTakesEachDisplaysOwnFormAndSwitchingDisplaysDoesNotClearIt`. Measured on a Release build on a notch-less `DELL S2721QS` (30 pt menu bar): the window is `238 × 4` tucked (the body plus a shoulder each side), `238 × 30` while a turn waits, eases between them in about `0.2 s` each way, and a pointer on the top row of the lip opens the `618 × 153` panel.
 
 ## 10. Accessibility
 
@@ -345,6 +368,7 @@ The setting still requires a *measurable* cut-out, so it is disabled on every sc
 - [ ] The clock is the longest unfinished turn anywhere, independent of which Project the middle names.
 - [ ] All 36 inks clear `#151515`, and switching ink changes no width and no brightness.
 - [ ] `Hide the wings` brings out the mark for a buried finish and the dot with it, and the numerals beside it read the whole list.
+- [ ] On a notch-less display `Hide Notchline` leaves a `4` pt lip at the pill's width, the lip opens the panel, and a turn wanting a person brings the whole pill back (§9.1).
 - [ ] The numerals draw at `11` pt and `8` pt regular monospaced digits at the display optical size, leading-aligned, inside a column billed at the drawn `6.616` per digit.
 - [ ] The pill's middle draws its name at `13` pt Light in `#C7C7CC`, fading over the middle's last `12`.
 

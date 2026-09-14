@@ -648,8 +648,8 @@ nonisolated struct PresenceMark: Equatable, Sendable {
 
     /// Whether this product holds a Turn the user still has to attend to: approval, input, or a
     /// finished unread Turn, including one ``buriesAFinishedTurn`` covers. Not
-    /// ``MonitorStatus/wantsPerson`` plus a case. Read only with `Hide the wings` on
-    /// (``MonitorStore/compactDrawnMarks``).
+    /// ``MonitorStatus/wantsPerson`` plus a case. Read only with `Hide Notchline` on
+    /// (``MonitorStore/drawsCompactMarks``, ``MonitorStore/tucksCompactPill``).
     var hasATurnToAttendTo: Bool {
         status.wantsPerson || status == .completed || buriesAFinishedTurn
     }

@@ -83,6 +83,10 @@ struct NotchOverlayView: View {
                         .overlay {
                             SecondaryClickCatcher { store.togglePrivacyMode() }
                         }
+                        // Rides the window's bottom edge while the window is shorter than the
+                        // band, so a pill tucking into the top edge slides up and out rather than
+                        // being cut off; zero in every other state.
+                        .offset(y: min(0, proxy.size.height - store.compactHeight))
 
                     if (store.isExpanded || bodyPresentation.isMounted),
                        !store.expandsToPillOnly {
@@ -430,7 +434,7 @@ private struct CompactLeadingGroup: View {
         }
     }
 
-    /// Fades in and out so that, with `Hide the wings` on, the mark is not drawn over the cut-out
+    /// Fades in and out so that, with `Hide Notchline` on, the mark is not drawn over the cut-out
     /// while the panel edge clears it.
     private static let wingFade = AnyTransition.asymmetric(
         insertion: .opacity.animation(PanelMotion.fade(isArriving: true)),

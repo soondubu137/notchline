@@ -151,7 +151,7 @@ but never the default.
    `tint` are recorded here and are not offered; an intensity control can come later if it earns
    its place.
 4. **Where it lives.** [`figma-design.md`](figma-design.md) §8.4 `Display`, second row, above
-   `Hide the wings`.
+   `Hide the wings` (now `Hide Notchline`).
 5. **What existing installs get.** Sage · hint, `#1B1F1C` → `#DEE8E0` — the same as everybody else,
    because until this preference existed the mark was drawn at exactly it. There is no hue to
    migrate.

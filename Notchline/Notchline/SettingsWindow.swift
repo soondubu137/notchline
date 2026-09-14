@@ -199,8 +199,8 @@ struct DisplaySettings: Equatable {
     let selectedDisplayDescription: String
     let privacyMode: Bool
     let drawsSurfaceOutline: Bool
-    let hidesCompactWings: Bool
-    let canHideCompactWings: Bool
+    let hidesNotchline: Bool
+    let canHideNotchline: Bool
     let geometry: DisplayGeometry
     let namesWorkOnPill: Bool
     let canNameWorkOnPill: Bool
@@ -212,8 +212,8 @@ struct DisplaySettings: Equatable {
         selectedDisplayDescription = Self.description(of: store.selectedDisplay)
         privacyMode = store.privacyMode
         drawsSurfaceOutline = store.drawsSurfaceOutline
-        hidesCompactWings = store.hidesCompactWings
-        canHideCompactWings = store.canHideCompactWings
+        hidesNotchline = store.hidesNotchline
+        canHideNotchline = store.canHideNotchline
         geometry = store.geometry
         namesWorkOnPill = store.namesWorkOnPill
         canNameWorkOnPill = store.canNameWorkOnPill
@@ -255,7 +255,7 @@ struct DisplaySettingsGroups: View, Equatable {
             }
 
             SettingsGroup(header: "Collapsed") {
-                hideWingsRow
+                hideNotchlineRow
                 SettingsSeparator()
                 nameWorkRow
             }
@@ -324,30 +324,31 @@ struct DisplaySettingsGroups: View, Equatable {
         }
     }
 
-    /// Give the cut-out back. Always settable, even where it cannot apply: `hidesCompactWings` is
-    /// kept apart from `canHideCompactWings` and waits for a screen that can honour it (§8.4.1).
-    private var hideWingsRow: some View {
+    /// Give the menu bar back. Always settable, even where it cannot apply: `hidesNotchline` is
+    /// kept apart from `canHideNotchline` and waits for a screen that can honour it (§8.4.1).
+    private var hideNotchlineRow: some View {
         SettingsRow(
-            title: "Hide the wings",
-            caption: SettingsCaption.hideWings(
-                canHide: settings.canHideCompactWings,
+            title: "Hide Notchline",
+            caption: SettingsCaption.hideNotchline(
+                canHide: settings.canHideNotchline,
                 geometry: settings.geometry
             ),
-            help: "Leaves the collapsed component as the cut-out alone, with no "
-                + "clock beside it. The mark and its counts slide out while a "
-                + "turn is waiting on approval, on an answer, or to be read, and "
-                + "go back when it is dealt with; hovering still opens the panel. "
-                + "Takes effect on a display whose cut-out Notchline can measure "
-                + "— not on a display without a notch, nor on one that reports a "
-                + "notch but not where it is."
+            help: "Keeps the collapsed component out of the way while no turn "
+                + "needs you. On a notched display only the cut-out stays, with "
+                + "no clock beside it; on a display without a notch the pill "
+                + "tucks into the top edge and leaves a thin lip to hover. A turn "
+                + "waiting on approval, on an answer, or to be read brings the "
+                + "mark and its counts back until it is dealt with; hovering "
+                + "still opens the panel. Not on a display that reports a notch "
+                + "but not where it is."
         ) {
-            Toggle("Hide the wings", isOn: binding(\.hidesCompactWings))
+            Toggle("Hide Notchline", isOn: binding(\.hidesNotchline))
                 .labelsHidden()
                 .toggleStyle(.switch)
         }
     }
 
-    /// Name the work between the pill's two ends. Settable anywhere, as `Hide the wings` is.
+    /// Name the work between the pill's two ends. Settable anywhere, as `Hide Notchline` is.
     private var nameWorkRow: some View {
         SettingsRow(
             title: "Name the work",
@@ -517,16 +518,14 @@ enum SettingsCaption {
     static let groupByProduct = "One block per product, each headed by its badge."
     static let quotaTableFootnote = "Today’s total counts every connected product, whatever is on here."
 
-    /// A built-in screen that cannot place its notch is named apart from an external monitor, so a
-    /// MacBook never reads `Needs a notched display`.
-    static func hideWings(canHide: Bool, geometry: DisplayGeometry) -> String {
+    /// What the preference does on this kind of display; only a notch that cannot be placed waits.
+    static func hideNotchline(canHide: Bool, geometry: DisplayGeometry) -> String {
         guard canHide else {
-            guard geometry == .notched else {
-                return "Waits for a display with a cut-out."
-            }
             return "Waits for a display Notchline can measure."
         }
-        return "Only the cut-out, until a turn needs you."
+        return geometry == .notched
+            ? "Only the cut-out, until a turn needs you."
+            : "Tucks the pill into the top edge, until a turn needs you."
     }
 
     static func nameWork(canName: Bool) -> String {
@@ -544,7 +543,7 @@ enum SettingsCaption {
         [productsFootnote, privacyMode, outline, groupByProduct, quotaTableFootnote,
          nameWork(canName: true), nameWork(canName: false)]
             + [true, false].flatMap { canHide in
-                DisplayGeometry.allCases.map { hideWings(canHide: canHide, geometry: $0) }
+                DisplayGeometry.allCases.map { hideNotchline(canHide: canHide, geometry: $0) }
             }
             + AgentKind.allCases.map(quotaTranscripts(for:))
     }

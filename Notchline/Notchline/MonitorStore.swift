@@ -713,7 +713,7 @@ enum PanelMetrics {
 
     /// Leading wing on a notched display: padding, the mark, the counts, the clearance. No mark
     /// draws nothing — at rest a notched display hides the wing; a no-notch display keeps its mark
-    /// so the menu bar doesn't shift. With `Hide the wings` it comes out whole only when something
+    /// so the menu bar doesn't shift. With `Hide Notchline` it comes out whole only when something
     /// waits on a person (`compact-view-v2.md` §9). `47.2` at one digit, `53.8` at two, `36.6`
     /// with no rows.
     private static func notchedLeadingWidth(
@@ -755,6 +755,8 @@ enum PanelMetrics {
         // on a person (`MonitorStore.drawsCompactMarks`).
         drawsMark: Bool = true,
         expandsToPillOnly: Bool = false,
+        // `MonitorStore.tucksCompactPill`; read only on a display without a notch.
+        tucksPill: Bool = false,
         expandedContentHeight: CGFloat = expandedContentHeight
     ) -> CGSize {
         guard !isExpanded else {
@@ -792,9 +794,10 @@ enum PanelMetrics {
                 + compactTrailingWingWidth(trailing: trailing)
             return CGSize(width: ceil(width), height: compactHeight)
         case .noNotch:
+            // Tucked, the pill keeps its width and place and gives up all but a lip of its height.
             return CGSize(
                 width: fixedCompactWidth(for: status),
-                height: compactHeight
+                height: tucksPill ? min(tuckedPillHeight, compactHeight) : compactHeight
             )
         }
     }
@@ -819,6 +822,11 @@ enum PanelMetrics {
 
     /// Stated, not composed: the sum is the contract and the middle absorbs the rest.
     static let pillBodyWidth: CGFloat = 230
+
+    /// What stays on screen of a tucked pill (``MonitorStore/tucksCompactPill``): enough to see
+    /// and to hover, since a pointer thrown at the top edge stops inside it, and too little to
+    /// cover a menu title. Whole points, so the window height is exact.
+    static let tuckedPillHeight: CGFloat = 4
 
     /// `41` — the mark, and a margin either side of it.
     static var disconnectedPillWidth: CGFloat {
@@ -1235,18 +1243,18 @@ final class MonitorStore: ObservableObject {
     /// Not `@Published`: nothing draws it. It lets a preference change under a still pointer ask
     /// what the tracking area cannot (`AGENTS.md` §7).
     private(set) var isPointerOnPanel = false
-    /// Whether the collapsed surface gives up its wings and leaves the cut-out alone
-    /// (the same form as ``drawsCompactMarks`` with nothing connected).
+    /// `Hide Notchline`: while nothing waits on a person, a notched display gives up its wings
+    /// (``givesUpCompactWings``) and a notch-less one tucks the pill into the top edge
+    /// (``tucksCompactPill``).
     ///
-    /// The leading wing still comes out for a product holding a Turn to attend to
-    /// (``compactDrawnMarks``); the trailing wing never does. Collapsed only: hover still
-    /// opens the panel, the only entrance (`PRD.md` §11). Remembered even while the selected
-    /// display cannot honour it; see ``canHideCompactWings``.
-    @Published var hidesCompactWings: Bool {
+    /// Collapsed only: hover still opens the panel, the only entrance (`PRD.md` §11).
+    /// Remembered even while the selected display cannot honour it; see ``canHideNotchline``.
+    /// Stored under its old name, `hidesCompactWings`, so the answer survives the rename.
+    @Published var hidesNotchline: Bool {
         didSet {
             preferences?.set(
-                hidesCompactWings,
-                forKey: Self.hidesCompactWingsDefaultsKey
+                hidesNotchline,
+                forKey: Self.hidesNotchlineDefaultsKey
             )
         }
     }
@@ -1294,7 +1302,7 @@ final class MonitorStore: ObservableObject {
     private static let quotaHiddenProductsDefaultsKey = "quotaHiddenProducts"
     private static let recentExpandedDefaultsKey = "recentExpanded"
     private static let privacyModeDefaultsKey = "privacyMode"
-    private static let hidesCompactWingsDefaultsKey = "hidesCompactWings"
+    private static let hidesNotchlineDefaultsKey = "hidesCompactWings"
     private static let drawsSurfaceOutlineDefaultsKey = "drawsSurfaceOutline"
     private static let namesWorkOnPillDefaultsKey = "namesWorkOnPill"
     private static let groupsSessionsByProductDefaultsKey = "groupsSessionsByProduct"
@@ -1418,8 +1426,8 @@ final class MonitorStore: ObservableObject {
         self.privacyMode = preferences?.bool(
             forKey: Self.privacyModeDefaultsKey
         ) ?? false
-        self.hidesCompactWings = preferences?.bool(
-            forKey: Self.hidesCompactWingsDefaultsKey
+        self.hidesNotchline = preferences?.bool(
+            forKey: Self.hidesNotchlineDefaultsKey
         ) ?? false
         self.drawsSurfaceOutline = preferences?.bool(
             forKey: Self.drawsSurfaceOutlineDefaultsKey
@@ -1541,8 +1549,8 @@ final class MonitorStore: ObservableObject {
     }
 
 
-    /// Whether this surface draws the name of the work: the notch-less pill, collapsed, with
-    /// something to name.
+    /// Whether this surface draws the name of the work: the notch-less pill, collapsed and not
+    /// tucked, with something to name.
     ///
     /// ``privacyMode`` silences it rather than drawing a cover bar, so both collapsed forms
     /// behave alike; it does not write ``namesWorkOnPill``. The width never changes.
@@ -1551,6 +1559,7 @@ final class MonitorStore: ObservableObject {
             && !privacyMode
             && !isExpanded
             && geometry == .noNotch
+            && !tucksCompactPill
             && !compactProjectNames.isEmpty
     }
 
@@ -1606,38 +1615,60 @@ final class MonitorStore: ObservableObject {
     var canNameWorkOnPill: Bool { geometry == .noNotch }
 
     /// Whether the collapsed surface draws its mark, which decides whether the leading wing
-    /// exists. Off only when notched and collapsed with nothing connected, or `Hide the wings`
-    /// with nothing waiting on a person (`compact-view-v2.md` §9).
+    /// exists. Off on a notched bar with nothing connected, or with the wings given up and
+    /// nothing waiting on a person (`compact-view-v2.md` §9), and on a tucked pill.
     var drawsCompactMarks: Bool {
-        guard !isExpanded, geometry == .notched else { return true }
+        guard !isExpanded else { return true }
+        guard !tucksCompactPill else { return false }
+        guard geometry == .notched else { return true }
         guard !isRestingOnly else { return false }
         guard givesUpCompactWings else { return true }
-        return presenceMarks.contains(where: \.hasATurnToAttendTo)
+        return hasATurnToAttendTo
     }
 
-    /// Whether the selected display could honour ``hidesCompactWings``; it needs a measured
-    /// cut-out.
+    /// Whether the selected display could honour ``hidesNotchline``.
     ///
-    /// - No notch: hiding the pill would slide the menu bar icons and leave nothing to hover.
+    /// - No notch: always; the pill tucks rather than disappearing, so there is still a place
+    ///   to hover.
     /// - A notch with no gap between auxiliary areas is laid out as an emulated notch
-    ///   (`PanelMetrics.size`); shrinking onto it would leave a zero-width panel.
+    ///   (`PanelMetrics.size`); shrinking onto it would leave a zero-width panel, and a lip
+    ///   drawn where the cut-out may be could not be seen.
     ///
     /// Does not grey the switch or touch the preference.
-    var canHideCompactWings: Bool {
-        guard geometry == .notched else { return false }
+    var canHideNotchline: Bool {
+        guard geometry == .notched else { return true }
         return (selectedDisplay?.centerOcclusionWidth ?? 0) >= 1
     }
 
-    /// Whether the preference is in effect on a display that can honour it. A Turn waiting on
-    /// the user still brings its matrix out (``compactDrawnMarks``); ask ``drawsCompactMarks``
-    /// for what is on screen. Not scoped to hover: every reader is already collapsed-only.
+    /// Whether the preference is in effect on a notched display that can honour it. A Turn
+    /// waiting on the user still brings its matrix out; ask ``drawsCompactMarks`` for what is
+    /// on screen. Not scoped to hover: every reader is already collapsed-only.
     var givesUpCompactWings: Bool {
-        hidesCompactWings && canHideCompactWings
+        hidesNotchline && geometry == .notched && canHideNotchline
+    }
+
+    /// Whether the notch-less pill is tucked into the display's top edge: `Hide Notchline`,
+    /// collapsed, with nothing waiting on a person. Only a ``PanelMetrics/tuckedPillHeight``
+    /// lip stays on screen, the whole of the hover target, so the menu bar under the pill is
+    /// free. Nothing is drawn inside it, so no mark animates out of sight. A Turn to attend to
+    /// brings the pill back whole, where a notched display brings its leading wing out.
+    var tucksCompactPill: Bool {
+        hidesNotchline
+            && geometry == .noNotch
+            && !isExpanded
+            && !hasATurnToAttendTo
+    }
+
+    /// Approval, input, or a finished unread Turn, on any product: what brings a hidden surface
+    /// back out.
+    private var hasATurnToAttendTo: Bool {
+        presenceMarks.contains(where: \.hasATurnToAttendTo)
     }
 
     /// The preference minus the wingless form drawing no mark: that body is the cut-out, and
     /// outlining it draws two grey hooks beside the notch. A wing coming out restores the
-    /// outline. Scoped to collapsed here, not in ``givesUpCompactWings``.
+    /// outline. Scoped to collapsed here, not in ``givesUpCompactWings``. A tucked pill keeps
+    /// it: its lip is there to be found.
     var showsSurfaceOutline: Bool {
         guard drawsSurfaceOutline else { return false }
         return isExpanded || !givesUpCompactWings || drawsCompactMarks
@@ -1667,7 +1698,7 @@ final class MonitorStore: ObservableObject {
     }
 
     var compactTimerText: String? {
-        // `Hide the wings` is answered by ``compactReadingSpan``, so the composed width and the
+        // `Hide Notchline` is answered by ``compactReadingSpan``, so the composed width and the
         // drawn figure cannot disagree about whether there is a reading.
         guard let span = compactReadingSpan else { return nil }
         return SessionElapsedFormatter.elapsed(
@@ -1685,8 +1716,9 @@ final class MonitorStore: ObservableObject {
     /// - Nil while the wings are given up, for the whole trailing slot: a zero-width frame
     ///   does not clip ``ElapsedReadout``, and gating only the string drew `12 + 4.75` pt of
     ///   timer past the cut-out. The dot still comes out (`compact-view-v2.md` §9).
+    /// - Nil on a tucked pill, so no readout ticks out of sight.
     var compactReadingSpan: (start: Date, end: Date?)? {
-        guard !givesUpCompactWings else { return nil }
+        guard !givesUpCompactWings, !tucksCompactPill else { return nil }
         if let start = longestRunningSessionStart { return (start, nil) }
         let finished = sessions
             .filter { MonitorAggregation.effectiveStatus(of: $0) == .completed }
@@ -1724,7 +1756,7 @@ final class MonitorStore: ObservableObject {
     }
 
     /// The large numeral: rows on the monitored list, finished ones included
-    /// (`compact-view-v2.md` §3.3). Ungated by `Hide the wings` (§9).
+    /// (`compact-view-v2.md` §3.3). Ungated by `Hide Notchline` (§9).
     var aggregateSessionCount: Int { sessions.count }
 
     /// The small numeral: every subagent in flight, summed off ``presenceMarks`` so both ends
@@ -1761,7 +1793,7 @@ final class MonitorStore: ObservableObject {
 
 
     /// The counts column, in words. Names no product, like the numerals; ungated by
-    /// `Hide the wings`.
+    /// `Hide Notchline`.
     var spokenCollapsedCountsText: String? {
         guard aggregateSessionCount > 0 else { return nil }
         let sessions = aggregateSessionCount == 1
@@ -2688,6 +2720,7 @@ final class MonitorStore: ObservableObject {
             sessionCount: aggregateSessionCount,
             drawsMark: drawsCompactMarks,
             expandsToPillOnly: expandsToPillOnly,
+            tucksPill: tucksCompactPill,
             expandedContentHeight: expandedContentHeight
         )
     }

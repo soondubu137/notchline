@@ -202,8 +202,8 @@ final class OverlayPanelController {
             store.$isShowingAbout.map { _ in () }.eraseToAnyPublisher(),
             // Each question in a set can change the body height; row identity does not move.
             store.$answerRevision.map { _ in () }.eraseToAnyPublisher(),
-            // Hiding the wings changes the compact width; nothing else republishes.
-            store.$hidesCompactWings.map { _ in () }.eraseToAnyPublisher(),
+            // `Hide Notchline` changes the notched width or the pill's height; nothing else republishes.
+            store.$hidesNotchline.map { _ in () }.eraseToAnyPublisher(),
             // Fires only when an elapsed readout changes width; the readouts tick outside SwiftUI.
             store.$elapsedLayoutRevision.map { _ in () }.eraseToAnyPublisher(),
             // Collapsed forms are measured from the marks; a product with no rows moves nothing else.

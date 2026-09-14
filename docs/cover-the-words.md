@@ -33,7 +33,7 @@ So this document is not about a line of text being visible. **It is about a surf
 
 **It is not a privacy promise, and it does not reinstate the one [`PRD.md`](PRD.md) §7 deleted.** That contract was about where message text lives — process memory, disk, which socket it arrived on — and it is void on its own terms. This is about what is *drawn on a screen somebody else is looking at*, which is a question about the surface and has nothing to say about the data behind it. Nothing here constrains where text goes, and no clause here may be cited to veto an engineering decision about storage or transport.
 
-**It is not `Hide the wings`.** That control gives the cut-out back and slides the mark out when a turn needs a person ([`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift):270). It is about the bar at rest, it deliberately breaks cover the moment something is waiting, and it does not touch the panel.
+**It is not `Hide Notchline`** (`Hide the wings` when this was written). That control gives the cut-out back, or tucks the pill into the top edge on a display without a notch, and slides the mark out when a turn needs a person ([`SettingsWindow.swift`](../Notchline/Notchline/SettingsWindow.swift):270). It is about the bar at rest, it deliberately breaks cover the moment something is waiting, and it does not touch the panel.
 
 ## 3. The rule
 
@@ -233,7 +233,7 @@ All five stand. None was closed by the amendment, and question 03 is now sharper
 | 02 | Does the quota footer stay? | It names no work, but it does say how much of your allowance is gone, in front of the people you are pairing with. |
 | 03 | Should the cover expire? | It does not. Nothing about a demo has a natural end, and a timer that un-covers you mid-call is the failure this feature exists to prevent. |
 | 04 | Is a global shortcut worth it? | `RegisterEventHotKey` needs no permission, and a keyboard gesture is the only one that works *before* the pointer reaches the notch. It costs a shortcut recorder and a default that collides with nothing. Not proposed here; proposed if anybody asks twice. |
-| 05 | Should `Hide the wings` and this one row be aware of each other? | Both quieten the collapsed surface from opposite ends, and a person who wants one may want the other. |
+| 05 | Should `Hide Notchline` (then `Hide the wings`) and this one row be aware of each other? | Both quieten the collapsed surface from opposite ends, and a person who wants one may want the other. |
 
 ## 13. What shipped
 
