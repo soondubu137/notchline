@@ -8,6 +8,7 @@
   <img src="https://img.shields.io/badge/version-0.5.0-blue" alt="Version 0.5.0">
   <img src="https://img.shields.io/badge/licence-GPL--3.0--or--later-green" alt="Licensed under GPL 3.0 or later">
 </p>
+> 本简体中文版由 ChatGPT 翻译。
 
 [English](README.md)
 
@@ -89,10 +90,6 @@
 
 每个产品的 Provider 协调本地证据来源，将类型化事件交给共用的 Turn reducer。重构后的运行时组合生命周期、内容、已读证据和用量；Codex 保留独立编排，以同时处理 App Server 和 Hooks。浮层统一渲染 `MonitorSnapshot`，导航与支持的回答则返回原产品（[架构](docs/system-architecture.md)）。
 
-## 与 Open Island 的比较
-
-[详细对比](docs/comparisons/notchline-and-open-island.md)
-
 ## 项目状态
 
 个人业余项目，正在积极开发中。
@@ -100,7 +97,3 @@
 ## 许可证
 
 Copyright © 2026 Yinfeng Lu. 本项目采用 [GPL-3.0-or-later](LICENSE) 许可证，不提供担保。完整条款见 [LICENSE](LICENSE)。
-
----
-
-本简体中文版由 ChatGPT 翻译。

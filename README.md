@@ -89,10 +89,6 @@ With **Xcode 26.6+**, open `Notchline/Notchline.xcodeproj` and select the **Notc
 
 Each product’s Provider coordinates its local evidence sources, which feed typed events into one shared Turn reducer. The refactored runtime composes lifecycle, content, read evidence and usage; Codex retains its own orchestration for App Server alongside hooks. The overlay renders one `MonitorSnapshot`, with navigation and supported answers routed back to the originating product ([architecture](docs/system-architecture.md)).
 
-## Comparison with Open Island
-
-[Detailed comparison](docs/comparisons/notchline-and-open-island.md)
-
 ## Project status
 
 A solo side project in active development.
