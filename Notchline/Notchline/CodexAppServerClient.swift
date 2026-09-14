@@ -241,23 +241,15 @@ struct NewlineDelimitedMessageBuffer {
     }
 }
 
-/// One ordered unit of work produced by the App Server output stream.
-///
-/// Framing already happened by the time an event exists, so every case here is
-/// self-contained and safe to hand across isolation boundaries.
+/// One ordered, already-framed unit from the App Server output stream.
 enum AppServerStreamEvent: Sendable {
     case frame(Data)
     case framingOverflow(bufferedByteCount: Int)
     case streamEnded
 }
 
-/// Frames the App Server's stdout into newline-delimited messages.
-///
-/// `FileHandle` invokes its readability handler on a private serial queue, so
-/// this pump observes the pipe bytes in the order the server wrote them. Keeping
-/// the frame buffer here — instead of behind an actor hop — is what preserves
-/// that order: independently created tasks reach an actor in an unspecified
-/// order, and a single reordered chunk corrupts every frame boundary after it.
+/// Frames the App Server's stdout into newline-delimited messages on `FileHandle`'s serial
+/// readability queue, not behind an actor hop: one reordered chunk corrupts every later frame.
 final class AppServerStreamPump: @unchecked Sendable {
     private let maximumFrameByteCount: Int
     private let continuation: AsyncStream<AppServerStreamEvent>.Continuation
@@ -285,8 +277,7 @@ final class AppServerStreamPump: @unchecked Sendable {
             continuation.yield(.frame(frame))
         }
 
-        // A single frame this large is no longer a plausible response. Fail
-        // closed rather than letting an unterminated stream grow without bound.
+        // A frame this large is not a plausible response; fail closed rather than grow without bound.
         guard buffer.bufferedByteCount <= maximumFrameByteCount else {
             end(
                 with: .framingOverflow(
@@ -417,9 +408,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         )
 
         let outputHandle = outputPipe.fileHandleForReading
-        // Frame synchronously on the readability queue, which already serializes
-        // these callbacks. Nothing here hops to the actor, so the byte order the
-        // server produced survives all the way to a complete frame.
+        // Frame synchronously on the readability queue; no actor hop, so server byte order survives.
         outputHandle.readabilityHandler = { handle in
             pump.ingest(handle.availableData)
         }
@@ -559,9 +548,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         inputHandle?.closeFile()
         inputHandle = nil
 
-        // The frame buffer belongs to the pump the readability handler just
-        // released, so ending the stream retires this connection's framing state
-        // and its consumer together.
+        // The pump owning the frame buffer was just released; finishing ends framing and consumer together.
         streamContinuation?.finish()
         streamContinuation = nil
         streamConsumerTask?.cancel()
@@ -574,26 +561,9 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         process = nil
     }
 
-    /// `SIGKILL` a server that outlived the `SIGTERM` this connection sent it.
-    ///
-    /// Politeness alone is not a teardown. A server wedged in a state that does
-    /// not run its signal handler ignores `terminate()` and goes on holding its
-    /// end of a transport this client has already stopped reading -- while the
-    /// next refresh spawns its replacement. Hundreds of resets that way is
-    /// hundreds of live `codex` processes, which is the same fan the
-    /// unbacked-off spawn path cost (CR-Fable-014). ``ClaudeCommand`` has
-    /// signalled in two stages for exactly this reason; this is that rule, on
-    /// the one process path that was still only asking.
-    ///
-    /// Nothing waits for the exit. `waitUntilExit` is what the caller would
-    /// have to block on, and the caller is this actor -- so waiting on a
-    /// process that is by definition not responding would park every refresh,
-    /// every request and every teardown behind it. The signal is the guarantee;
-    /// being told when it lands is not worth an actor to hold it.
-    ///
-    /// The `Task` inherits this actor, so `process` is never touched from
-    /// anywhere else, and the pid is read before the delay rather than after:
-    /// `processIdentifier` is 0 before launch, and `kill(0, ...)` signals this
+    /// `SIGKILL` a server that outlived the `SIGTERM`: a wedged one otherwise piles up `codex`
+    /// processes across resets (CR-Fable-014). Does not wait for exit, which would park this actor.
+    /// The pid is read before the delay: it is 0 before launch, and `kill(0, ...)` signals this
     /// app's own process group.
     private func escalateKill(of process: Process) {
         let pid = process.processIdentifier
@@ -629,11 +599,8 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         }
     }
 
-    /// Drains framed events in order and decodes them off the actor.
-    ///
-    /// Deliberately `nonisolated`: a `Task` created inside an actor-isolated
-    /// method inherits that actor, which would put every JSON decode back on it.
-    /// A single consumer preserves the pump's order, including stream end.
+    /// Drains framed events in order and decodes them off the actor (`nonisolated`, so a `Task` does
+    /// not inherit the actor).
     nonisolated private func consumeStream(
         _ events: AsyncStream<AppServerStreamEvent>,
         generation: Int
@@ -643,10 +610,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
                 switch event {
                 case let .frame(frame):
                     guard !frame.isEmpty else { continue }
-                    // Decoding a full thread/list response is the most expensive
-                    // work in the transport. Running it here keeps it from
-                    // delaying timeouts, connection management, or other
-                    // responses; a decoded envelope is order-independent.
+                    // thread/list decodes are the heaviest work; off the actor they delay nothing else.
                     guard let envelope = try? JSONDecoder().decode(
                         JSONValue.self,
                         from: frame
@@ -673,10 +637,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
     private func discardUndecodableFrame(byteCount: Int, generation: Int) {
         guard connectionPhase.generation == generation else { return }
 
-        // A malformed notification must not destroy otherwise healthy read-only
-        // monitoring, so this stays non-fatal. It must not stay invisible
-        // either: a silently dropped frame used to surface only as a timeout.
-        // The payload is never logged.
+        // Non-fatal, but logged so it does not surface only as a timeout. Never log the payload.
         undecodableFrameCount += 1
         Self.logger.warning(
             "Discarded an undecodable App Server frame: bytes=\(byteCount, privacy: .public) total=\(self.undecodableFrameCount, privacy: .public)"
@@ -713,12 +674,10 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
     private func handleEnvelope(_ envelope: JSONValue, generation: Int) {
         guard connectionPhase.generation == generation else { return }
         guard let id = envelope["id"]?.intValue else {
-            // Notifications and server-initiated requests are deliberately
-            // ignored. This client never answers approval or input requests.
+            // Notifications and server requests are ignored; this client never answers them.
             return
         }
-        // A late response still proves that the transport and server event loop
-        // are alive, even when its request already timed out locally.
+        // A late response still proves the transport and server event loop are alive.
         responseSequence &+= 1
         guard let pending = pendingRequests.removeValue(forKey: id) else {
             return
@@ -821,9 +780,8 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
                     triggeredBy: method
                 )
             case .executableNotFound, .protocolViolation, .remote:
-                // Protocol and remote errors are responses, so handleEnvelope
-                // has already advanced responseSequence and reached the guard
-                // above only if the connection changed concurrently.
+                // Responses: handleEnvelope already advanced responseSequence, so this means the
+                // connection changed concurrently.
                 return
             }
         } catch {

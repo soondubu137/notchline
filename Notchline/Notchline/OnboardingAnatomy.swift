@@ -1,39 +1,14 @@
-// The two drawings the first-run window teaches from, and the pins that name
-// their parts. See `figma-design.md` §7.
-//
-// **The specimens are the product, not pictures of it.** Each one is
-// `NotchOverlayView` over a `MonitorStore` built from fixed snapshots, so the
-// bar and the panel here are composed by the same views, from the same
-// `PanelMetrics`, as the ones on the notch. Nothing is redrawn for onboarding
-// and nothing can drift: a change to the mark, to the counts column, to a
-// row's shape or to the width formula arrives in this window on the same build
-// it arrives on the surface.
-//
-// The former README figures taught the same parts at four thousand pixels
-// wide, with prose columns either side. That layout does not survive a
-// `532` pt content area — labels would land near `4` pt — so the columns
-// become numbered pins and a short key, and the artwork keeps its real size.
+// The first-run window's two drawings and their pins (`figma-design.md` §7). Specimens are the
+// real `NotchOverlayView` over a fixed-snapshot `MonitorStore`, so they cannot drift.
 import Combine
 import SwiftUI
 
-/// The fixed moment both specimens draw: two products connected, one turn
-/// stopped on an approval a person could give here, one finished with work
-/// still in flight, three finished and unread, and one that has left the list.
-///
-/// One moment for both drawings rather than two, so the shut bar and the open
-/// panel are the same instant seen twice — which is the relationship the window
-/// is teaching. The readings are live: the store ticks, so the elapsed value
-/// counts on exactly as it would on the notch. Nothing else moves, because
-/// nothing else on that surface ever does.
+/// The fixed moment both specimens draw, so bar and panel are the same instant. Only the elapsed
+/// reading moves.
 @MainActor
 enum NotchSpecimen {
-    /// A display that is not a display.
-    ///
-    /// A `46` pt menu bar and no notch, whatever the user is actually running
-    /// on. The notch-less pill is the self-contained form — it carries the
-    /// status name, and it is the whole of what the app draws rather than a
-    /// shape that only makes sense wrapped around a cut-out — so it is the one
-    /// to teach from inside a window. The parts are identical on both forms.
+    /// A `46` pt menu bar and no notch: the pill is self-contained and carries the status name, so
+    /// it teaches best inside a window. The parts are identical on both forms.
     static let display = DisplayOption(
         id: "specimen",
         displayID: nil,
@@ -52,12 +27,8 @@ enum NotchSpecimen {
         fallbackMenuBarHeight: PanelMetrics.referenceCompactHeight
     )
 
-    /// The staged instant, and the two stores drawing it.
-    ///
-    /// One tuple rather than two `static let`s, because the two stores have to
-    /// be the *same* moment — built from one `Date()` and re-staged together —
-    /// and because the wrap has to know when that moment was. Lazily built, so
-    /// a first run that never reaches page two composes no store at all.
+    /// One tuple so both stores share one `Date()`, are re-staged together, and the wrap knows when.
+    /// Lazy, so a first run that never reaches page two builds no store.
     private static var staged: (at: Date, shut: MonitorStore, hovered: MonitorStore) = {
         let now = Date()
         return (
@@ -67,40 +38,19 @@ enum NotchSpecimen {
         )
     }()
 
-    /// The collapsed bar, shut.
     static var shut: MonitorStore { staged.shut }
 
-    /// The same moment with the panel open.
+    /// The staged moment with the panel open.
     static var hovered: MonitorStore { staged.hovered }
 
-    /// Both specimens' sessions, in one list per product.
+    /// Both specimens' sessions, one list per product.
     ///
-    /// Five Codex rows and one Claude Code row, which between them are the
-    /// whole of what the two drawings have to say:
-    ///
-    /// - The Codex turn at the head of the list is **stopped on an approval,
-    ///   and the approval can be given here**. That is what makes the bar say
-    ///   `Approval needed`, and what puts `Approve` — the answer's own control
-    ///   (`answer-in-notch.md` §3) — where the first row's reading would be.
-    /// - Three more Codex turns are **finished and nobody has looked at them**.
-    ///   A finished turn sitting under a mark that is drawing something else is
-    ///   the condition the trailing wing's dot breathes for, so the shut bar
-    ///   draws that dot.
-    /// - The second Codex turn is **finished with subagents still working**.
-    ///   That is the one row drawing a badge where a reading would be, and it
-    ///   is also why the aggregate mark is on radar rather than lull: a thread
-    ///   with a subagent in flight is still running (``MonitorAggregation``).
-    /// - The Claude Code turn has simply **finished**, and its whole job is to
-    ///   put a second block on the list. With `3` Codex rows and `1` of its
-    ///   own, the two headings and three rows are `32 + 240 + 32` — the
-    ///   grouped viewport exactly, so the figure shows both blocks, and the
-    ///   row below the second heading is what the rail is reporting.
-    /// - A sixth Codex turn has **finished and left the list**, which is the
-    ///   Recent seam under the rows. It is staged by the ordinary arrow rather
-    ///   than placed: ``makeStore(isExpanded:at:)`` hands the store the list
-    ///   with it and then the list without it, and the merge records the
-    ///   departure the way a product going quiet does (`expanded-panel-v2.md`
-    ///   §2.1). `includingDeparted` is which of those two lists this is.
+    /// - Codex head row: an answerable approval (bar says `Approval needed`, row draws `Approve`).
+    /// - Three Codex turns finished and unread: the shut bar's breathing dot.
+    /// - Second Codex turn finished with subagents working: the badge row; keeps the mark on radar.
+    /// - One Claude Code row: two headings plus three rows fill the `32 + 240 + 32` viewport.
+    /// - A sixth Codex turn departs for the Recent seam (`expanded-panel-v2.md` §2.1);
+    ///   `includingDeparted` selects that list.
     private static func sessions(
         at now: Date,
         includingDeparted: Bool = false
@@ -131,18 +81,10 @@ enum NotchSpecimen {
         ]
     }
 
-    /// The row drawing a badge where a reading would be: a turn that has
-    /// finished with subagents still working, which is why it is `Running` to
-    /// the summary and the sort (``MonitorAggregation/effectiveStatus(of:)``)
-    /// while its own status stays `Completed`.
+    /// Finished with subagents still working: `Running` to the summary and sort
+    /// (``MonitorAggregation/effectiveStatus(of:)``), `Completed` itself.
     ///
-    /// **Codex's, and it used to be Claude Code's.** With the list grouped by
-    /// product the two products no longer interleave, so a row's place on the
-    /// drawing is decided by its block: as Claude Code's it sorted second in a
-    /// block of one, four rows below the fold, and the pin naming it pointed at
-    /// a Codex row with nothing to say. It teaches the badge, not the product,
-    /// so it moves to the block the figure can actually show — and Claude Code
-    /// keeps a row of its own, which is what the second header is drawn over.
+    /// Codex's, because grouped by product a Claude Code row here sorted below the fold.
     private static func subagentRow(at now: Date) -> MonitoredSession {
         MonitoredSession(
             agent: .codex,
@@ -158,14 +100,8 @@ enum NotchSpecimen {
         )
     }
 
-    /// The row at the head of the list: stopped on an approval, and holding
-    /// the request page three opens.
-    ///
-    /// **One row in two figures.** Page two draws it shut, with `Approve` on
-    /// its trailing end; page three draws the same row open, with the command
-    /// that mark leads to. Building it in one place is what makes the two the
-    /// same row rather than two rows that resemble each other — the title, the
-    /// preview and the request are read from here by both.
+    /// The head row: stopped on an approval. Page two draws it shut and page three open, both
+    /// reading title, preview and request from here.
     private static func approvalRow(at now: Date) -> MonitoredSession {
         MonitoredSession(
             agent: .codex,
@@ -175,36 +111,16 @@ enum NotchSpecimen {
             title: "Wire the quota footer to the fold control",
             preview: "Reading PanelMetrics to find the trailing slot.",
             status: .approvalNeeded,
-            // The clock this window teaches from starts here; see
-            // ``clockPeriod``. An approval keeps timing
-            // (`SessionStatus.keepsTiming`), so this is still the longest
-            // unfinished turn and still what the collapsed reading draws --
-            // the row itself spends that slot on the control instead.
+            // The clock this window teaches from (``clockPeriod``). An approval keeps timing
+            // (`SessionStatus.keepsTiming`), so the collapsed reading still draws it.
             startedAt: now,
             runningSubagentCount: 3,
             request: approval
         )
     }
 
-    /// The approval that row is holding, and the reason its mark says
-    /// `Approve` rather than `Read`.
-    ///
-    /// **A ticket that leads nowhere, on a drawing that declines every hit.**
-    /// ``AgentRequest/canBeAnswered`` is `replyTicket != nil` and nothing else,
-    /// because offering an act the app cannot deliver is the quiet promise
-    /// `answer-in-notch.md` §11 rule 03 forbids — so a specimen that is to
-    /// teach the answer control at all has to carry one. That rule protects a
-    /// person who can click, and nobody can click this: ``NotchSpecimenView``
-    /// turns hit testing off, so the word here is a drawing of a control rather
-    /// than a control. If a click ever did arrive, the registry holds no
-    /// connection under this number and the row would say so rather than
-    /// pretending — which is the same answer a real row gives when the product
-    /// has settled the request elsewhere.
-    ///
-    /// The command is never drawn: the body belongs to an **open** row, and the
-    /// specimen's rows are all shut. It is what it is so that the form is a real
-    /// one — a command is `Approve` / `Deny`, and a plan or a question would put
-    /// different words on the mark.
+    /// ``AgentRequest/canBeAnswered`` needs a `replyTicket` (`answer-in-notch.md` §11 rule 03), so this
+    /// carries one that leads nowhere; ``NotchSpecimenView`` disables hit testing.
     private static let approval = AgentRequest(
         id: "specimen-codex-approval-request",
         toolName: "Bash",
@@ -212,13 +128,8 @@ enum NotchSpecimen {
         answerHandle: AnswerHandle(ticket: 0)
     )
 
-    /// The row that leaves, so the panel has a Recent seam to name.
-    ///
-    /// Finished, on a product that is still connected — which is the queue's
-    /// ordinary arrow, `read`: the turn ended, and then its product stopped
-    /// listing it because somebody read it there
-    /// (``MonitorStore/departureReason(for:connectedAgents:)``). A dismissal
-    /// would have drawn the same seam and taught something rarer.
+    /// The row that leaves, so the panel has a Recent seam. Finished on a connected product: the
+    /// ordinary `read` arrow (``MonitorStore/departureReason(for:connectedAgents:)``).
     private static func departing(at now: Date) -> MonitoredSession {
         finished(
             id: "departed",
@@ -229,7 +140,6 @@ enum NotchSpecimen {
         )
     }
 
-    /// One of the finished turns stacked up under the mark.
     private static func finished(
         agent: AgentKind = .codex,
         id: String,
@@ -251,8 +161,8 @@ enum NotchSpecimen {
         )
     }
 
-    /// Every product's answer at one instant: what both stores are built from,
-    /// and what ``cycle()`` hands back to them.
+    /// Every product's answer at one instant: what both stores are built from and ``cycle()``
+    /// restages.
     private static func snapshots(
         at now: Date,
         includingDeparted: Bool = false
@@ -272,14 +182,7 @@ enum NotchSpecimen {
         }
     }
 
-    /// One product's rate-limit windows, and what it has spent today.
-    ///
-    /// Three rules, because that is what the footer has to explain: Codex
-    /// publishes one window and Claude Code publishes two, and the panel draws
-    /// each product's own rather than one number standing for both. The resets
-    /// are relative to the staged instant, so they stay sensible for as long as
-    /// the window is up — a fixed date would be counting down towards a moment
-    /// that had already passed by the second time somebody opened this.
+    /// Codex publishes one window, Claude Code two. Resets are relative to the staged instant.
     private static func quota(at now: Date) -> [AgentKind: QuotaSnapshot] {
         [
             .codex: QuotaSnapshot(
@@ -315,8 +218,7 @@ enum NotchSpecimen {
         ]
     }
 
-    /// The open Recent queue belongs to the reading page. Building it must
-    /// not construct the answer examples before their page is visited.
+    /// Belongs to the reading page; building it must not construct the answer examples.
     private static var recent: MonitorStore?
 
     static var recentQueue: MonitorStore {
@@ -331,25 +233,18 @@ enum NotchSpecimen {
 
     // MARK: - Page three: answering requests
 
-    /// The page-three examples and the instant they share.
-    ///
-    /// **Built on first use, like the other two and one page later.** Page two
-    /// composes no store until it is reached; these compose none until page
-    /// three is, so a first run that connects and stops has built nothing at
-    /// all. The question variants remain isolated from one another.
-    /// Cached separately from the reading page's Recent queue.
+    /// The page-three examples and the instant they share. Built on first visit to page three;
+    /// question variants stay isolated, and the cache is separate from the Recent queue.
     private static var opened: Opened?
 
     struct Opened {
         /// A permission request, open: the row page two draws shut.
         let command: MonitorStore
-        /// A question with options, open.
         let question: MonitorStore
         let multipleChoice: MonitorStore
         let typedAnswer: MonitorStore
     }
 
-    /// The page-three stores, composed if this is the first look at them.
     static func openedSpecimens() -> Opened {
         if let opened { return opened }
         let built = makeOpened(at: Date())
@@ -377,13 +272,8 @@ enum NotchSpecimen {
         }
         let question = questionStore(multiple: false)
         let multipleChoice = questionStore(multiple: true)
-        // **Nothing ticked, because that is the state this lesson is about**
-        // (`answer-in-notch.md` §5.4). It used to stage both options ticked
-        // *and* a draft, back when text outranked a selection and the drawing
-        // said so by dropping the selection highlight. A selection outranks the
-        // field now, so the same specimen would teach the opposite of what the
-        // app does: the ticks would be the answer and the sentence beside them
-        // decoration.
+        // Nothing ticked: that is the state this lesson is about (`answer-in-notch.md` §5.4). A
+        // selection outranks the field, so ticks plus a draft would teach the ticks as the answer.
         let typedAnswer = questionStore(
             multiple: true,
             selected: [],
@@ -393,14 +283,8 @@ enum NotchSpecimen {
         return Opened(command: command, question: question, multipleChoice: multipleChoice, typedAnswer: typedAnswer)
     }
 
-    /// The queue page two opens: three rows that left at three different
-    /// times.
-    ///
-    /// **The ages are the teaching**, which is why they are staged directly
-    /// (``MonitorStore/stageSpecimenQueue(_:)``) rather than through the arrow
-    /// page two's single departure takes. A queue is a sequence — this one runs
-    /// `2m`, `18m`, `1h` — and rows that all departed in the same pass would
-    /// have drawn one age three times and said the opposite.
+    /// Three rows that left at different times (`2m`, `18m`, `1h`), staged directly via
+    /// ``MonitorStore/stageSpecimenQueue(_:)`` because one merge pass would give them one age.
     private static func departedQueue(at now: Date) -> [RecentDeparture] {
         let left: [(id: String, title: String, ago: TimeInterval)] = [
             ("named", "Name every quota window as its product does", 2 * 60),
@@ -417,15 +301,12 @@ enum NotchSpecimen {
                     endedAgo: row.ago + 30
                 ),
                 departedAt: now.addingTimeInterval(-row.ago),
-                // The lifecycle's own arrow: the turn ended, and then its
-                // product recorded the Thread as read.
                 reason: .read
             )
         }
     }
 
-    /// The same example in both selection modes, with a description long
-    /// enough to expose the real Show more control.
+    /// Both selection modes, with a description long enough to show Show more.
     private static func questionRow(at now: Date, multiple: Bool = false) -> MonitoredSession {
         MonitoredSession(
             agent: .claudeCode,
@@ -483,10 +364,8 @@ enum NotchSpecimen {
     }
 
     private static func makeStore(isExpanded: Bool, at now: Date) -> MonitorStore {
-        // No services and no preferences: nothing is watched, no socket is
-        // bound, no file of the user's is read, and the drawing cannot be
-        // changed by what they happen to have chosen in Settings. See
-        // `MonitorStore.makeShared()` for the same argument at launch.
+        // No services or preferences: nothing watched, no socket bound, no user file read, Settings
+        // cannot change the drawing (cf. `MonitorStore.makeShared()`).
         let store = MonitorStore(
             displays: [display],
             services: [],
@@ -500,48 +379,19 @@ enum NotchSpecimen {
 
     /// Lets the sixth row leave, so the panel draws its Recent seam.
     ///
-    /// **The row departs; it is not placed there.** The queue is fed from one
-    /// funnel — the difference between the list a merge arrives with and the
-    /// list before it — so the honest way to put a row under the seam is to
-    /// hand the store a list holding it and then a list without it. That is
-    /// what a product recording a Thread as read looks like from in here, and
-    /// it means the specimen has no path into the queue that the notch itself
-    /// does not have.
-    ///
-    /// Called again on every wrap: the departure ages from its own instant, and
-    /// re-staging the rows without re-staging this would leave a seam counting
-    /// away from a moment the rest of the drawing had left behind.
+    /// The queue is fed only by merge differences, so the store gets a list with the row, then
+    /// without. Re-run on every wrap so the departure ages from the same instant as the rest.
     private static func stageDeparture(in store: MonitorStore, at now: Date) {
         store.restageSpecimen(snapshots(at: now, includingDeparted: true))
         store.restageSpecimen(snapshots(at: now))
     }
 
-    /// How long the specimen's clock runs before it starts again.
-    ///
-    /// The reading is live — the product's own `ElapsedReadout` over the
-    /// product's own tick — so a window left open all afternoon would be
-    /// teaching from `4:17:33`. Ten minutes is the longest run that still reads
-    /// as a turn, and the wrap comes **half a second early**: the reading is
-    /// `9:59` from `599.0`, the tick that would draw `10:00` fires at `600.0`,
-    /// and landing between them is what makes `9:59` the last figure anybody
-    /// sees rather than a race with the tick.
+    /// How long the specimen clock runs before restarting: ten minutes, less half a second so the
+    /// wrap lands between `9:59` (`599.0`) and the `10:00` tick (`600.0`).
     static let clockPeriod: Duration = .milliseconds(599_500)
 
-    /// Start both specimens' clocks again, for as long as the window is up.
-    ///
-    /// Driven by the view rather than by a timer of its own, so it stops when
-    /// onboarding does: `.task` is cancelled when that view goes away, and
-    /// nothing here outlives the window.
-    ///
-    /// **Each pass measures the clock rather than counting on the last sleep.**
-    /// A fixed `sleep(period)` loop drifts past `9:59` the moment anything
-    /// takes the sleep and the wall clock out of step, and two ordinary things
-    /// do: going `Back` to page one cancels this task and starting it again
-    /// re-sleeps a whole period against a store that has been counting the
-    /// whole time, and a Mac that sleeps holds the task while the reading —
-    /// which is wall-clock — runs on. Re-reading ``staged`` every pass makes
-    /// both self-correcting: the wait is only ever the remainder, and a
-    /// wake-up that finds the clock already past the period wraps immediately.
+    /// Restarts both clocks while the window is up (`.task` cancels it). Each pass re-reads ``staged``
+    /// and waits only the remainder, so `Back` or a Mac sleep cannot drift past `9:59`.
     static func cycle() async {
         while !Task.isCancelled {
             let wait = remainingBeforeWrap(stagedAt: staged.at, now: Date())
@@ -555,36 +405,28 @@ enum NotchSpecimen {
         }
     }
 
-    /// How much of the period a clock staged at `stagedAt` has left.
-    ///
-    /// Zero once it is spent, which is what makes a wake-up that finds the
-    /// clock already past the period wrap at once rather than sleeping through
-    /// another one.
+    /// Zero once spent, so a late wake-up wraps at once.
     static func remainingBeforeWrap(stagedAt: Date, now: Date) -> Duration {
         let remaining = clockPeriod - .seconds(now.timeIntervalSince(stagedAt))
         return max(remaining, .zero)
     }
 
-    /// Hand both stores the same rows again, started now — and let the same
-    /// row leave again, so the seam is part of the instant rather than a
-    /// leftover from the first one.
+    /// Restages both stores' rows from now, including the departure, so the seam belongs to the
+    /// new instant.
     private static func restage() {
         let now = Date()
         staged.at = now
         stageDeparture(in: staged.shut, at: now)
         stageDeparture(in: staged.hovered, at: now)
-        // The reading page's queue wraps with its other specimens. Open
-        // answer rows draw no clock and must not be re-merged or closed.
+        // The Recent queue wraps too. Open answer rows draw no clock and must not be re-merged or closed.
         recent?.stageSpecimenQueue(departedQueue(at: now))
     }
 
-    /// The body's size, as the product would compose it for this moment.
     static func bodySize(of store: MonitorStore) -> CGSize {
         store.currentPanelSize
     }
 
-    /// The window the overlay would put that body in: one shoulder wider on
-    /// each side, which is where `PanelContour` draws the curve back up.
+    /// One shoulder wider on each side, where `PanelContour` curves back up.
     static func windowSize(of store: MonitorStore) -> CGSize {
         let body = bodySize(of: store)
         return CGSize(
@@ -594,13 +436,8 @@ enum NotchSpecimen {
     }
 }
 
-/// One specimen: the overlay, at the size the overlay would be, drawing
-/// nothing but itself.
-///
-/// Hit testing is off. These are drawings inside a settings window, so a
-/// pointer crossing one must not open the panel, hover a row or answer a
-/// click; and with hit testing off the store never hears a pointer at all,
-/// which is what keeps the shut specimen shut.
+/// One specimen: the overlay at its own size. Hit testing is off, so a pointer never opens the
+/// panel or answers a click, and the shut specimen stays shut.
 private struct NotchSpecimenView: View {
     let store: MonitorStore
 
@@ -616,13 +453,8 @@ private struct NotchSpecimenView: View {
 
 // MARK: - Pins
 
-/// One numbered pin and what it points at.
-///
-/// Internal rather than private, with the two `pins` arrays below, for the one
-/// assertion that cannot be made from outside the drawing: that no two pins on
-/// a figure land on the same point. That is not a hypothetical — ③ and ⑤ sat
-/// exactly on top of each other on the collapsed figure for as long as its key
-/// named parts the bar had stopped drawing, and nothing failed.
+/// One numbered pin and what it points at. Internal, with `pins`, for the test that no two pins
+/// on a figure share a point.
 struct AnatomyPin: Identifiable {
     enum Leader {
         /// A stem dropping from the pin to the specimen's top edge.
@@ -632,13 +464,8 @@ struct AnatomyPin: Identifiable {
         /// A stem reaching sideways, drawn over the specimen itself.
         case left(CGFloat)
         case right(CGFloat)
-        /// One pin, two feet: a stem to a spine, and a foot off each end of it,
-        /// opening rightwards from the margin.
-        ///
-        /// For the part that is two lines rather than one. A row's project and
-        /// its title are a single reading — the project only says which thing
-        /// the title belongs to — and two pins beside two lines `18` pt apart
-        /// would have said they were two answers to different questions.
+        /// A stem to a spine with a foot off each end, opening rightwards: one pin for a row's Project
+        /// and title, which are one reading.
         case forkRight(stem: CGFloat, spread: CGFloat, foot: CGFloat)
     }
 
@@ -647,8 +474,7 @@ struct AnatomyPin: Identifiable {
     let x: CGFloat
     let y: CGFloat
     let leader: Leader
-    /// What the key says about it. Two to four words: the picture is the
-    /// explanation, and this only has to name the part.
+    /// Two to four words; it only names the part.
     let label: String
 }
 
@@ -662,14 +488,8 @@ enum AnatomyMetrics {
     static let keySpacing: CGFloat = 12
 }
 
-/// The pin itself: a numeral in a ring, in the window's control colours.
-///
-/// **Every pin stands on the card, never on the drawing.** Pins used to be laid
-/// over the panel's black wherever a part had clear ground beside it, which
-/// needed a second, lighter ink and put numerals on top of the very thing they
-/// were naming. Both figures now keep their pins in the margins — above and
-/// below the bar, left and right of the panel — so the specimens are drawn
-/// exactly as the product draws them, with nothing of this window on top.
+/// The pin: a numeral in a ring, in the window's control colours. Pins stand in the card's
+/// margins, never on the drawing.
 private struct AnatomyPinBadge: View {
     let number: Int
 
@@ -686,7 +506,6 @@ private struct AnatomyPinBadge: View {
     }
 }
 
-/// A hairline from a pin to its part.
 private struct AnatomyLeader: View {
     let leader: AnatomyPin.Leader
 
@@ -715,8 +534,6 @@ private struct AnatomyLeader: View {
     }
 }
 
-/// The bracket a forked leader draws: a stem to a spine, and a foot off each
-/// end of it, opening rightwards from the pin.
 private struct ForkPath: Shape {
     let stem: CGFloat
     let spread: CGFloat
@@ -737,15 +554,11 @@ private struct ForkPath: Shape {
     }
 }
 
-/// A specimen with its pins over it and the key underneath.
-///
-/// The key is three columns, because that is what fits two-to-four words at
-/// `11` pt across `504` and still leaves the numerals aligned; six entries
-/// therefore take two rows and five take two as well.
+/// A specimen with its pins over it and the key underneath, in three columns (`11` pt across
+/// `504`).
 private struct PinnedFigure<Specimen: View>: View {
     let pins: [AnatomyPin]
-    /// How much clear room the pins need above and below the specimen. Zero
-    /// where every pin is drawn over it.
+    /// Clear room the pins need above and below the specimen; zero where every pin is drawn over it.
     var margin: (top: CGFloat, bottom: CGFloat) = (0, 0)
     /// What the key steps in by, for a specimen drawn to the card's own edges.
     var keyInset: CGFloat = 0
@@ -830,27 +643,13 @@ private struct PinnedFigure<Specimen: View>: View {
 
 // MARK: - Shut
 
-/// The collapsed bar, named part by part.
+/// The collapsed bar, named part by part (`compact-view-v2.md` §8).
 ///
-/// Every pin's `x` is asked of `PanelMetrics`, not measured off a drawing: the
-/// leading group is packed from the leading edge, the middle from the group's
-/// own reserved width, and the trailing slot from the trailing edge — so all
-/// three can be composed from the same figures the bar itself is composed
-/// from, and nothing here is a number somebody read off a screenshot.
-///
-/// **Redrawn for V2** (`compact-view-v2.md` §8, which parked this). The V1
-/// version pinned six labels on a bar that has since stopped drawing four of
-/// them: there is no mark per product, no dot column, and no badge in the
-/// trailing wing. Two pins survive unchanged — the mark and the reading — and
-/// the four that went are replaced by what actually stands there now: the two
-/// numerals of the counts column, the Project in the pill's middle, and the
-/// dot that says a finished turn is buried under a mark drawing something
-/// else. The numbered key names each part without a secondary line.
+/// Every pin's `x` is composed from `PanelMetrics`, never measured off a drawing.
 struct CollapsedBarAnatomy: View {
     private let store = NotchSpecimen.shut
 
-    /// The bar at its own size, which is what the pins are placed against.
-    /// Internal for the assertion that they land on it.
+    /// The bar at its own size, which the pins are placed against. Internal for tests.
     var specimenSize: CGSize { NotchSpecimen.windowSize(of: store) }
 
     var body: some View {
@@ -874,37 +673,24 @@ struct CollapsedBarAnatomy: View {
         AnatomyMetrics.pinSize + AnatomyMetrics.leaderClearance
     }
 
-    /// Where the parts stand, in the specimen's own coordinates. Internal for
-    /// the assertion that no two of them land on one point.
+    /// Where the parts stand, in the specimen's coordinates. Internal for the no-overlap test.
     ///
-    /// **The counts column is named from both sides.** Its two numerals are
-    /// `16.6` pt apart on one x, so a pin apiece in the same margin would have
-    /// been two numerals on top of each other — which is what the V1 pins had
-    /// become, ③ and ⑤ landing on the same point once the dot column and the
-    /// badges left. The column is one part with two rows, so it takes one pin
-    /// from above and one from below: the leaders arrive at the numeral each
-    /// belongs to, and the pair reads as the stack it is.
+    /// The counts column's numerals are `16.6` pt apart on one x, so it takes one pin from above and
+    /// one from below.
     var pins: [AnatomyPin] {
         let size = NotchSpecimen.windowSize(of: store)
         let shoulder = store.surfaceShoulderRadius
         let matrix = PanelMetrics.statusMatrixSize
         let leading = shoulder + PanelMetrics.expandedHorizontalPadding
         let mark = leading + matrix / 2
-        // Both numerals are drawn from the column's own leading edge, one gap
-        // past the mark; the subagents numeral is the narrower of the two and
-        // its centre is under a point from this, so one x serves the stack and
-        // keeps the two leaders in line.
+        // Both numerals start one gap past the mark; the narrower subagents numeral centres within a
+        // point of this, so one x serves both leaders.
         let counts = leading
             + matrix
             + PanelMetrics.aggregateCountsGap
             + PanelMetrics.countsDigitWidth / 2
-        // The pill's middle stands past the leading group's *reserved* width —
-        // the room the wing holds open at two digits whatever it is drawing —
-        // and one notch clearance after it. **The pin goes on the name rather
-        // than on the slot**: the name is drawn from the slot's leading edge
-        // and faded off its trailing one, so on a short name the slot's own
-        // middle is black. A name too long for the slot centres on the slot,
-        // which is where it is anyway.
+        // The middle starts past the leading group's reserved width plus one notch clearance. The pin
+        // goes on the name, not the slot: a short name leaves the slot's middle black.
         let middleWidth = PanelMetrics.pillMiddleWidth(
             trailing: store.compactTrailingReading
         )
@@ -917,9 +703,8 @@ struct CollapsedBarAnatomy: View {
                 middleWidth
             ) / 2
         let trailing = size.width - shoulder - PanelMetrics.expandedHorizontalPadding
-        // The slot is exactly what it draws, so both trailing pins are measured
-        // from the panel edge inwards: the reading's ground ends one trailing
-        // padding in, and the dot and its `8` stand before it.
+        // Trailing pins measured inwards from the panel edge: the reading ends one trailing padding in,
+        // the dot and its `8` stand before it.
         var reading: CGFloat = 0
         if let timerText = store.compactTimerText {
             reading = PanelMetrics.drawnCompactReadingWidth(timerText)
@@ -972,31 +757,13 @@ struct CollapsedBarAnatomy: View {
 
 // MARK: - Hovered
 
-/// The expanded panel, named part by part.
-///
-/// **Whole, and drawn a little under size.** It used to be cropped to two rows
-/// with the rest faded away, because the panel and the bar and the legend were
-/// competing for one window's height; splitting the flow in two gave this block
-/// a page of its own, and the first thing that room bought back was the quota
-/// footer. That footer was then three rate-limit rules and the day's tokens;
-/// since `quota-footer-v2.md` §3 it is the day's tokens and the control that
-/// opens the rest, so the room the split bought is now spent on drawing the
-/// panel at rest rather than on a third of it.
-///
-/// The scale is for the card rather than for the height: at `700` in a `532`
-/// card the panel would meet both edges and its shoulders overhang the
-/// card's own padding, which reads as a layout fault instead of a specimen
-/// on a page. `0.624` holds the drawing at the same `436.8` pt it was drawn
-/// at before the panel widened, so the margin either side is unchanged; the
-/// row copy is smaller for it, `~8.1` pt rather than the `11` pt the
-/// original `520`-pt baseline and `0.84` gave.
+/// The expanded panel, named part by part. `0.624` keeps it at `436.8` pt inside the `532` card.
 struct ExpandedPanelAnatomy: View {
     private let store = NotchSpecimen.hovered
 
     static let scale: CGFloat = 0.624
 
-    /// The panel as this page draws it. Internal for the assertion that the
-    /// pins land on its edges.
+    /// The panel as this page draws it. Internal for the edge test.
     var specimenSize: CGSize {
         let panel = NotchSpecimen.windowSize(of: store)
         return CGSize(width: panel.width * Self.scale, height: panel.height * Self.scale)
@@ -1024,36 +791,14 @@ struct ExpandedPanelAnatomy: View {
         )
     }
 
-    /// Every part named from the margins, in two columns.
-    ///
-    /// **Nothing is drawn on top of the panel.** Pins used to be laid over its
-    /// black wherever a part had clear ground beside it, which worked and still
-    /// put this window's furniture on the drawing it was teaching from — and
-    /// left the numerals scattered across the specimen in no order the eye
-    /// could follow. Outside, they read as a margin note: the left column names
-    /// what a row leads with and what the footer says, the right column names
-    /// the marks that end a line, and each is level with the thing it points
-    /// at. It also settles the ink question — every pin is the card's, so there
-    /// is one ring and one hairline rather than two of each.
-    ///
-    /// Placed in the panel's units and scaled with it, so the drawing and its
-    /// pins cannot come apart, and internal for the assertion that no two of
-    /// them land on one point. **Every y below is composed rather than
-    /// measured**: a row's lines come from the four figures the row itself
-    /// stacks, and the seam and the spend line from the one height both bars
-    /// share, so a change to any of them arrives here on the same build.
+    /// Every part named from the margins: left for row leads and footer, right for line-ending marks.
+    /// Panel units, scaled with it; every y composed, never measured. Internal for tests.
     var pins: [AnatomyPin] {
         let scale = Self.scale
         let size = NotchSpecimen.windowSize(of: store)
         let header = store.compactHeight
-        // The air a row keeps above its first line and below its last.
         let inset = PanelMetrics.sessionRowVerticalPadding
-        // **The first block's header stands between the band and the first
-        // row**, so every row pin below starts under it. It is the short bar
-        // — the one that stands in for the panel's own top rule — and it is
-        // drawn at every product count, one included: the list is one block
-        // per product always, so this figure is the general one rather than
-        // the two-product one.
+        // The first block's header sits between the band and the first row at every product count.
         let blockHeader = PanelMetrics.leadingProductGroupHeaderHeight
         let firstRow = header + blockHeader
         let secondRow = firstRow + PanelMetrics.sessionRowHeight
@@ -1067,20 +812,11 @@ struct ExpandedPanelAnatomy: View {
             + PanelMetrics.sessionRowHeight
             - inset
             - PanelMetrics.sessionRowPreviewHeight / 2
-        // A row's mark is centred on the **row**, not on any of its lines: it
-        // is one control standing beside three lines rather than a fourth one.
+        // A row's mark is centred on the row, not on any of its lines.
         let firstMark = firstRow + PanelMetrics.sessionRowHeight / 2
         let secondMark = secondRow + PanelMetrics.sessionRowHeight / 2
-        // What the live list is given, and the two closing bars under it. They
-        // are the same `32` pt bar drawn twice (`quota-footer-v2.md` §2), so
-        // both pins are placed on the middle of one height.
-        // **Asked of the store, not of `PanelMetrics` again.** The viewport
-        // grows by the headers it draws, and the store is where that count
-        // lives; re-deriving the height from a row count alone put this pin —
-        // and the two below it — `64` above the bars they name the moment a
-        // second product connected. It is the same fault, in the same
-        // direction, as the one ``MonitorStore/sessionViewportHeight`` was
-        // written to stop the list itself committing.
+        // Height from the store, which counts the headers; a row count alone misplaced these pins by
+        // `64` with two products. Both closing bars are one `32` pt height (`quota-footer-v2.md` §2).
         let list = header + store.sessionViewportHeight
         let seam = list + PanelMetrics.recentSeamHeight / 2
         let footer = list + PanelMetrics.recentSectionHeight(
@@ -1117,10 +853,7 @@ struct ExpandedPanelAnatomy: View {
             )
         }
 
-        // The block heading, which is also why the rows under it no longer
-        // name their own product. Always drawn, because the list is always
-        // grouped — the `if` that used to stand here, and the renumbering
-        // behind it, went with the flat one-product list.
+        // The block heading; rows no longer name their own product.
         let key: [AnatomyPin] = [
             left(1, header / 2, "Same as above"),
             right(2, header / 2, "Settings"),
@@ -1128,11 +861,8 @@ struct ExpandedPanelAnatomy: View {
         ]
         let next = key.count + 1
         return key + [
-            // One pin, two feet: the Project only says which thing the title
-            // is on, so they are one reading rather than two. **The product is
-            // no longer one of them** — the heading above has said it, and a
-            // chip repeating it on every line is the boundary after a boundary
-            // `panel-v2.md` §3.4 deleted.
+            // One pin, two feet: Project and title are one reading. The product is not one of them; the
+            // heading says it (`panel-v2.md` §3.4).
             AnatomyPin(
                 id: next,
                 x: leftMargin * scale,
@@ -1145,77 +875,49 @@ struct ExpandedPanelAnatomy: View {
                 label: "Project and title"
             ),
             left(next + 1, lastSaid, "The last thing said"),
-            // The row's own control, and the one part of either drawing that
-            // does something: the mark opens this Thread's request
+            // The only part that does something: the mark opens the Thread's request
             // (`answer-in-notch.md` §3).
             right(next + 2, firstMark, "Answer it here"),
             right(next + 3, secondMark, "Subagents"),
-            // The seam between what is running and what has been and gone.
             left(next + 4, seam, "Rows that have left"),
             left(next + 5, spend, "Today’s tokens"),
-            // The footer's other half, and the only control on it: the
-            // rate-limit windows are behind this rather than drawn at rest.
+            // The footer's only control; rate-limit windows are behind it, not drawn at rest.
             right(next + 6, spend, "Rate limits")
         ]
     }
 
-    /// How far either column stands off the panel, in the panel's own units.
+    /// How far either column stands off the panel, in panel units.
     private static let margin: CGFloat = 30
 
-    /// The left column, in the card's own margin beside the panel. Negative
-    /// because the figure's origin is the specimen's leading edge.
+    /// Negative because the figure's origin is the specimen's leading edge.
     private var leftMargin: CGFloat { -Self.margin }
 
-    /// The right column, the same distance past the trailing edge.
     private func rightMargin(of size: CGSize) -> CGFloat { size.width + Self.margin }
 
-    /// The clear space a leader crosses, from the pin's own edge to the
-    /// panel's.
-    ///
-    /// **In the drawing's units, and derived rather than written down.** A pin
-    /// stands off the panel by a distance in the panel's units, which scales;
-    /// its badge is `13` pt whatever the specimen is scaled to, which does not.
-    /// A leader written as a third number and then scaled with the first ends
-    /// up neither: at every scale this page has used it overshot by about `5`
-    /// pt, laying a hairline across the black it is pointing at — on a figure
-    /// whose whole rule is that nothing of this window is drawn on the
-    /// specimen. Subtracting the badge's own half from the scaled margin is
-    /// what makes the line stop exactly on the edge.
+    /// Half the unscaled `13` pt badge off the scaled margin, so the leader stops on the panel's edge.
     private var gutter: CGFloat {
         Self.margin * Self.scale - AnatomyMetrics.pinSize / 2
     }
 
-    /// How far a forked leader's two feet reach past its spine. In the
-    /// drawing's units, like the gutter it is taken out of.
+    /// How far a forked leader's feet reach past its spine, in drawing units.
     private var forkFoot: CGFloat { 10 }
 }
 
 // MARK: - Opened
 
-/// Shared by the open-request and Recent figures: the panel's own ground
-/// with its header and footer cut away, and one scale for each specimen.
-///
-/// **A plate rather than a whole panel.** Every part page three names is inside
-/// the row block, and drawing the header and the footer around each of them
-/// three times would have repeated two things page two teaches — and spent the
-/// height on them that this page spends on being legible instead. So the ground
-/// is the panel's width with the row block inset by the panel's own gutter,
-/// which is what the black behind a row actually is; the row and the section
-/// drawn on it are the product's own views, unchanged.
+/// Shared by the open-request and Recent figures: the panel's ground without header or footer,
+/// row block inset by the panel's gutter.
 private enum OpenedSpecimen {
-    /// The panel's own inset around a row block.
     static var gutter: CGFloat { PanelMetrics.sessionRowGutter }
 
-    /// Keep room for the pins within page two's card width. Their centres
-    /// bisect each card margin in drawing units; their badges never scale.
+    /// Pin centres bisect each card margin in drawing units; badges never scale.
     static let drawnWidth: CGFloat = 436.8
     static let margin = (OnboardingLayout.cardWidth - drawnWidth) / 4
 
     /// The clear space a leader crosses, badge edge to plate edge.
     static var gutterToPlate: CGFloat { margin - AnatomyMetrics.pinSize / 2 }
 
-    /// The plate a figure is drawn on: the panel's width, and the specimen's
-    /// own height with the panel's gutter above and below it.
+    /// The panel's width, and the specimen's height with the panel's gutter above and below.
     static func plateSize(store: MonitorStore, height: CGFloat) -> CGSize {
         let scale = scale(plateWidth: store.currentPanelSize.width)
         return CGSize(
@@ -1224,18 +926,13 @@ private enum OpenedSpecimen {
         )
     }
 
-    /// Reserve the pin margins before scaling the plate. Including margins
-    /// in the denominator scaled space that the pins themselves never scale.
+    /// Pin margins are reserved before scaling, since the pins themselves never scale.
     static func scale(plateWidth: CGFloat) -> CGFloat {
         drawnWidth / plateWidth
     }
 
-    /// Where the answers stand, measured inwards from the row's trailing edge.
-    ///
-    /// The answer row is the field, then the refusal where the form has one,
-    /// then the affirmative — each hugging its own word
-    /// (``PanelMetrics/drawnAnswerControlWidth(_:)``), `8` apart. So the
-    /// affirmative is placed from the edge and everything else from it.
+    /// Measured inwards from the trailing edge: field, refusal, affirmative, each hugging its word
+    /// (``PanelMetrics/drawnAnswerControlWidth(_:)``), `8` apart.
     static func answerCentres(
         rowWidth: CGFloat,
         shape: AnswerRowShape
@@ -1258,18 +955,11 @@ private enum OpenedSpecimen {
     }
 }
 
-/// An open-request or Recent figure on the panel's ground, with its pins in
-/// the left margin and along the bottom.
-///
-/// **Left and below rather than left and right**, which is page two's pair.
-/// The parts these figures name are a body in the middle of a row and three
-/// controls side by side at the foot of it, and three pins in one column would
-/// land on top of each other — the fault §7.1 records. A row is short enough to
-/// have a bottom margin to give, which a `740` pt panel is not.
+/// Pins in the left margin and along the bottom: side-by-side controls in one column overlap (§7.1).
 private struct OpenedFigure<Specimen: View>: View {
     let store: MonitorStore
     let pins: [AnatomyPin]
-    /// The specimen's own height, in the panel's units.
+    /// The specimen's own height, in panel units.
     let height: CGFloat
     @ViewBuilder let specimen: () -> Specimen
 
@@ -1296,8 +986,7 @@ private struct OpenedFigure<Specimen: View>: View {
                     )
                     .padding(OpenedSpecimen.gutter)
             }
-            // Drawn at the panel's own size and scaled as one object, so the
-            // ground and what stands on it cannot come apart.
+            // Drawn at panel size and scaled as one, so ground and content cannot come apart.
             .frame(
                 width: store.currentPanelSize.width,
                 height: height + OpenedSpecimen.gutter * 2,
@@ -1305,28 +994,21 @@ private struct OpenedFigure<Specimen: View>: View {
             )
             .scaleEffect(scale, anchor: .topLeading)
             .frame(width: plate.width, height: plate.height, alignment: .topLeading)
-            // Drawings inside a settings window: a pointer crossing one must
-            // not hover a row, arm an answer or take a click.
+            // Drawings in a settings window: no hover, no armed answer, no click.
             .allowsHitTesting(false)
             .accessibilityHidden(true)
         }
     }
 }
 
-/// A permission request, open: what the mark on page two leads to.
-///
-/// The same row page two draws shut — same title, same request — so the two
-/// figures are one row seen in its two states rather than two rows that
-/// resemble each other.
+/// A permission request, open: the same row page two draws shut.
 struct OpenCommandAnatomy: View {
     private let store = NotchSpecimen.openedSpecimens().command
 
-    /// How tall the open row is, which the store composes from the request's
-    /// own layout.
+    /// Composed by the store from the request's own layout.
     private var height: CGFloat { store.openRowHeight ?? PanelMetrics.sessionRowHeight }
 
-    /// The plate it is drawn on. Internal, with ``pins``, for the assertion
-    /// that they land on its edges and not on each other.
+    /// The plate it is drawn on. Internal, with ``pins``, for the edge and overlap test.
     var specimenSize: CGSize {
         OpenedSpecimen.plateSize(store: store, height: height)
     }
@@ -1410,12 +1092,10 @@ struct OpenQuestionAnatomy: View {
         }
     }
 
-    /// How tall the open row is, which the store composes from the request's
-    /// own layout.
+    /// Composed by the store from the request's own layout.
     private var height: CGFloat { store.openRowHeight ?? PanelMetrics.sessionRowHeight }
 
-    /// The plate it is drawn on. Internal, with ``pins``, for the assertion
-    /// that they land on its edges and not on each other.
+    /// The plate it is drawn on. Internal, with ``pins``, for the edge and overlap test.
     var specimenSize: CGSize {
         OpenedSpecimen.plateSize(store: store, height: height)
     }
@@ -1426,8 +1106,7 @@ struct OpenQuestionAnatomy: View {
                 OpenRow(session: session)
             }
         }
-        // Each example has its own draft despite sharing a specimen Thread ID.
-        // Recreate the native answer field when switching examples.
+        // Examples share a specimen Thread ID but each has its own draft; recreate the answer field.
         .id(lesson)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
@@ -1456,10 +1135,7 @@ struct OpenQuestionAnatomy: View {
             )
         ]
 
-        // One pin over the whole list rather than one per answer: they are one
-        // part with as many rows as the product sent, and a numeral beside each
-        // would have said they were separate questions. The same bracket, and
-        // the same argument, as the caption and title on page two.
+        // One bracketed pin over the whole option list: the options are one part.
         if let options = body.optionList {
             pins.append(
                 AnatomyPin(
@@ -1481,9 +1157,7 @@ struct OpenQuestionAnatomy: View {
                 below(3, field, lesson == .typedAnswer ? "Your words are the answer" : "Or type your answer", scale: scale, body: body)
             )
         }
-        // The specimen's own word rather than a copy of it: a set of one
-        // submits, and the pin that named the control would have gone stale the
-        // day the word did (§5.8).
+        // Uses the specimen's own word, so the pin follows it (a set of one submits, §5.8).
         if let shape, let affirmative = centres?.affirmative {
             pins.append(
                 below(4, affirmative, "\(shape.affirmative), or ⏎", scale: scale, body: body)
@@ -1511,13 +1185,8 @@ struct OpenQuestionAnatomy: View {
     }
 }
 
-/// Where an open row's parts stand, composed from the same figures the row
-/// stacks them with.
-///
-/// Nothing here is measured off a drawing: the row is `12.5` of air, the
-/// caption, the title, the body, whatever is left, and the answer row. Asking
-/// the store for the body's own layout is what makes the question's list and
-/// the command's single line the same arithmetic.
+/// Where an open row's parts stand, composed from the figures the row stacks (`12.5` of air,
+/// caption, title, body, answer row), never measured off a drawing.
 private struct OpenRowGeometry {
     let store: MonitorStore
 
@@ -1532,7 +1201,7 @@ private struct OpenRowGeometry {
             + PanelMetrics.sessionRowLineSpacing
     }
 
-    /// The middle of the whole body, which is what a one-line command wants.
+    /// The middle of the whole body, for a one-line command.
     var bodyCentre: CGFloat {
         bodyTop + (store.openRowBody?.drawnHeight ?? 0) / 2
     }
@@ -1545,8 +1214,7 @@ private struct OpenRowGeometry {
         return bodyTop + lines / 2
     }
 
-    /// The option list's middle, and how far its bracket opens: half the
-    /// distance between the first option's centre and the last one's.
+    /// The option list's middle, and its bracket's spread: half the first-to-last option distance.
     var optionList: (centre: CGFloat, spread: CGFloat)? {
         guard let body = store.openRowBody, !body.options.isEmpty else { return nil }
         let lines = CGFloat(body.lines.count)
@@ -1568,8 +1236,7 @@ private struct OpenRowGeometry {
 struct RecentQueueAnatomy: View {
     private let store = NotchSpecimen.recentQueue
 
-    /// The plate it is drawn on. Internal, with ``pins``, for the assertion
-    /// that they land on its edges and not on each other.
+    /// The plate it is drawn on. Internal, with ``pins``, for the edge and overlap test.
     var specimenSize: CGSize {
         OpenedSpecimen.plateSize(store: store, height: height)
     }
@@ -1599,8 +1266,7 @@ struct RecentQueueAnatomy: View {
         let scale = OpenedSpecimen.scale(plateWidth: store.currentPanelSize.width)
         let plate = store.currentPanelSize.width
         let seam = PanelMetrics.recentSeamHeight / 2
-        // The first retired row under it, and the trailing end of that row —
-        // where a `2m` stands, one row padding in from its own edge.
+        // The first retired row, and its trailing end where `2m` stands, one row padding in.
         let firstRow = PanelMetrics.recentSeamHeight + PanelMetrics.retiredRowHeight / 2
         let age = plate - OpenedSpecimen.gutter - PanelMetrics.sessionRowPadding - 9
 

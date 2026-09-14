@@ -146,11 +146,7 @@ struct TraeConformanceTests {
         let active = ProductSettingsCopy(descriptor: descriptor, setup: .active, availability: .ready, diagnostic: nil)
         let incompatible = ProductSettingsCopy(descriptor: descriptor, setup: .reviewRequired, availability: .unsupportedVersion, diagnostic: nil)
         let waiting = ProductSettingsCopy(descriptor: descriptor, setup: .reviewRequired, availability: .disconnected, diagnostic: nil)
-        // A companion Trae's own manifest disagrees with -- removed by hand,
-        // or left at a version this build no longer installs -- reads the
-        // same recovery sentence the hooks-based products already have for a
-        // mismatched registration, not the message for a healthy but
-        // disconnected one.
+        // A companion Trae's manifest disagrees with reads the mismatched-registration recovery sentence.
         let stale = ProductSettingsCopy(descriptor: descriptor, setup: .repairRequired, availability: .setupRequired, diagnostic: nil)
         #expect(off.status == "Integration is off")
         #expect(active.status == "Connected · companion installed")
@@ -233,19 +229,14 @@ struct TraeConformanceTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let manifest = root.appendingPathComponent("extensions.json")
         let installation = TraeInstallation(directory: root, extensionsManifest: manifest)
-        // No manifest at all -- Trae has never listed anything -- and a
-        // corrupt or unrelated one all read the same as genuinely absent.
+        // A missing, corrupt or unrelated manifest reads as absent.
         #expect(installation.registration == .absent)
         for value in ["{", "[]", #"[{"identifier":{"id":"someone.else"},"version":"1.2.0"}]"#] {
             try Data(value.utf8).write(to: manifest); #expect(installation.registration == .absent)
         }
-        // Present, but not the version this build installs -- a companion
-        // manually removed and never replaced by an older Notchline, or
-        // upgraded past what this build writes.
         try Data(#"[{"identifier":{"id":"notchline.trae-companion"},"version":"1.1.0"}]"#.utf8).write(to: manifest)
         #expect(installation.registration == .mismatched)
-        // VSIX identifiers are lower-cased by Trae's own extension host; the
-        // read tolerates a different case rather than only its own constant.
+        // Trae's extension host lower-cases VSIX identifiers; the read tolerates any case.
         try Data(#"[{"identifier":{"id":"NOTCHLINE.TRAE-COMPANION"},"version":"1.2.1"}]"#.utf8).write(to: manifest)
         #expect(installation.registration == .current)
     }
@@ -256,10 +247,7 @@ struct TraeConformanceTests {
         try FileManager.default.createDirectory(at: extensionsDirectory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let manifest = extensionsDirectory.appendingPathComponent("extensions.json")
-        // A second, unrelated extension alongside the companion, carrying a
-        // field this app models nowhere (`metadata`) -- proving the removal
-        // rewrites the manifest as loose JSON rather than through a narrow
-        // Codable shape that would silently drop it.
+        // An unmodelled `metadata` field: removal must rewrite the manifest as loose JSON, not drop it.
         let companionFolder = extensionsDirectory.appendingPathComponent("notchline.trae-companion-1.2.1")
         let otherFolder = extensionsDirectory.appendingPathComponent("someone.else-9.9.9")
         try FileManager.default.createDirectory(at: companionFolder, withIntermediateDirectories: true)
@@ -291,12 +279,8 @@ struct TraeConformanceTests {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("notchline-trae-remove-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
-        // Trae's own CLI exits 1 for "is not installed" on an extension it
-        // has already lost -- manually removed, or never there. Removal must
-        // treat that as already done rather than a failure, or the switch
-        // can never be turned off. A path with nothing at it proves the CLI
-        // was never actually invoked: if it had been, this would throw
-        // instead of returning.
+        // Trae's CLI exits 1 for "is not installed"; removal treats that as done, or the switch never
+        // turns off. The nonexistent app path proves the CLI is not invoked.
         let installation = TraeInstallation(
             application: URL(fileURLWithPath: "/nonexistent/Trae.app"),
             directory: root,

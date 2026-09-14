@@ -1,14 +1,5 @@
-// The README's anatomy figure: the collapsed pill and the expanded panel, with
-// every part named.
-//
-// **The specimens are the product**, on `OnboardingAnatomy.swift`'s terms: each
-// is `NotchOverlayView` over a `MonitorStore` built from fixed snapshots, at the
-// size `PanelMetrics` composes for that state. What this file adds is the white
-// card around them and the leaders that name their parts.
-//
-// Every anchor is asked of `PanelMetrics` and of the store, never read off a
-// screenshot, so a change to the mark, the counts column, a row's shape or the
-// footer's arithmetic moves the label with the part it names.
+// The README's anatomy figure: the real overlay over fixed snapshots, every part named.
+// Every anchor comes from `PanelMetrics` and the store, never a screenshot.
 import AppKit
 import SwiftUI
 
@@ -19,40 +10,25 @@ import SwiftUI
 /// One label and the hairline that ties it to a part.
 struct AnatomyCallout: Identifiable {
     enum Side {
-        /// The label sits in the margin on that side of the figure.
         case leading, trailing
-        /// The label sits above or below the figure, centred on the target.
+        /// Above or below the figure, centred on the target.
         case above, below
     }
 
-    /// Renumbered as the key is assembled, so a callout that only appears
-    /// on some drawings cannot leave a gap in it.
+    /// Renumbered as the key is assembled, so an optional callout leaves no gap.
     var id: Int
     let text: String
     let side: Side
-    /// The point on the figure the leader arrives at, in the figure's own
-    /// coordinates.
+    /// In the figure's own coordinates.
     let target: CGPoint
-    /// How far the leader runs before its label.
-    ///
-    /// For `.leading` and `.trailing` it is measured from the target, which is
-    /// on the drawing. For `.above` and `.below` it is measured from the
-    /// specimen's own top or bottom **edge**, because those targets are inside
-    /// the drawing: a stem measured from one of them would leave the label
-    /// standing on the panel it is naming.
+    /// From the target for `.leading`/`.trailing`; from the specimen's edge for `.above`/`.below`,
+    /// whose targets are inside the drawing.
     var stem: CGFloat = 24
-    /// How far the label sits off the target's own line, for two parts that
-    /// share one. Zero draws a straight leader.
-    ///
-    /// Vertical for `.leading` and `.trailing`, and **horizontal** for `.above`
-    /// and `.below`, which is the axis those two crowd on: three answers `70`
-    /// pt apart carry labels twice that wide, so one of them steps sideways to
-    /// clear the leader of the one behind it.
+    /// Offset off the target's line (zero is straight): vertical for `.leading`/`.trailing`,
+    /// horizontal for `.above`/`.below`.
     var drop: CGFloat = 0
 }
 
-/// The card's typography and inks: one grey for labels, one hairline, one
-/// darker ink for the two captions.
 enum AnatomyCardStyle {
     static let background = Color.white
     static let label = Color(white: 0.36)
@@ -65,32 +41,17 @@ enum AnatomyCardStyle {
     static let captionDetailFont = Font.system(size: 13, weight: .regular)
 
     static let leaderWidth: CGFloat = 1
-    /// The hairline stops this far short of the part it names, so it points at
-    /// a glyph rather than touching it.
     static let standoff: CGFloat = 2
-    /// The clear space between a leader's end and the first glyph of its label.
     static let labelGap: CGFloat = 8
-    /// How much room a label column is given. Two-line labels wrap inside it.
-    ///
-    /// `270` rather than `168` since the two figures took a shared page width:
-    /// the room that buys goes to the labels, and every one of them now stands
-    /// on a single line. It is bounded by the trailing column, which has the
-    /// less of the two margins — `274` before a label would reach past the
-    /// page's own padding.
+    /// Bounded by the trailing column: `274` would reach past the page padding.
     static let labelColumn: CGFloat = 270
     static let stackedLabelColumn: CGFloat = 190
 }
 
-/// A figure with its callouts: the specimen drawn at its own size, and the
-/// labels standing in the margins around it.
-///
-/// The figure's own coordinates are the specimen's; the margins are laid out
-/// around it, so a callout is placed by naming a point on the drawing rather
-/// than a point on the card.
+/// A specimen at its own size with labelled callouts in the margins.
 struct CalloutFigure<Specimen: View>: View {
     let callouts: [AnatomyCallout]
     let specimenSize: CGSize
-    /// The room the labels are given on each side of the specimen.
     let margin: EdgeInsets
     @ViewBuilder let specimen: () -> Specimen
 
@@ -112,7 +73,6 @@ struct CalloutFigure<Specimen: View>: View {
         )
     }
 
-    /// The target in the card's own coordinates.
     private func point(_ callout: AnatomyCallout) -> CGPoint {
         CGPoint(
             x: margin.leading + callout.target.x,
@@ -153,12 +113,9 @@ struct CalloutFigure<Specimen: View>: View {
     }
 }
 
-/// Where a callout's label stands, and which way it reads.
 private struct CalloutLabelPlacement: ViewModifier {
     let callout: AnatomyCallout
     let target: CGPoint
-    /// The specimen's top and bottom edges, which is where an `.above` or
-    /// `.below` stem is measured from.
     let top: CGFloat
     let bottom: CGFloat
     let column: CGFloat
@@ -196,8 +153,6 @@ private struct CalloutLabelPlacement: ViewModifier {
     }
 }
 
-/// The hairline itself: straight where the label sits on its target's own line,
-/// and an elbow where it has been dropped off it.
 private struct LeaderPath: Shape {
     let callout: AnatomyCallout
     let target: CGPoint
@@ -242,8 +197,7 @@ private struct LeaderPath: Shape {
 
 // MARK: - Where the parts are
 
-/// Every anchor both figures need, asked of ``PanelMetrics`` and of the store
-/// rather than read off a rendering.
+/// Anchors asked of ``PanelMetrics`` and the store rather than read off a rendering.
 @MainActor
 struct AnatomyAnchors {
     let store: MonitorStore
@@ -262,9 +216,7 @@ struct AnatomyAnchors {
     var matrixBottom: CGFloat { matrixTop + matrixSize }
     var matrixMidY: CGFloat { band / 2 }
 
-    /// The counts column's own middle: both numerals are drawn from its leading
-    /// edge and the narrower one sits under a point of this, so one x serves
-    /// the stack.
+    /// Both numerals start at the column's leading edge, so one x serves the stack.
     var countsX: CGFloat {
         matrixLeft
             + matrixSize
@@ -274,9 +226,7 @@ struct AnatomyAnchors {
 
     // MARK: The collapsed pill
 
-    /// The pill's middle. The name is drawn from the slot's leading edge and
-    /// faded off its trailing one, so the label goes on the name rather than on
-    /// the slot.
+    /// The name is faded off the slot's trailing edge, so the label targets the name.
     var projectNameX: CGFloat {
         let slot = PanelMetrics.pillMiddleWidth(trailing: store.compactTrailingReading)
         let name = store.compactProjectNames.first ?? ""
@@ -309,14 +259,8 @@ struct AnatomyAnchors {
 
     var buriedDotTop: CGFloat { matrixMidY - PanelMetrics.buriedFinishDotSize / 2 }
 
-    /// The bottom of a single line of text centred in the band — its baseline,
-    /// since neither reading the pill draws has a descender below it.
-    ///
-    /// SwiftUI centres the *line box*, not the cap, so the baseline sits half
-    /// the box's own asymmetry below the middle. Both readings are `13` pt
-    /// Light: the timer's monospaced-digit face is the same font with tabular
-    /// figures on, and carries the same ascender and descender, so one figure
-    /// serves the pair.
+    /// Baseline of a line centred in the band: SwiftUI centres the line box, not the cap. Both
+    /// readings are `13` pt Light with the same metrics.
     var readingGlyphBottom: CGFloat {
         let font = PanelMetrics.projectNameFont
         return matrixMidY + (font.ascender + font.descender) / 2
@@ -330,15 +274,12 @@ struct AnatomyAnchors {
         trailingEdge - (PanelMetrics.settingsButtonSize(compactHeight: band) - 13.5) / 2
     }
 
-    /// The middle of the About mark, which is the box before the gear's: the
-    /// two controls are flush, so this is one and a half boxes in from the
-    /// trailing edge.
+    /// The About button is flush before the gear: one and a half boxes in.
     var aboutGlyphMidX: CGFloat {
         trailingEdge - PanelMetrics.settingsButtonSize(compactHeight: band) * 1.5
     }
 
-    /// A row's text column, and the trailing edge its mark ends on. The rail
-    /// takes its lane out of the second for as long as the list scrolls.
+    /// The rail takes its lane from the trailing edge while the list scrolls.
     var rowTextLeft: CGFloat {
         shoulder + PanelMetrics.sessionRowGutter + PanelMetrics.sessionRowPadding
     }
@@ -354,8 +295,7 @@ struct AnatomyAnchors {
             - PanelMetrics.sessionRowPadding
     }
 
-    /// The seam and the footer keep the full lane whatever the live list is
-    /// doing: only the live rows give the rail its width.
+    /// Only the live rows give the rail its width.
     var seamChevronRight: CGFloat {
         shoulder
             + PanelMetrics.sessionRowGutter
@@ -363,20 +303,13 @@ struct AnatomyAnchors {
             - PanelMetrics.sessionRowPadding
     }
 
-    /// A retired row's age. The Recent queue has its own viewport and its own
-    /// rail, and three rows do not fill five, so it keeps the whole lane.
+    /// The Recent queue has its own rail and three rows do not fill five, so it keeps the lane.
     var retiredAgeRight: CGFloat { seamChevronRight }
 
     /// The rail stands on the panel's own `12` pt inset and never in it.
     var railLeft: CGFloat { trailingEdge - PanelMetrics.scrollRailWidth }
 
-    /// The top of the row at `index` in **drawing** order.
-    ///
-    /// **Drawing order, which is the store's only while the list is flat.**
-    /// Grouped, a heading stands ahead of each block and the row a callout
-    /// names is wherever those push it; walking the blocks is the only way to
-    /// answer that without the figure and the drawing keeping two ideas of
-    /// where a row is.
+    /// In drawing order: grouped, headings push rows, so walk the blocks.
     func rowTop(_ index: Int) -> CGFloat {
         let groups = store.sessionGroups
         guard !groups.isEmpty else {
@@ -385,8 +318,7 @@ struct AnatomyAnchors {
         var drawn = 0
         var y = band
         for (block, group) in groups.enumerated() {
-            // The first block's heading is the short one: it stands in for the
-            // panel's own top rule and gives its slack back.
+            // The first block's heading is the short one: it replaces the panel's own top rule.
             y += block == 0
                 ? PanelMetrics.leadingProductGroupHeaderHeight
                 : PanelMetrics.productGroupHeaderHeight
@@ -399,8 +331,7 @@ struct AnatomyAnchors {
         return y
     }
 
-    /// The middle of the heading standing immediately above the row at
-    /// `index`, when that row is the first of its block.
+    /// The heading directly above the row at `index`, if it starts its block.
     func headingAboveRow(_ index: Int) -> CGFloat? {
         var drawn = 0
         for (block, group) in store.sessionGroups.enumerated() {
@@ -415,8 +346,7 @@ struct AnatomyAnchors {
         return nil
     }
 
-    /// The row's three lines, at the offsets the row's own content block puts
-    /// them at: `55` points of text with the row's own air above them.
+    /// `55` points of text under the row's own vertical padding.
     private var rowContentTop: CGFloat { PanelMetrics.sessionRowVerticalPadding }
 
     func rowCaptionY(_ index: Int) -> CGFloat {
@@ -476,65 +406,34 @@ struct AnatomyAnchors {
 
 // MARK: - The card
 
-/// The README's anatomy: both forms of the surface, on one white page, with
-/// every part named.
 @MainActor
 struct ReadmeAnatomyCard: View {
     let compact: MonitorStore
     let expanded: MonitorStore
 
-    /// The pill is `238 × 32`, which is too small an object to name six parts
-    /// around, and too narrow to sit under the panel without leaving a third of
-    /// its row empty. It is drawn at **the panel's own width** — the same
-    /// drawing at the same proportions — so the two specimens share a left and
-    /// a right edge and the page reads as a grid rather than as two figures
-    /// that happen to be stacked.
+    /// The `238 × 32` pill is drawn at the panel's width so both specimens share their edges.
     private var compactScale: CGFloat {
         expandedAnchors.windowWidth / compactAnchors.windowWidth
     }
 
     static let padding: CGFloat = 56
 
-    /// The width both README figures are drawn at.
-    ///
-    /// **Set by the answering figure, which cannot be narrower.** Two request
-    /// plates side by side are twice the panel's own width whatever else
-    /// happens, so a page that holds them is `1364`; drawing the anatomy at
-    /// anything less would put the two figures on the README at two widths and
-    /// two scales, and a reader comparing a plate with the panel it opens on
-    /// would be comparing two zoom levels.
+    /// Set by the answering figure: two request plates side by side need `1364`.
     static let pageWidth: CGFloat = 1364
 
-    /// The room a figure's labels stand in, either side of the specimen: what
-    /// the page has left once the widest specimen has taken its share.
-    ///
-    /// Split `55 : 45`, because the labels are: the leading column is
-    /// right-aligned and hugs the drawing while the trailing column is
-    /// left-aligned and its longest label is shorter. One figure for both left
-    /// the page visibly heavier on the left.
     static func margins(specimenWidth: CGFloat) -> (leading: CGFloat, trailing: CGFloat) {
         let slack = max(0, pageWidth - padding * 2 - specimenWidth)
-        // `47 : 53`, measured against the labels themselves rather than
-        // guessed: with both columns at ``AnatomyCardStyle/labelColumn`` and
-        // every label on one line, the longest trailing label is the longer of
-        // the two, so the page balances a little the other way from the split
-        // the narrow columns wanted.
+        // `47 : 53`, measured: with every label on one line, the trailing column's longest is longer.
         return (leading: slack * 0.47, trailing: slack * 0.53)
     }
 
-    /// One margin pair for both figures, taken from the wider of the two
-    /// specimens — so the pill and the panel stand on one left edge rather than
-    /// each being centred on a block of its own.
+    /// From the wider specimen, so both figures share one left edge.
     private var margins: (leading: CGFloat, trailing: CGFloat) {
         Self.margins(specimenWidth: max(compactSize.width, expandedSize.width))
     }
-    /// And above and below it, for the labels that stand there. The panel
-    /// carries none below it and gives that room back.
     static let stackMargin: CGFloat = 46
-    /// The second row a stacked label drops to when the one beside it is too
-    /// wide to share the first. `The project being worked on` and
-    /// `Subagents running` are `94` pt apart on the pill and `175` and `118`
-    /// wide, so one row cannot hold both.
+    /// `The project being worked on` and `Subagents running` are `94` pt apart on the pill but
+    /// `175` and `118` wide.
     static let stackedRowStep: CGFloat = 26
     static let captionGap: CGFloat = 24
     static let sectionGap: CGFloat = 52
@@ -556,7 +455,6 @@ struct ReadmeAnatomyCard: View {
         )
     }
 
-    /// One width for the page, shared with the answering figure.
     static func width(compact: MonitorStore, expanded: MonitorStore) -> CGFloat {
         pageWidth
     }
@@ -646,9 +544,7 @@ struct ReadmeAnatomyCard: View {
 
     // MARK: The pill's parts
 
-    /// Internal, with ``expandedCallouts``, for the one thing the drawing
-    /// cannot say about itself: that no two labels in a column land on top of
-    /// each other. See `theReadmeCalloutsStandApartInTheirColumns`.
+    /// Internal for `theReadmeCalloutsStandApartInTheirColumns`.
     var compactCallouts: [AnatomyCallout] {
         let a = compactAnchors
         let s = compactScale
@@ -703,7 +599,6 @@ struct ReadmeAnatomyCard: View {
     var expandedCallouts: [AnatomyCallout] {
         let a = expandedAnchors
         return [
-            // The band, which the collapsed bar draws identically.
             AnatomyCallout(
                 id: 0,
                 text: "Status of everything at once",
@@ -726,9 +621,7 @@ struct ReadmeAnatomyCard: View {
                 target: CGPoint(x: a.gearGlyphRight, y: a.matrixMidY),
                 stem: 26
             ),
-            // The band's other control, called out from above rather than from
-            // the trailing side: the pair is flush, so two leaders on one edge
-            // would land within a button of each other.
+            // From above: the pair is flush, so two trailing leaders would land a button apart.
             AnatomyCallout(
                 id: 0,
                 text: "What this app is",
@@ -737,16 +630,7 @@ struct ReadmeAnatomyCard: View {
                 stem: 22
             ),
 
-            // The heading over the first block, and the reason the row under
-            // it no longer names its own product.
-            //
-            // **Lifted, because its part and the Project's are `24.5` apart.**
-            // The first block's heading is the short bar, so its chip stands
-            // that far above the caption line under it; the Project's own
-            // label is already lifted `18` to clear the title's, and two
-            // labels `6` apart are one illegible label. `-12` puts this one
-            // the same distance clear of the Project's as the Project's is of
-            // the title's.
+            // Lifted `-12`: its part is `24.5` from the Project's, whose label is already lifted `18`.
             AnatomyCallout(
                 id: 0,
                 text: "One block per product",
@@ -756,7 +640,6 @@ struct ReadmeAnatomyCard: View {
                 drop: -12
             ),
 
-            // One live row, line by line.
             AnatomyCallout(
                 id: 0,
                 text: "Project",
@@ -809,7 +692,6 @@ struct ReadmeAnatomyCard: View {
                 stem: 22
             ),
 
-            // The two sections under the live list.
             AnatomyCallout(
                 id: 0,
                 text: "Sessions that have left the list",
@@ -853,10 +735,6 @@ struct ReadmeAnatomyCard: View {
                 stem: 34
             )
         ]
-        // The key is numbered after the fact rather than by hand, which is
-        // what let the heading's callout come and go while the list could be
-        // ungrouped. It cannot any more — one block per product is drawn at
-        // every count — and the numbering stays derived.
         .enumerated()
         .map { index, callout in
             var renumbered = callout

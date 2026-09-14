@@ -2,10 +2,7 @@ import Foundation
 import Testing
 @testable import Notchline
 
-/// Package 4 of `docs/product-generalisation-plan.md`: the Hooks channel as
-/// one answer channel, reporting what a write proved and no more, with a
-/// handle that is opaque, scoped to its issuer, spent by one attempt and
-/// withdrawn when the product's own window runs out.
+/// Package 4 of `docs/product-generalisation-plan.md`: the Hooks answer channel.
 struct AnswerChannelTests {
     private struct LiveSource: MonitoringLifecycleSource {
         let repository: MonitoringRepository
@@ -32,7 +29,6 @@ struct AnswerChannelTests {
         return (repository, root)
     }
 
-    /// A Turn, a call, and the approval about it held on `pair`'s app end.
     private func holdApproval(
         in repository: MonitoringRepository, at time: Date, on pair: AnsweringSocketPair
     ) async throws -> AgentRequest {
@@ -51,9 +47,8 @@ struct AnswerChannelTests {
         return try #require(await repository.drainDeliveredEvents().turns.first?.requestAwaitingAnAnswer)
     }
 
-    /// Every byte written and the connection closed is `sent`, and nothing
-    /// stronger: no status moves, and the request stops offering a way to
-    /// answer it.
+    /// A fully written, closed write is `sent` and nothing stronger: no status moves, and the
+    /// request stops offering an answer.
     @Test func aWrittenAnswerIsSentAndNoMore() async throws {
         let (repository, root) = repository(clock: TestClock(now: t0))
         defer { try? FileManager.default.removeItem(at: root) }
@@ -72,8 +67,7 @@ struct AnswerChannelTests {
         #expect(after.requestAwaitingAnAnswer?.form == request.form, "the request stays readable")
     }
 
-    /// A peer that went away before the write is `expired(.peerGone)`: the
-    /// product answered in its own window or gave up, and nothing was sent.
+    /// A peer gone before the write is `expired(.peerGone)`, and nothing was sent.
     @Test func aPeerThatWentAwayExpiresTheHandle() async throws {
         let (repository, root) = repository(clock: TestClock(now: t0))
         defer { try? FileManager.default.removeItem(at: root) }
@@ -84,11 +78,9 @@ struct AnswerChannelTests {
 
         #expect(await repository.answer(.grant, on: handle) == .expired(.peerGone))
         #expect(await repository.observedState().turns.first?.requestAwaitingAnAnswer?.canBeAnswered == false)
-        // Spent by the attempt, whatever it proved.
         #expect(await repository.answer(.grant, on: handle) == .expired(.notHeld))
     }
 
-    /// One attempt spends a handle; the second finds nothing held.
     @Test func aHandleIsSpentByOneAttempt() async throws {
         let (repository, root) = repository(clock: TestClock(now: t0))
         defer { try? FileManager.default.removeItem(at: root) }
@@ -97,14 +89,12 @@ struct AnswerChannelTests {
         let handle = try #require(await holdApproval(in: repository, at: t0, on: pair).answerHandle)
         #expect(await repository.answer(.refuse(nil), on: handle) == .sent)
         #expect(await repository.answer(.grant, on: handle) == .expired(.notHeld))
-        // One decision reached the product, and only one.
         let sent = try #require(pair.readFromPeer())
         #expect(String(decoding: sent, as: UTF8.self).components(separatedBy: "hookEventName").count == 2)
         #expect(pair.readFromPeer() == nil)
     }
 
-    /// A handle another channel minted addresses nothing here, however its
-    /// number lines up with a connection this one holds.
+    /// A handle another channel minted addresses nothing here, even if its number matches.
     @Test func aHandleFromAnotherIssuerAddressesNothing() async throws {
         let (first, firstRoot) = repository(clock: TestClock(now: t0))
         let (second, secondRoot) = repository(clock: TestClock(now: t0))
@@ -130,9 +120,8 @@ struct AnswerChannelTests {
         #expect(await first.answer(.grant, on: ours) == .sent)
     }
 
-    /// The product's own window running out withdraws the handle and keeps
-    /// the request: the row says `Read`, the status stays, and the refresh
-    /// that does it is booked as a deadline and consumed by it.
+    /// The product's window running out withdraws the handle and keeps the request; the refresh
+    /// is booked as a deadline and consumed by it.
     @Test func aWindowThatRanOutWithdrawsTheHandleAndKeepsTheRequest() async throws {
         let clock = TestClock(now: t0)
         let (repository, root) = repository(clock: clock)
@@ -165,8 +154,6 @@ struct AnswerChannelTests {
         await runtime.disconnect()
     }
 
-    /// The outcome vocabulary itself: which outcomes mean the answer left
-    /// this app whole, and that a channel never reports what it cannot prove.
     @Test func onlyAcceptedAndSentMeanTheAnswerArrived() {
         #expect(AnswerOutcome.accepted.answerArrived)
         #expect(AnswerOutcome.sent.answerArrived)

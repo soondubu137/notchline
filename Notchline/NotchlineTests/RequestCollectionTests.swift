@@ -2,9 +2,8 @@ import Foundation
 import Testing
 @testable import Notchline
 
-/// Package 2 of `docs/product-generalisation-plan.md`: a producer holds every
-/// request it has open, keyed by the request's identity; the row opens one,
-/// selected deterministically; resolving one cannot clear another.
+/// Package 2 of `docs/product-generalisation-plan.md`: requests keyed by identity, one opened
+/// deterministically, each resolved alone.
 struct RequestCollectionTests {
     private let t0 = Date(timeIntervalSince1970: 1_757_000_000)
 
@@ -16,8 +15,6 @@ struct RequestCollectionTests {
         ), in: repository.observationEpoch)
     }
 
-    /// Opens one wait with a request of its own, optionally on a subagent,
-    /// optionally under a native request identity apart from the call.
     private func open(
         _ repository: MonitoringRepository, _ kind: Kind, call: String, at offset: TimeInterval,
         thread: String = "thread", turn: String = "turn", agent: String? = nil,
@@ -32,8 +29,7 @@ struct RequestCollectionTests {
                 form: kind == .input ? .question(body ?? call) : .command(body ?? call)
             ),
             answerHandle: ticket.map { AnswerHandle(ticket: $0) },
-            // A connection declares what it accepts; a held one that declared
-            // nothing is reading-only (package 3).
+            // A held connection that declared nothing is reading-only (package 3).
             answerOperations: kind == .input ? .questionAnswers : .decision
         ), in: repository.observationEpoch)
     }
@@ -135,8 +131,7 @@ struct RequestCollectionTests {
         #expect(try await turn(repository).status == .running)
     }
 
-    /// Two approvals on one producer are both held, both drawn in turn, and
-    /// resolved one at a time; the status stands until the last one goes.
+    /// The status stands until the last one goes.
     @Test func twoApprovalsOnOneProducerResolveOneAtATime() async throws {
         let repository = MonitoringRepository(policy: .explicit)
         started(repository)
@@ -159,7 +154,6 @@ struct RequestCollectionTests {
         #expect(state.requestsAwaitingAnAnswer.isEmpty)
     }
 
-    /// Two questions on one producer, the same way.
     @Test func twoQuestionsOnOneProducerResolveOneAtATime() async throws {
         let repository = MonitoringRepository(policy: .explicit)
         started(repository)
@@ -176,8 +170,6 @@ struct RequestCollectionTests {
         #expect(try await turn(repository).status == .running)
     }
 
-    /// A question outranks an approval within one turn, and resolving the
-    /// question leaves the approval standing with its own status.
     @Test func aQuestionOutranksAnApprovalAndEachResolvesAlone() async throws {
         let repository = MonitoringRepository(policy: .explicit)
         started(repository)
@@ -190,19 +182,12 @@ struct RequestCollectionTests {
         state = try await turn(repository)
         #expect(state.status == .approvalNeeded)
         #expect(state.requestsAwaitingAnAnswer.map(\.id) == ["a"])
-        // An unrelated call closing changes nothing.
         close(repository, call: "elsewhere", at: 4)
         #expect(try await turn(repository).status == .approvalNeeded)
     }
 
-    /// A question's own permission prompt is not a second request.
-    ///
-    /// Claude Code asks an `AskUserQuestion` twice over for one call: a
-    /// `PreToolUse` that opens the question, then a `PermissionRequest` that
-    /// files an approval about the same call and carries the answer's
-    /// connection. That is one thing a person is being asked, and a row that
-    /// listed both said `Request 1 of 2` with nothing to step to (reported on
-    /// Claude Desktop, 2026-09-12).
+    /// Claude Code's `AskUserQuestion` also files a `PermissionRequest` for the same call; that is
+    /// one request, not `Request 1 of 2` (Claude Desktop, 2026-09-12).
     @Test func aQuestionsOwnPermissionPromptIsNotASecondRequest() async throws {
         let repository = MonitoringRepository(policy: .explicit)
         started(repository)
@@ -225,8 +210,6 @@ struct RequestCollectionTests {
         #expect(state.requestsAwaitingAnAnswer.map(\.id) == ["other"])
     }
 
-    /// The same identity under two producers, and under two Threads, is
-    /// three requests; resolving one touches only its own.
     @Test func identicalIdentitiesUnderDifferentProducersAndThreadsStayApart() async throws {
         let repository = MonitoringRepository(policy: .explicit)
         started(repository, thread: "one")
@@ -252,8 +235,6 @@ struct RequestCollectionTests {
         #expect(try await turn(repository, "two").requestsAwaitingAnAnswer.count == 1, "nor the other Thread's")
     }
 
-    /// A resolution arriving twice, for a request never opened, or dated
-    /// before the wait it names changes nothing.
     @Test func duplicateAndOutOfOrderResolutionsChangeNothing() async throws {
         let repository = MonitoringRepository(policy: .explicit)
         started(repository)
@@ -270,9 +251,6 @@ struct RequestCollectionTests {
         #expect(state.status == .approvalNeeded)
     }
 
-    /// A request arriving under an identity already held takes that entry's
-    /// place -- its body replaced, its position kept -- rather than adding a
-    /// second.
     @Test func aReplacementWearingAnExistingIdentityTakesItsPlace() async throws {
         let repository = MonitoringRepository(policy: .explicit)
         started(repository)
@@ -285,8 +263,6 @@ struct RequestCollectionTests {
         #expect(state.requestsAwaitingAnAnswer.first?.form == .command("rm -rf build"))
     }
 
-    /// A product that names requests apart from calls resolves one by that
-    /// name and nothing else with it.
     @Test func aRequestResolvedByItsOwnIdentityEndsOnlyThatOne() async throws {
         let repository = MonitoringRepository(policy: .explicit)
         started(repository)
@@ -307,8 +283,6 @@ struct RequestCollectionTests {
         #expect(try await turn(repository).status == .running)
     }
 
-    /// An approval carrying no id of its own pairs with the one open call it
-    /// can be about, and with none when it could equally be about two.
     @Test func anIdlessApprovalAboutTwoOpenCallsOfOneToolIsNotPaired() async throws {
         let repository = MonitoringRepository(policy: .explicit)
         started(repository)
@@ -339,16 +313,14 @@ struct RequestCollectionTests {
         #expect(state.status == .approvalNeeded, "one call left: paired")
         #expect(state.requestAwaitingAnAnswer?.id == "c2")
 
-        // A second dialogue queued behind one already filed pairs with the
-        // one call that has no approval yet.
+        // A dialogue queued behind a filed one pairs with the call that has no approval yet.
         announce("c3", at: 6)
         ask(at: 7)
         state = try await turn(repository)
         #expect(state.requestsAwaitingAnAnswer.map(\.id) == ["c2", "c3"])
     }
 
-    /// Every connection is retained while only one request is drawn, and
-    /// a request answered from here falls behind one still answerable.
+    /// A request answered from here falls behind one still answerable.
     @Test func everyConnectionIsRetainedWhileOneRequestIsDrawn() async throws {
         final class Retained: MonitoringBoundaryObserver, @unchecked Sendable {
             let lock = NSLock()
@@ -377,7 +349,6 @@ struct RequestCollectionTests {
         boundary.lock.unlock()
         #expect(retained == [AnswerHandle(ticket: 1), AnswerHandle(ticket: 2)], "no connection is let go for not being drawn")
 
-        // Answered from here: still held as a request, no longer first.
         await repository.withdrawAnswerHandle(AnswerHandle(ticket: 1))
         state = await repository.observedState().turns[0]
         #expect(state.requestsAwaitingAnAnswer.map(\.id) == ["b", "a"])
@@ -385,8 +356,6 @@ struct RequestCollectionTests {
         #expect(state.status == .approvalNeeded)
     }
 
-    /// Selection is stable under arrivals: a newer request of equal rank
-    /// never moves the one on screen, a higher rank does.
     @Test func selectionIsStableUnderArrivalsOfEqualOrLowerRank() async throws {
         let repository = MonitoringRepository(policy: .explicit)
         started(repository)
@@ -394,8 +363,7 @@ struct RequestCollectionTests {
         #expect(try await turn(repository).requestAwaitingAnAnswer?.id == "a")
         open(repository, .approval, call: "b", at: 3)
         #expect(try await turn(repository).requestAwaitingAnAnswer?.id == "a", "a newer approval does not displace the older")
-        // The turn's own requests keep the order they arrived in, whatever
-        // their clocks read and however their identities sort.
+        // Arrival order, whatever the clocks read or the identities sort.
         open(repository, .approval, call: "0", at: 3)
         #expect(try await turn(repository).requestsAwaitingAnAnswer.map(\.id) == ["a", "b", "0"])
         open(repository, .input, call: "q", at: 4)

@@ -5,21 +5,11 @@ protocol CodexNavigationTargetChecking: Sendable {
     func isThreadNavigable(_ threadID: String) async throws -> Bool
 }
 
-/// What a navigation attempt actually achieved.
-///
-/// Codex returns to the exact thread. Claude Code cannot — there is no
-/// supported way to focus a session that already exists, so the best available
-/// answer is raising its host. The row deliberately draws no mark for that
-/// difference, because a row carries exactly one mark and the elapsed time has
-/// it. That makes it all the more important that the sentence the user reads
-/// afterwards says what really happened, instead of claiming what Codex would
-/// have done.
+/// What a navigation attempt actually achieved. Codex reopens the exact thread; Claude Code
+/// cannot focus an existing session, so its host is raised and the message must say so.
 enum NavigationOutcome: Sendable, Equatable {
-    /// The exact turn was reopened in its own host.
     case openedThread(host: String)
-    /// The host was raised, but not the session inside it.
     case raisedApplication(host: String)
-    /// The terminal running the session was brought forward.
     case focusedTerminal(host: String)
 
     func message(forTitle title: String) -> String {
@@ -51,11 +41,8 @@ enum AgentNavigationError: LocalizedError, Equatable {
     }
 }
 
-/// Sends each row to the navigator for its own product.
-///
-/// The whole session is passed rather than a thread id: a Codex row is a deep
-/// link, and a Claude Code row is a process and a working directory. There is
-/// no identifier both of them fit inside.
+/// Sends each row to its product's navigator. Takes the whole session: a Codex row is a deep
+/// link, a Claude Code row a process and a working directory.
 @MainActor
 final class AgentNavigationRouter: AgentNavigating {
     private let navigators: [AgentKind: any AgentNavigating]

@@ -3,33 +3,18 @@ import Foundation
 
 /// When a product's application last came to the front.
 ///
-/// **A transition, never a state.** This reports the instant the application
-/// *became* frontmost, and deliberately not whether it is frontmost now. The
-/// difference is the whole safety argument: a user who walks away leaving
-/// Claude Desktop in front is not reading anything, and a rule built on "is
-/// frontmost" would retire a finished row seconds after it appeared -- the one
-/// failure this product cannot afford. A transition can only be produced by
-/// somebody at the keyboard.
-///
-/// It also only knows about activations that happened while this app was
-/// running. That is the honest reading of the signal: nothing here is
-/// reconstructed from before launch.
+/// A transition, never a state: a user who walks away leaving the app in front is not reading,
+/// and must not have a finished row retired. Only activations seen since launch count.
 nonisolated protocol DesktopActivationReporting: Sendable {
-    /// The most recent activation, or nil if the application has not come to
-    /// the front since this app started observing.
+    /// The most recent activation, or nil if none since this app started observing.
     func lastActivation() async -> Date?
-    /// Fires on each activation, so a row waiting on one does not have to wait
-    /// out a re-check.
+    /// Fires on each activation, so a waiting row need not wait out a re-check.
     nonisolated func changeEvents() -> AsyncStream<Void>
 }
 
-/// Watches one application's activations through the public workspace
-/// notification.
-///
-/// `NSWorkspace.didActivateApplicationNotification` is a public macOS API and
-/// carries the activated application, so nothing here matches on a window
-/// title, drives the UI, or asks for Accessibility. The bundle identifier is
-/// the only product knowledge involved.
+/// Watches one application's activations through the public
+/// `NSWorkspace.didActivateApplicationNotification`: no window titles, UI driving or
+/// Accessibility.
 final class DesktopActivationWatcher: DesktopActivationReporting, @unchecked Sendable {
     private let lock = NSLock()
     private let clock: any MonitorClock
@@ -40,12 +25,8 @@ final class DesktopActivationWatcher: DesktopActivationReporting, @unchecked Sen
         UUID: AsyncStream<Void>.Continuation
     ] = [:]
 
-    /// - Parameter notifications: Where activations are heard. The default is
-    ///   the workspace's own centre, and the parameter exists for the same
-    ///   reason it does on ``DesktopReadingWatcher``: that centre is
-    ///   process-wide, so a test posting a staged activation into it is heard
-    ///   by every watcher alive at that moment, and a test that stages one
-    ///   somewhere private can then assert without waiting.
+    /// - Parameter notifications: Where activations are heard. Injectable because the workspace
+    ///   centre is process-wide, so a staged activation reaches every live watcher.
     nonisolated init(
         bundleIdentifier: String,
         clock: any MonitorClock = SystemMonitorClock(),
@@ -54,12 +35,8 @@ final class DesktopActivationWatcher: DesktopActivationReporting, @unchecked Sen
     ) {
         self.clock = clock
         self.notifications = notifications
-        // Delivered wherever it was posted rather than hopped onto the main
-        // queue, which matters more here than it looks: this stream exists so
-        // that a row waiting on an activation does not have to wait out a
-        // re-check, and the hop put the main queue's backlog in front of
-        // exactly that. The state behind it is a `Date?` under a lock, read
-        // from whichever executor asks.
+        // Delivered where posted, not hopped to main: the main queue's backlog delayed exactly the
+        // rows this stream exists to wake. The state is a `Date?` under a lock.
         observer = notifications.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,

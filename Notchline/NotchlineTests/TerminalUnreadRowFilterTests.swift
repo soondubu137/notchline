@@ -2,9 +2,7 @@ import Foundation
 import Testing
 @testable import Notchline
 
-/// The rules every Provider shares about which finished rows stay listed until
-/// they have been read (``TerminalUnreadRowFilter``). Each product's own suite
-/// still pins its verdicts; these pin what no product may do differently.
+/// Rules no Provider may apply differently (``TerminalUnreadRowFilter``).
 struct TerminalUnreadRowFilterTests {
     private let t0 = Date(timeIntervalSince1970: 1_757_000_000)
 
@@ -35,9 +33,8 @@ struct TerminalUnreadRowFilterTests {
         DesktopUnreadStateSnapshot(unreadThreadIDs: threads, source: .current, currentAsOf: now)
     }
 
-    /// A row the user removed is still reported, never asked about, and books
-    /// nothing — the removal is the store's record and the re-check is the
-    /// product's cost (CR-Fable-003, CR-Fable-004).
+    /// The removal is the store's record; the re-check is the product's cost (CR-Fable-003,
+    /// CR-Fable-004).
     @Test
     func aDismissedRowIsReportedButNeverJudged() {
         var filter = TerminalUnreadRowFilter(timing: .standard)
@@ -55,8 +52,7 @@ struct TerminalUnreadRowFilterTests {
         #expect(filter.nextDeadline(now: now, screenIsAvailable: true) == nil)
     }
 
-    /// With no finished row listed, nothing is asked and the gate is emptied:
-    /// an entry left from an earlier refresh must not go on booking a re-check.
+    /// A gate entry left from an earlier refresh must not go on booking a re-check.
     @Test
     func aListOfRunningRowsAsksNothingAndEmptiesTheGate() {
         var filter = TerminalUnreadRowFilter(timing: .standard)
@@ -77,9 +73,7 @@ struct TerminalUnreadRowFilterTests {
         #expect(filter.nextDeadline(now: now, screenIsAvailable: true) == nil)
     }
 
-    /// A row nothing can speak for is shown and kept out of the gate, so it
-    /// books no re-check for a question with no possible answer
-    /// (CR-Fable-036).
+    /// No re-check for a question with no possible answer (CR-Fable-036).
     @Test
     func aRowNothingCanAnswerForIsShownAndBooksNothing() {
         var filter = TerminalUnreadRowFilter(timing: .standard)
@@ -93,10 +87,7 @@ struct TerminalUnreadRowFilterTests {
         #expect(filter.nextDeadline(now: now, screenIsAvailable: true) == nil)
     }
 
-    /// The gate is asked about the thread, not the row: a finished Turn with a
-    /// subagent still working stays listed however read its answer is, and a
-    /// finished one with nothing running and no unread mark leaves once the
-    /// settling window has passed.
+    /// A finished Turn with a subagent still working stays listed however read.
     @Test
     func theGateJudgesTheThreadsStatusNotTheRows() {
         var filter = TerminalUnreadRowFilter(timing: .standard)

@@ -2,16 +2,8 @@ import Foundation
 import Testing
 @testable import Notchline
 
-/// §9 of `docs/product-generalisation-plan.md`: a product that shares nothing
-/// with the shipping protocols -- no Hooks, no JSON, no configuration file, no
-/// socket; its own Thread, Turn, request, question and option identities; two
-/// simultaneous requests on one producer; identical labels backed by distinct
-/// values; a choices-only question beside a free-text one; an asynchronous
-/// answer channel that can only say it is unsure; progress read on a deadline
-/// of its own; and no quota -- reaching the notch through the shared runtime,
-/// reducer, selection, drafts, navigation dispatch and panel forms, with
-/// nothing built for it but its adapters. It borrows an `AgentKind` and is
-/// registered nowhere.
+/// §9 of `docs/product-generalisation-plan.md`: a product sharing no shipping protocol reaches
+/// the notch with nothing built for it but its adapters. It borrows an `AgentKind`.
 struct SyntheticProductConformanceTests {
     private struct LiveSource: MonitoringLifecycleSource {
         let repository: MonitoringRepository
@@ -37,8 +29,7 @@ struct SyntheticProductConformanceTests {
         func stopMonitoring() {}
     }
 
-    /// An answer channel with no descriptor: it mints its own handles, hears
-    /// back later, and when it does can only say it is unsure.
+    /// No descriptor: mints its own handles, hears back later, and can only say it is unsure.
     private actor SyntheticChannel {
         let issuer = UUID()
         private var next: UInt64 = 1
@@ -61,7 +52,6 @@ struct SyntheticProductConformanceTests {
         }
     }
 
-    /// The product: the shared runtime, with the synthetic channel beside it.
     private struct SyntheticProduct: AgentMonitoring, AnswerDelivering {
         let runtime: ProductMonitoringRuntime
         let channel: SyntheticChannel
@@ -120,15 +110,12 @@ struct SyntheticProductConformanceTests {
             clock: clock
         )
 
-        // Explicit native identities, typed, in order.
         let epoch = repository.observationEpoch
         repository.submit(MonitoringEvidence(
             signal: .turnStarted, threadID: "conv-7", observedAt: t0, turnID: "run-3",
             prompt: "Choose the database", workingDirectory: "/Projects/demo"
         ), in: epoch)
-        // Two simultaneous questions on one producer, each under the product's
-        // own request identity: one choices-only with identical labels backed
-        // by distinct values, one answered in words.
+        // Two simultaneous questions: choices-only with identical labels, and one in words.
         let store_ = AgentRequest(
             id: "req-A", toolName: "choose",
             form: .questions([
@@ -173,14 +160,11 @@ struct SyntheticProductConformanceTests {
         #expect(row.preview == "Step 1")
         #expect(await product.fetchSnapshot().quota == .noneReported)
 
-        // Progress on the source's own deadline, booked and consumed.
         #expect(await product.nextRefreshDeadline() == t0.addingTimeInterval(30))
         await clock.advance(by: 30)
         store.refreshNow()
         #expect(await eventually { store.sessions.first?.preview == "Step 2" })
 
-        // The row opens the first request: a choices-only question draws no
-        // field, and the second of two identical labels is its own option.
         store.toggleOpenRow(row)
         #expect(store.openRequest?.id == "req-A")
         #expect(store.openAnswerRow?.affirmative == "Submit")
@@ -193,7 +177,6 @@ struct SyntheticProductConformanceTests {
         #expect(await eventually { await channel.isWaiting })
         #expect(store.isAnswerInFlight)
 
-        // What travelled: the option by its identity, on the channel's own handle.
         let sent = try #require(await channel.answers.first)
         #expect(sent.handle == handleA)
         guard case let .answers(answered) = sent.answer, let one = answered.first else {
@@ -205,8 +188,7 @@ struct SyntheticProductConformanceTests {
         #expect(one.question.nativeID == "q-store")
         #expect(one.text == nil)
 
-        // The channel can only say it is unsure: the row says so, keeps what
-        // was chosen, and never sends on that handle again.
+        // Unsure: the row keeps the choice and never sends on that handle again.
         await channel.hearBack(.uncertain)
         #expect(await eventually { !store.isAnswerInFlight })
         #expect(store.previewLine(for: row) == "Sent, but not confirmed — check in Claude Code")
@@ -218,8 +200,6 @@ struct SyntheticProductConformanceTests {
         store.takeAnswer(.affirmative)
         #expect(await channel.answers.count == 1)
 
-        // The product resolves the first by its own identity; the row moves on
-        // to the second, whose question takes words and draws the field.
         repository.submit(MonitoringEvidence(
             signal: .requestResolved, threadID: "conv-7", observedAt: t0.addingTimeInterval(40), turnID: "run-3",
             requestID: "req-A"
@@ -230,7 +210,6 @@ struct SyntheticProductConformanceTests {
         #expect(store.openAnswerRow?.placeholder == "your answer…")
         #expect(store.sessions.first?.requests.map(\.id) == ["req-B"])
 
-        // A click goes through the store's one navigation dispatch.
         store.open(try #require(store.sessions.first))
         #expect(await eventually { navigator.opened.count == 1 })
         #expect(navigator.opened.first?.threadID == "conv-7")

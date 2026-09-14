@@ -1,8 +1,7 @@
 import Darwin
 import Foundation
 
-/// Positive evidence for one exact completion. A missing proof is never an
-/// authoritative empty unread set. Native focus/visibility stays at the boundary.
+/// Positive evidence for one exact completion; a missing proof is never an empty unread set.
 nonisolated struct TraeReadProof: Codable, Equatable, Sendable {
     let windowID: Int
     let threadID: String
@@ -24,8 +23,7 @@ nonisolated protocol TraeReadReporting: Sendable {
     func readCompletions() async -> [TraeReadProof]
 }
 
-/// Stateless per-refresh readings, composed by TraeProvider. The shared gate
-/// alone owns settling, immutable retirement and the next recheck deadline.
+/// Stateless per-refresh readings; the shared gate owns settling, retirement and rechecks.
 nonisolated struct TraeReadEvidence: ReadEvidenceSource {
     let screen: any ScreenAvailabilityReporting
     let foreground: any DesktopReadingReporting
@@ -34,8 +32,7 @@ nonisolated struct TraeReadEvidence: ReadEvidenceSource {
     func verdicts(for candidates: [ReadGateCandidate], now: Date) async -> ReadEvidenceJudgement {
         let terminal = candidates.filter { $0.row.agent == .trae && MonitorAggregation.effectiveStatus(of: $0.row) == .completed }
         guard !terminal.isEmpty else { return ReadEvidenceJudgement(verdicts: [:], diagnostic: nil) }
-        // This known negative also parks the gate's user-wait deadline when the
-        // screen is unavailable. No renderer IPC is needed in the background.
+        // A known negative also parks the gate's deadline while the screen is unavailable.
         guard screen.isAvailable(), await foreground.isInFrontOfTheUser() else {
             return judgement(terminal, proofs: [], now: now, knownUnread: true)
         }
@@ -60,8 +57,7 @@ nonisolated struct TraeReadEvidence: ReadEvidenceSource {
                 result[candidate.row.id] = .judged(by: DesktopUnreadStateSnapshot(
                     unreadThreadIDs: [candidate.row.threadID], source: .current, currentAsOf: now))
             } else {
-                // In particular, the gap between native completion and render
-                // must not fabricate an unread->read edge that skips settling.
+                // The gap before render must not fabricate an unread->read edge that skips settling.
                 result[candidate.row.id] = .judged(by: .unavailable("Trae has not confirmed this completion is visible."))
             }
         }
@@ -71,8 +67,7 @@ nonisolated struct TraeReadEvidence: ReadEvidenceSource {
     func forget() async {}
 }
 
-/// A short-lived same-user socket is separate from the sole lifecycle watch.
-/// Slow/broken readers cannot reset that watch or feed lifecycle state.
+/// A short-lived socket separate from the lifecycle watch, so slow readers cannot reset it.
 nonisolated enum TraeReadQuery {
     private struct Reply: Decodable {
         let ok: Bool

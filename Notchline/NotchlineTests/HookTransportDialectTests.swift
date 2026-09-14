@@ -2,15 +2,11 @@ import Foundation
 import Testing
 @testable import Notchline
 
-/// The hook transport for a product that does not spell its payloads the
-/// reducer's way: the helper announces the event on its first line when the
-/// registration hands it the name, and the vocabulary's translator turns what
-/// arrives into the payload the reducer reads. Both shipping products keep the
-/// script and the path they had.
+/// The helper announces the event on its first line when the registration names it, and the
+/// vocabulary's translator produces the reducer's payload. Shipping products are unchanged.
 @Suite(.serialized)
 struct HookTransportDialectTests {
-    /// A product whose payload says which conversation it is and nothing
-    /// about which event fired, so the name has to come from the registration.
+    /// The payload names no event, so the name must come from the registration.
     private struct AnnouncingVocabulary: AgentHookVocabulary {
         let agent: AgentKind = .claudeCode
         let managedDefinitions = [
@@ -48,9 +44,6 @@ struct HookTransportDialectTests {
         ) -> AgentRequest? { nil }
     }
 
-    /// Reads the event off the first line and the conversation off the JSON
-    /// after it; every event of a conversation is the same Turn, which is all
-    /// a fixture has to do.
     private struct FirstLineTranslator: HookPayloadTranslating {
         func canonicalPayload(from body: Data, receivedAt: Date) -> Data? {
             guard let newline = body.firstIndex(of: UInt8(ascii: "\n")) else { return nil }
@@ -66,7 +59,7 @@ struct HookTransportDialectTests {
     }
 
     private func root() throws -> URL {
-        // Short on purpose: a Unix socket path may not exceed 104 bytes.
+        // A Unix socket path may not exceed 104 bytes.
         let root = URL(fileURLWithPath: "/tmp").appendingPathComponent("htd-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         return root
@@ -74,8 +67,6 @@ struct HookTransportDialectTests {
 
     // MARK: - The script
 
-    /// The announcing script adds exactly one thing — the name ahead of the
-    /// payload — and the bare script is the bare script, byte for byte.
     @Test
     func theHelperAnnouncesTheEventOnlyWhenTold() {
         let bare = AgentHookHelper.script(socketPath: "/tmp/x/hook.sock", answerWindowSeconds: 60)
@@ -91,9 +82,8 @@ struct HookTransportDialectTests {
         #expect(!announcing.contains("exec /usr/bin/nc"))
     }
 
-    /// The argument that opens the reply channel is the word `wait`, and only
-    /// that word: a product that names its event in every argument holds no
-    /// connection open.
+    /// Only `wait` opens the reply channel, so a product naming its event in every argument holds
+    /// no connection.
     @Test
     func onlyTheWaitArgumentNamesTheAnsweringEvent() {
         #expect(AnnouncingVocabulary().answeringEventName == nil)
@@ -103,9 +93,6 @@ struct HookTransportDialectTests {
 
     // MARK: - The registration
 
-    /// The setup reads the dialect: a shell command line naming the helper
-    /// through `/bin/sh`, the event as its argument, under the product's own
-    /// container.
     @Test
     func theSetupWritesTheDialectTheVocabularyDeclares() async throws {
         let root = try root()
@@ -130,7 +117,6 @@ struct HookTransportDialectTests {
         #expect(helper.contains("printf '%s\\n' \"${1:-}\""))
         #expect(await setup.status() == .active)
 
-        // The other two products keep the exec form under `hooks`.
         let classic = ManagedHooksSetup(paths: paths, vocabulary: ClaudeCodeHookVocabulary()).configuration
         #expect(classic.containerKey == "hooks")
         #expect(classic.command == paths.hookHelper.path)
@@ -139,9 +125,6 @@ struct HookTransportDialectTests {
 
     // MARK: - End to end
 
-    /// The announcing helper, run as the product would run it, reaches the
-    /// reducer as a Turn: `/bin/sh hook.sh Stop < payload` lands one completed
-    /// Turn under the conversation the payload named.
     @Test
     func theAnnouncedPayloadReachesTheReducerThroughTheTranslator() async throws {
         let root = try root()
@@ -189,8 +172,7 @@ struct HookTransportDialectTests {
         #expect(turn.sessionStatus == .completed)
     }
 
-    /// Bytes the translator declines never reach the reducer, and are not
-    /// counted as unreadable: a sibling product's event is nobody's fault.
+    /// Not counted as unreadable: a sibling product's event is nobody's fault.
     @Test
     func aPayloadTheTranslatorDeclinesIsDroppedQuietly() async throws {
         let root = try root()
@@ -201,7 +183,6 @@ struct HookTransportDialectTests {
             agent: .claudeCode
         )
         let source = HookLifecycleSource(paths: paths, vocabulary: AnnouncingVocabulary())
-        // No first line, so the translator has no event to read.
         _ = source.deliver(Data(#"{"conversationId":"conv-2"}"#.utf8), at: Date())
         let state = await source.repository.drainDeliveredEvents()
         #expect(state.turns.isEmpty)

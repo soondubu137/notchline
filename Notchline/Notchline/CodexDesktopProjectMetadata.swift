@@ -14,9 +14,7 @@ enum DesktopProjectResolution: Equatable, Sendable {
         switch self {
         case let .project(name):
             name
-        // Was `Chats`, Codex's own heading for these -- replaced so a row
-        // with no Project reads the same regardless of which product left it
-        // that way (``RowContentFallback``).
+        // Same words as other products' Project-less rows (``RowContentFallback``).
         case .chats:
             RowContentFallback.projectName
         case .unavailable:
@@ -114,28 +112,12 @@ actor CodexDesktopProjectMetadataRepository: DesktopProjectMetadataProviding {
             case projectlessThreadIDs = "projectless-thread-ids"
         }
 
-        /// The minimum key set that counts as the current Desktop schema.
-        ///
-        /// Deliberately not all four keys. A healthy install writes
-        /// `remote-projects` only once a cloud Project exists -- the key is
-        /// absent from a real, fully working state file -- so demanding it
-        /// would fail closed on the common case. `local-projects` is likewise
-        /// only as present as the user's Projects are.
-        ///
-        /// What must hold instead is that the document still answers the
-        /// question this adapter asks, which is two rules:
-        ///
-        /// 1. The mapping must exist in at least one direction -- assignments,
-        ///    projectless thread ids, or both. A document carrying only
-        ///    Project definitions maps no thread to anything.
-        /// 2. A Desktop that knows about Projects must also say which threads
-        ///    are in them. Defined Projects with no assignment key at all is
-        ///    the shape a renamed `thread-project-assignments` takes.
-        ///
-        /// A renamed `local-projects` or `remote-projects` is caught later, in
-        /// ``loadSnapshot(from:source:)``: every assignment it used to resolve
-        /// now dangles, and a dangling assignment rejects the whole snapshot
-        /// rather than quietly dropping that thread.
+        /// The minimum key set that counts as the current Desktop schema. `remote-projects` and
+        /// `local-projects` can be absent from healthy files, so instead:
+        /// 1. The mapping exists in at least one direction (assignments, projectless ids, or both).
+        /// 2. Defined Projects come with an assignment key (else `thread-project-assignments` was
+        ///    renamed).
+        /// Renamed project keys surface in ``loadSnapshot(from:source:)`` as dangling assignments.
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             guard container.contains(.assignments)
@@ -323,13 +305,8 @@ actor CodexDesktopProjectMetadataRepository: DesktopProjectMetadataProviding {
             }
         }
 
-        // An assignment this reader cannot resolve is schema drift, not a
-        // thread without a Project: Desktop wrote a membership down and we no
-        // longer understand it. Skipping it would publish a mapping that is
-        // silently short of the truth and label it `.current`, which is the
-        // one outcome the fail-closed contract rules out. Reject the whole
-        // snapshot instead and let the caller fall back to the backup or to
-        // last-known-good, with a diagnostic saying why.
+        // An unresolvable assignment is schema drift: reject the whole snapshot rather than publish a
+        // short mapping as `.current`; the caller falls back to the backup or last-known-good.
         var namesByThreadID: [String: String] = [:]
         for (threadID, assignment) in state.assignments {
             guard !threadID.isEmpty else {

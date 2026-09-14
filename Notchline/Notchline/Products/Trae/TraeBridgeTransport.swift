@@ -90,8 +90,7 @@ nonisolated final class TraeBridgeTransport: TraeReadReporting, @unchecked Senda
                 guard active, let peer = peers[path], peer.healthy, peer.identity == paths[path],
                       let current = boundary.current[proof.threadID],
                       proof.matches(current, requestedAt: requestedAt, receivedAt: now) else { return nil }
-                // Any healthy window may prove reading, regardless of which
-                // window first owned the lifecycle. This never transfers it.
+                // Any healthy window may prove reading; this never transfers lifecycle ownership.
                 return proof
             })
         } }

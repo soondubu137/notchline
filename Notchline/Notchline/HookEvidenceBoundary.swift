@@ -44,50 +44,27 @@ extension MonitoringRepository {
         ),
               let eventName = payload.hookEventName,
               payload.sessionID != nil else {
-            // Nothing here can be placed: nothing at all, or not JSON, or
-            // JSON without the event name or the session this app keys
-            // everything on. It is still dropped — there is nowhere to
-            // quarantine it to, and the quarantine was itself unread litter —
-            // but it is dropped *aloud*. This is the one report that says the
-            // transport is delivering and the store is not understanding,
-            // which is what every silent failure this integration is designed
-            // around looks like from in here (CR-029). No drain is kicked for
-            // it: nothing rendered changed, and the refresh path drains every
-            // cycle anyway.
+            // Unplaceable (empty, not JSON, or no event name or session): dropped aloud, as the one
+            // report that the transport delivers but the store does not understand (CR-029). No drain.
             hooks.recordUnreadablePayload()
             return .close
         }
-        // Our own quota reading is a real session firing real hooks.
-        // Compared as paths rather than URLs: a URL built from a payload string
-        // is not marked as a directory, and URL equality counts that, so two
-        // spellings of the same folder would not match.
+        // Our own quota reading fires real hooks. Paths, not URLs: URL equality counts the
+        // directory flag.
         if let ignoredWorkingDirectory, let cwd = payload.workingDirectory,
            URL(fileURLWithPath: cwd).standardizedFileURL.path
             == ignoredWorkingDirectory.standardizedFileURL.path {
             return .close
         }
 
-        // Assistant text stops here. Folding it costs one bounded scan and
-        // reaches the reducer's mailbox not at all, which is why a talking turn
-        // never reduces anything. It does wake the panel when the line the row
-        // draws moves -- that is the whole point of the line -- and the head's
-        // cap is what keeps that to about one wake per message rather than one
-        // per delta. See ``HookSessionPreviewStore/fold``.
+        // Assistant text stops here, never reaching the reducer; see ``HookSessionPreviewStore/fold``.
         if let deltaEvent = vocabulary.messageDeltaEventName, eventName == deltaEvent {
             guard let delta = payload.delta, let sessionID = payload.sessionID else {
                 return .close
             }
-            // A subagent's words are not the row's answer, and this is the one
-            // path a subagent's event could reach the user by: the fold happens
-            // here, before the reducer, so the `agent_id` gate down there never
-            // sees it. Written from the schema rather than from an observation:
-            // `agent_id` is on the base every Claude Code hook input extends,
-            // and two `-p` probes on 2026-08-23 (CLI 2.1.241) produced
-            // `MessageDisplay` for the main thread only -- but `-p` displays no
-            // subagent text at all, and the event's own description is "while
-            // assistant message text is displayed", so a session with a screen
-            // is exactly the case those probes could not reach. One comparison
-            // is not a price worth paying to find that out from a user.
+            // A subagent's words are not the row's answer, and this fold runs before the reducer's
+            // `agent_id` gate. From the schema: `-p` probes (2026-08-23, CLI 2.1.241) display no
+            // subagent text, so they could not show it.
             if let agentID = payload.agentID,
                !agentID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 return .close
@@ -100,22 +77,11 @@ extension MonitoringRepository {
             return .close
         }
 
-        // The one event per product whose connection an answer travels back on.
-        // Held here rather than after the reduce, because this is the only
-        // moment at which the payload and its descriptor are both in hand — and
-        // held *by handing it away*, so this queue, whose serialness is what
-        // preserves arrival order, never waits on anybody.
-        //
-        // A ticket that the reducer then does not attach to a wait is closed by
-        // the reconciliation after the drain, so this cannot leak by admitting
-        // too much.
-        // The old reducer normalised event names before vocabulary lookup.
-        // Keep that interpretation here; raw transport framing is unchanged.
+        // Held here, the only moment payload and descriptor are both in hand, by handing it away so
+        // this serial queue never waits; an unattached ticket is closed at reconciliation.
         let interpretedName = eventName.trimmingCharacters(in: .whitespacesAndNewlines)
         var handle: AnswerHandle?
-        // What the product will act on down this connection, declared with
-        // the connection and carried on the evidence beside it. Nothing is
-        // declared where nothing is held.
+        // Operations are declared with the connection; none where nothing is held.
         var operations = AnswerOperations.readingOnly
         if let descriptor, eventName == vocabulary.answeringEventName {
             operations = vocabulary.answerOperations(forEvent: interpretedName, toolName: payload.toolName)
@@ -150,21 +116,13 @@ extension MonitoringRepository {
         return handle == nil ? .close : .held
     }
 
-    /// Native output and socket writes stay outside the shared reducer.
-    ///
-    /// **The connection's declaration is checked here as well as on the
-    /// surface.** A row offers only what ``AgentRequest/operations`` permits,
-    /// but the row is not the only caller and a check that lives in one layer
-    /// is a check one layer can forget: an answer the connection was never
-    /// declared for is refused before any bytes are composed, and the
-    /// connection stays held for the answer it does accept.
+    /// Native output and socket writes stay outside the shared reducer. The connection's
+    /// ``AgentRequest/operations`` are re-checked here: an undeclared answer is refused before
+    /// any bytes are composed, and the connection stays held.
     func answer(_ answer: AgentAnswer, on handle: AnswerHandle) -> AnswerOutcome {
         guard let hooks = boundary as? HookEvidenceBoundary else { return .expired(.notHeld) }
         guard let permitted = hooks.replies.operations(for: handle) else {
-            // Nothing is held under this handle any more -- spent, minted by
-            // another channel, or let go when its wait cleared or its window
-            // ran out -- so the request stops claiming a connection it does
-            // not have.
+            // Nothing is held under this handle any more (spent, another channel, or expired).
             withdrawAnswerHandle(handle)
             return .expired(.notHeld)
         }
@@ -218,8 +176,7 @@ nonisolated final class HookEvidenceBoundary: MonitoringBoundaryObserver, @unche
     }
 
     func didApply(_ evidence: MonitoringEvidence, accepted: Bool) {
-        // Applied, accepted or not, so the connection it arrived with is now
-        // the reducer's to keep or let go at the reconciliation that follows.
+        // Accepted or not, the connection is now the reducer's to keep or release at reconciliation.
         if let handle = evidence.answerHandle { replies.markReduced(handle) }
         lock.lock()
         defer { lock.unlock() }

@@ -28,8 +28,7 @@ struct TraeSoloBoundaryTests {
             let b = state.turns.first { $0.threadID == second }
             switch index {
             case 0:
-                // A real question predating attachment is readable evidence,
-                // but it cannot manufacture a submission or a monitored row.
+                // Readable, but it makes no submission or monitored row.
                 #expect(state.turns.isEmpty)
                 let request = try #require(frame.rows?.first?.requests.first)
                 #expect(request.questions?.count == 3)

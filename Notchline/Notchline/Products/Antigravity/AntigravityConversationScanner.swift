@@ -1,42 +1,28 @@
 import Darwin
 import Foundation
 
-/// One process in the kernel's table, and what it is running.
 struct ProcessEntry: Sendable, Equatable {
     let processIdentifier: Int32
-    /// Absolute, or nil where the kernel would not say (another user's
-    /// process, or one that has already exited).
+    /// Absolute, or nil where the kernel would not say (another user's process, or one exited).
     let executablePath: String?
 }
 
-/// The kernel's process table and the files a process holds open, as two
-/// questions — so the reading that depends on them can be tested against a
-/// table of the test's own.
+/// The kernel's process table and a process's open files, as a protocol so readings can be
+/// tested against a fake table.
 nonisolated protocol ProcessTableReading: Sendable {
     /// Every process running an executable with this last path component.
     ///
-    /// **The name is the table's business rather than the caller's**, because
-    /// the kernel answers it far more cheaply than it answers a path:
-    /// `proc_pidpath` reconstructs a path from a vnode for every process on the
-    /// machine (2.3 ms for 713 of them, measured in Release on this machine),
-    /// while the short name in `PROC_PIDTBSDINFO` is 0.5 ms for the same walk.
-    /// Filtering here rather than after the fact is what makes the reading
-    /// cheap enough to take once a second while a finished row waits to be
-    /// read. The entries that come back still carry the full path, and the
-    /// caller still checks it.
-    ///
-    /// **Nil is the kernel declining to answer**, which is the one reading that
-    /// is not evidence: an empty list says no such process is running, and no
-    /// list at all says nothing at all. The live table cannot answer nil while
-    /// this app runs — it is at least one of the processes counted.
+    /// - Filtered by the kernel's short name: `PROC_PIDTBSDINFO` takes 0.5 ms vs `proc_pidpath`'s
+    ///   2.3 ms for 713 processes (Release), cheap enough for once a second. Callers still check the
+    ///   full path.
+    /// - Nil is the kernel declining to answer, which is not evidence; empty means none running.
     func processes(named name: String) -> [ProcessEntry]?
-    /// The paths of the files `processIdentifier` holds open, for a process
-    /// this user may inspect; empty otherwise.
+    /// The paths of files `processIdentifier` holds open, for a process this user may inspect;
+    /// empty otherwise.
     func openFilePaths(ofProcess processIdentifier: Int32) -> [String]
 }
 
-/// The live table, read through `libproc` — the same calls the terminal
-/// route already makes for a process's executable and parent.
+/// The live table, read through `libproc`.
 struct LibprocProcessTable: ProcessTableReading {
     nonisolated func processes(named name: String) -> [ProcessEntry]? {
         let needed = proc_listpids(UInt32(PROC_ALL_PIDS), 0, nil, 0)
@@ -66,14 +52,8 @@ struct LibprocProcessTable: ProcessTableReading {
             }
     }
 
-    /// The name the kernel keeps beside a process, or nil for one this user may
-    /// not inspect.
-    ///
-    /// A copy of the executable's last path component, made when the process
-    /// was executed and truncated at 31 characters. It is a pre-filter and
-    /// never the verdict: the caller still reads the path the entry carries,
-    /// so a name that is a truncation of a longer one, or a binary since
-    /// renamed, cannot make a process pass for another.
+    /// The kernel's short name for a process (truncated at 31 characters), or nil if not
+    /// inspectable. A pre-filter only: the caller still checks the path.
     nonisolated private static func shortName(ofProcess pid: pid_t) -> String? {
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.stride)
@@ -130,8 +110,6 @@ struct LibprocProcessTable: ProcessTableReading {
     }
 }
 
-/// A conversation Antigravity CLI is running right now, and the process
-/// running it.
 struct AntigravityLiveConversation: Sendable, Equatable {
     let conversationID: String
     let processIdentifier: Int32
@@ -139,34 +117,19 @@ struct AntigravityLiveConversation: Sendable, Equatable {
 
 /// Which conversations Antigravity CLI is running, read off the kernel.
 ///
-/// **The product's own live list, without asking the product.** The CLI keeps
-/// `~/.gemini/antigravity-cli/presence/<conversationId>.lock`, one per
-/// conversation, and holds the file open under an exclusive `flock` for
-/// exactly as long as the process running that conversation lives — measured
-/// 2026-09-11 on 1.2.2: locked from the turn's first event to the process's
-/// exit, free the instant it exits, and the file left behind unlocked. Which
-/// files an `agy` process holds open is a kernel fact (`proc_pidfdinfo`), so
-/// the live set is read without touching the locks — taking even a shared
-/// lock to probe one would race the product's own acquisition.
-///
-/// This one reading answers three questions the Provider and the navigator
-/// ask separately: whether the product is open (``ProductPresenceReporting``),
-/// which Threads it vouches for (``ThreadAdmitting``, ADR 0017), and which
-/// process is showing a row (``SessionProcessLocating``), from which the
-/// terminal route reads the host to raise.
-///
-/// **Ceiling, stated.** *Open* means an executable named `agy` holding a
-/// presence lock open; the CLI's `remote-control` daemon and `mic-serve` are
-/// `agy` too and hold none, so they are not open, and a copy installed under
-/// another name is invisible. A conversation's process is found by the lock
-/// it holds, never by title, cwd or age. `unknown` is answered only when the
-/// kernel lists no process at all, which it cannot while this one runs.
+/// - The CLI holds `~/.gemini/antigravity-cli/presence/<conversationId>.lock` under an exclusive
+///   `flock` for exactly the life of the conversation's process (measured 2026-09-11 on 1.2.2;
+///   the file stays behind unlocked). Open files are read via `proc_pidfdinfo`, never by taking
+///   a lock, which would race the product's own acquisition.
+/// - One reading answers presence, admission (ADR 0017) and ``SessionProcessLocating``.
+/// - Ceiling: open means an `agy` executable holding a presence lock (`remote-control` and
+///   `mic-serve` hold none; a renamed copy is invisible). Matched by lock, never title, cwd or
+///   age. `unknown` only when the kernel lists no process at all.
 final class AntigravityConversationScanner: ProductPresenceReporting, ThreadAdmitting, ProductSessionReading,
     SessionProcessLocating, @unchecked Sendable {
     static let executableName = "agy"
 
-    /// How long one reading answers for, so the refresh's two questions and a
-    /// click's third do not each walk the table.
+    /// How long one reading answers for, so the refresh's two questions and a click's third share it.
     static let readingLifetime: TimeInterval = 0.5
 
     let presenceDirectory: URL
@@ -189,8 +152,7 @@ final class AntigravityConversationScanner: ProductPresenceReporting, ThreadAdmi
         self.clock = clock
     }
 
-    /// The conversations live at `readAt`, and whether the kernel listed any
-    /// process at all — the one case that is not evidence.
+    /// The conversations live at `readAt`, and whether the kernel listed any process at all.
     func read() -> (conversations: [AntigravityLiveConversation], readAt: Date, listedAnything: Bool) {
         lock.lock()
         defer { lock.unlock() }
@@ -199,25 +161,16 @@ final class AntigravityConversationScanner: ProductPresenceReporting, ThreadAdmi
             return cached
         }
         guard let processes = table.processes(named: Self.executableName) else {
-            // The kernel would not say, so this reading retires nothing and
-            // claims nothing — it is not an empty machine.
+            // The kernel would not say: this reading retires and claims nothing.
             let reading = (conversations: [AntigravityLiveConversation](), readAt: now, listedAnything: false)
             cached = reading
             return reading
         }
         let directory = presenceDirectory.standardizedFileURL.path
         var conversations: [AntigravityLiveConversation] = []
-        // Every path here is compared as a *string* until one is a candidate.
-        // `URL(fileURLWithPath:)` stats the path it is given — it has to, to
-        // decide whether the last component is a directory — so the obvious
-        // spelling of this loop cost one `lstat` per process on the machine
-        // plus one per open file of every `agy` process. That was invisible
-        // while the reading happened on an edge; a finished row waiting to be
-        // read asks for it once a second, and it was then 293 of the app's 342
-        // active samples in a 20-second Release profile. `NSString`'s path
-        // arithmetic touches nothing (`AGENTS.md` §7's "measure, do not
-        // assume"), and the one comparison that must survive a `/private`
-        // prefix is made on the handful of candidates that reach it.
+        // Paths stay strings until one is a candidate: `URL(fileURLWithPath:)` stats each one, which
+        // was 293 of 342 active samples in a 20 s Release profile. Only candidates get the `/private`
+        // comparison.
         for process in processes
         where process.executablePath.map({ ($0 as NSString).lastPathComponent })
             == Self.executableName {
@@ -245,7 +198,6 @@ final class AntigravityConversationScanner: ProductPresenceReporting, ThreadAdmi
         return reading
     }
 
-    /// Presence and admission from one kernel reading, which is what they are.
     func read(observing state: HookStateSnapshot) async -> SessionReading {
         let reading = read()
         guard reading.listedAnything else {

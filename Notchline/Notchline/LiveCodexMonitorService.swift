@@ -4,53 +4,25 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     DiskFootprintReporting, CodexNavigationTargetChecking {
     nonisolated let agent = AgentKind.codex
 
-    /// Thread-level metadata cached for one thread.
-    ///
-    /// `observedAt` is the request start, not its completion, so a Hook that
-    /// arrives while the read is in flight still wins the freshness comparison.
-    ///
-    /// `thread` is nil when the App Server *answered* that it has no such
-    /// thread. That is a different fact from having no record at all -- one is
-    /// "not asked yet", the other is "asked, and the answer was no" -- and only
-    /// the second one settles anything: it is what stops this service asking
-    /// again in a loop, and what keeps a thread Codex will never list from
-    /// re-paginating the user's whole history on every refresh.
-    ///
-    /// A third fact never reaches this table at all: a thread the product's own
-    /// hooks say it is writing down nowhere is not asked about, so it has no
-    /// record and needs none (``HookTurnState/threadHasNoTranscript``). It
-    /// settles what a refusal settles, one round trip earlier, and leaving the
-    /// record absent is what keeps a thread nothing will ever re-read out of
-    /// the metadata staleness `nextRefreshDeadline()` measures.
+    /// - `observedAt` is the request start, so a Hook arriving mid-read still wins freshness.
+    /// - `thread` nil means the App Server answered "no such thread", which stops re-asking.
+    /// - A thread with no transcript is never asked and has no record
+    ///   (``HookTurnState/threadHasNoTranscript``).
     private struct ThreadRecord: Sendable {
         let thread: JSONValue?
         let observedAt: Date
 
-        /// Whether the App Server answered with a thread this app can address.
         var isAddressable: Bool { thread != nil }
     }
 
-    /// What one turn had most recently said when it was last read.
-    ///
-    /// `text` is deliberately allowed to survive a read that found nothing.
-    /// A page of the newest items is a window, not the whole turn, and a turn
-    /// that runs a long command produces items that push its last words out of
-    /// that window -- but those words are still the step it is on. Only the
-    /// turn changing clears them, and the turn changing replaces the record
-    /// outright.
+    /// `text` survives an empty read: newer items can push the turn's last words off the page.
     private struct TurnProgress: Sendable {
         let turnID: String
         var text: String?
-        /// The turn's own `lastEventAt` when this read was *issued*.
-        ///
-        /// The issue stamp rather than the completion stamp, for the reason
-        /// ``ThreadRecord/observedAt`` uses the same one: an event that lands
-        /// while the read is in flight must still count as unread-for, or the
-        /// text it announced would wait for the event after it.
+        /// The issue stamp, not completion, so an event landing mid-read still counts as unread-for.
         var readAtEventStamp: Date
     }
 
-    /// One outstanding progress read.
     private struct TurnProgressRequest: Sendable {
         let turnID: String
         let eventStamp: Date
@@ -59,85 +31,44 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     private let clock: any MonitorClock
     private let timing: MonitorTiming
     private let client: any CodexAppServerCommunicating
-    /// The hook transport, wired once (``HookLifecycleSource``) with Codex's
-    /// registrar as its setup. The reducer and the registrar are kept under
-    /// their own names as well: this actor reads the one constantly, and asks
-    /// the other what only a trust-step policy has -- the cached registration
-    /// and the file's own edge.
+    /// Codex's hook transport; reducer and registrar are also kept by name.
     private let hooks: HookLifecycleSource
     private let hookEvents: HookEventRepository
     private let hookRegistrar: CodexHookRegistrar
     private let projectMetadata: any DesktopProjectMetadataProviding
     private let unreadState: any DesktopUnreadStateProviding
-    /// Which threads Codex answers approval requests for on the user's behalf.
-    ///
-    /// A decision spanning two sources, so it is made here rather than in the
-    /// reducer: the reducer sees only that a permission pipeline opened over a
-    /// call that is still open, which is as true of a request the automatic
-    /// reviewer is deciding as of one a person is looking at.
+    /// Which threads Codex answers approval requests for on the user's behalf. Decided here, not
+    /// in the reducer, which cannot tell a reviewer-decided request from a human one.
     private let approvalRouting: any DesktopApprovalRoutingProviding
-    /// The reviewer each running Turn was handed, read from its own rollout.
-    ///
-    /// Consulted ahead of `approvalRouting`, which is Desktop's copy of the
-    /// thread's current setting and lags a switch by however long Desktop takes
-    /// to persist one.
+    /// The reviewer each running Turn was handed, from its rollout. Consulted ahead of
+    /// `approvalRouting`, Desktop's copy, which lags a switch until Desktop persists it.
     private let turnReviewer: any TurnReviewerReading
-    /// What each thread's rollout says about a Turn no hook reports -- which
-    /// held Turn it is on, and whether the user stopped it -- and the watcher
-    /// on those files (``CodexRolloutTurnEvidence``).
+    /// Rollout evidence no hook reports: which held Turn a thread is on, and user aborts.
     private let rolloutEvidence: CodexRolloutTurnEvidence
-    /// The rollouts of the Turns that are still going, and nothing else.
-    ///
-    /// Not private, so a test can state what is watched and for how long --
-    /// see ``CodexRolloutTurnEvidence/rolloutWatcher``.
+    /// The rollouts of still-running Turns only. Not private, for tests.
     nonisolated var rolloutWatcher: PathSetChangeWatcher {
         rolloutEvidence.rolloutWatcher
     }
-    /// Whether there is a screen the user could read this app's output on.
-    ///
-    /// Two things consult it, both because the work behind them is only worth
-    /// buying for somebody who can look at the result. The unread gate's
-    /// re-check: a row Desktop still reports unread is cleared by somebody
-    /// opening it in Desktop, which a locked screen makes impossible -- see
-    /// ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``.
-    /// And the account and quota reads, whose figures are drawn only in a
-    /// footer the user reaches by hovering the notch -- see
-    /// ``CodexUsageReader/readIfStale()``.
+    /// Whether there is a screen to read this app's output on. Gates the unread re-check
+    /// (``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``) and the account and
+    /// quota reads (``CodexUsageReader/readIfStale()``).
     nonisolated private let screenAvailability: any ScreenAvailabilityReporting
-    /// The account and its quota, read over the App Server on a clock of their
-    /// own (``UsageReading``).
+    /// Account and quota, read over the App Server on their own clock (``UsageReading``).
     private let usage: CodexUsageReader
     nonisolated let stateChangeEvents: AsyncStream<Void>
     nonisolated private let snapshotInvalidations: AsyncStream<Void>.Continuation
-    /// Whether Codex Desktop is running, and as which process.
-    ///
-    /// One reading answers both, because the pid is what binds hook evidence to
-    /// the process that vouched for it and the presence drawn beside it must
-    /// describe the same instant (``RunningApplicationPresence``).
+    /// Whether Codex Desktop is running, and its pid, from one reading so hook evidence and
+    /// presence describe the same instant (``RunningApplicationPresence``).
     private let presence: RunningApplicationPresence
     private var threadRecords: [String: ThreadRecord] = [:]
-    /// The threads the per-thread metadata read actually revisits.
-    ///
-    /// `threadRecords` caches every unarchived thread the membership read
-    /// returned, but only Hook-tracked threads are ever re-read. Measuring
-    /// staleness over the whole cache therefore reports a deadline that no
-    /// refresh can clear.
+    /// The threads the metadata read revisits (Hook-tracked only); staleness over all of
+    /// `threadRecords` would report a deadline no refresh can clear.
     private var hookTrackedThreadIDs: Set<String> = []
     private var listedThreadIDs: Set<String> = []
     private var threadListReadAt: Date?
-    /// When `thread/list` last answered, for either of the two jobs it does.
-    ///
-    /// Separate from ``threadListReadAt`` because the two questions are: that
-    /// one is "how fresh is the membership set", this one is "does the
-    /// transport answer a real read". The no-hook branch asks only the second,
-    /// with a call bounded to one row, and must never leave a mark that says
-    /// the membership set was re-read -- a truncated `listedThreadIDs` with a
-    /// current timestamp would retire live Hook Turns whose thread it did not
-    /// happen to contain.
-    ///
-    /// It is a ceiling on how often the confirmation is bought, never a reason
-    /// to wake: nothing is published for it in `nextRefreshDeadline()`, so it
-    /// rides on the wake-ups quota already causes.
+    /// When `thread/list` last answered at all, separate from ``threadListReadAt``: the no-hook
+    /// branch reads one row and must not mark membership fresh, or a truncated `listedThreadIDs`
+    /// would retire live Hook Turns. A ceiling only; never published as a deadline.
     private var threadListAnsweredAt: Date?
     private var threadListGate = SingleFlightGate()
     private var threadListRefreshTask: Task<Void, Never>?
@@ -145,100 +76,43 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     private var threadMetadataGate = SingleFlightGate()
     private var threadMetadataRefreshTask: Task<Void, Never>?
     private var threadMetadataRetryAfter: Date?
-    /// Threads a metadata read was asked for but has not yet covered.
     private var pendingMetadataThreadIDs: Set<String> = []
-    /// Threads a metadata read has been *issued* for, until it answers.
-    ///
-    /// The same window ``inFlightProgressReads`` covers, on the read beside it:
-    /// ``ThreadRecord`` is written when the answer arrives, so a refresh that
-    /// runs re-entrant with the read finds no record, calls the thread stale
-    /// and queues it again -- and that question is dispatched the moment the
-    /// read in flight ends, by which point the answer it was asking for is in
-    /// hand and good for the next ten seconds.
-    ///
-    /// Narrower than the progress read's version of the same hole, because the
-    /// membership read writes every listed thread's record in bulk: on a fast
-    /// `thread/list` that record lands part-way through the single-thread read
-    /// and the re-queue never happens. It is the slow list -- the case
-    /// pagination exists to be -- that leaves the window open.
+    /// Threads a metadata read has been issued for, until it answers, so a re-entrant refresh
+    /// does not queue the same read again (open mainly on a slow `thread/list`).
     private var inFlightMetadataThreadIDs: Set<String> = []
 
-    /// The Turn each thread's path was last asked about, and nothing else.
-    ///
-    /// A thread's rollout path is not a fixed property of the thread: Codex
-    /// writes a Turn resumed after an interrupt into a new file, and the
-    /// reviewer this app reads out of that file is read once, at the moment
-    /// the Turn opens. So a Turn new to this thread asks for the path again
-    /// instead of waiting out the refresh interval -- once, which is what this
-    /// records. See
-    /// ``scheduleThreadMetadataRefreshIfNeeded(for:)``.
+    /// The Turn each thread's path was last asked about. A Turn resumed after an interrupt gets a
+    /// new rollout file, so a new Turn re-asks once
+    /// (``scheduleThreadMetadataRefreshIfNeeded(for:)``).
     private var metadataReadTurnIDsByThreadID: [String: String] = [:]
     private var supportsThreadMetadataRead = true
-    /// The newest thing each unfinished turn has said, by thread.
-    ///
-    /// This is the row's live progress on this product, and it is read rather
-    /// than received: no Codex hook carries assistant text before the turn ends
-    /// -- `last_assistant_message` is on `stop.command.input` and
-    /// `subagent-stop.command.input` and nowhere else, checked against the
-    /// schemas the CLI itself ships (0.149.0-alpha.4.3). Without it a Running
-    /// row shows the prompt the user typed for the whole turn, which is the one
-    /// thing about the turn that cannot change.
+    /// The newest thing each unfinished turn has said, by thread. Read, not received: no Codex
+    /// hook carries assistant text before `Stop`/`SubagentStop` (CLI schemas, 0.149.0-alpha.4.3).
     private var turnProgressByThreadID: [String: TurnProgress] = [:]
     private var turnProgressGate = SingleFlightGate()
     private var turnProgressRefreshTask: Task<Void, Never>?
     private var turnProgressRetryAfter: Date?
-    /// Turns a progress read was asked for but has not yet covered, by thread.
     private var pendingProgressReads: [String: TurnProgressRequest] = [:]
-    /// Turns a progress read has been *issued* for, by thread, until it answers.
-    ///
-    /// The queue above empties the moment a run picks it up, and
-    /// ``TurnProgress`` is not written until the answer comes back -- so
-    /// between those two moments nothing in this actor said the question had
-    /// been asked. The read is an `await` on another actor, every refresh in
-    /// that window is re-entrant with it, and each one saw an unread stamp and
-    /// queued the identical question again. One hop is too short for that to
-    /// happen on a quiet machine, which is the whole reason it only ever
-    /// surfaced as a test failing under load.
-    ///
-    /// Only an *identical* question is suppressed -- same turn, same
-    /// `lastEventAt`. A turn that does something while its read is in flight
-    /// has a different stamp, and that is a new question the in-flight answer
-    /// cannot contain.
+    /// Turns a progress read has been issued for, by thread, until it answers. Without it,
+    /// refreshes re-entrant with the `await` re-queued the same read (seen only under load).
+    /// Only an identical question (same turn, same `lastEventAt`) is suppressed.
     private var inFlightProgressReads: [String: TurnProgressRequest] = [:]
-    /// Threads that answered `thread/items/list` with "method not found".
-    ///
-    /// **Per thread rather than per server, because the refusal is.** Codex
-    /// answers `-32601 "thread/items/list is not supported yet"` for a thread
-    /// whose `historyMode` is `legacy`, and `paginated` threads on the same
-    /// server answer it fine -- measured 2026-08-25 against CLI
-    /// `0.149.0-alpha.4.3`, where a thread started without
-    /// `historyMode: "paginated"` refused while every thread Codex Desktop had
-    /// created answered. Held server-wide, one legacy thread would have taken
-    /// the live progress off every other row in the panel.
-    ///
-    /// A Codex with no such method at all lands here too, one refused call per
-    /// thread rather than one per run. That is the whole cost of not telling
-    /// the two cases apart by their message text.
+    /// Threads that answered `thread/items/list` with "method not found". Per thread: Codex
+    /// answers `-32601` for `historyMode` `legacy` threads while `paginated` ones work (measured
+    /// 2026-08-25, CLI `0.149.0-alpha.4.3`).
     private var threadsWithoutItemsRead: Set<String> = []
     private var observedDesktopProcessIdentifier: pid_t?
-    /// Cool-off after a connect that never reached a working transport.
-    ///
-    /// The one backoff here that guards a subprocess rather than a request. See
-    /// ``connectToAppServer()``.
+    /// Cool-off after a failed connect; guards a subprocess. See ``connectToAppServer()``.
     private var connectRetryAfter: Date?
-    /// Why the last connect failed, replayed for the refreshes the cool-off
-    /// turns away.
+    /// Replayed for refreshes the cool-off turns away.
     private var lastConnectFailure: (any Error)?
     private var lastTrustedSnapshot: AgentSnapshot?
     private var observationStopped = false
     /// Keeps a finished row listed until Desktop no longer reports it unread
-    /// (``TerminalUnreadRowFilter``, the rules every product shares).
+    /// (``TerminalUnreadRowFilter``).
     private var terminalUnreadMembershipGate: TerminalUnreadRowFilter
-    /// The routing answer each live Turn started under.
-    ///
-    /// The snapshot beside it says what Desktop records for the thread *now*,
-    /// which stops being an answer about this row the moment the reviewer is
-    /// changed under a running turn. See ``TurnApprovalRoutingPin``.
+    /// The routing each live Turn started under; Desktop's current value stops describing a row
+    /// once the reviewer changes mid-turn (``TurnApprovalRoutingPin``).
     private var approvalRoutingPin = TurnApprovalRoutingPin()
 
     init(
@@ -270,10 +144,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         self.client = client
         self.hookEvents = hookEvents
         self.hookRegistrar = hookRegistrar
-        // The transport belongs to this service rather than to the store, so
-        // the store stays a reducer with an inbox and nothing that binds. One
-        // connection carries one payload, delivered on the listener's serial
-        // read queue, which is what keeps arrival order.
+        // The transport belongs to this service, so the store stays a reducer with an inbox.
+        // Delivery on the listener's serial read queue keeps arrival order.
         self.hooks = HookLifecycleSource(
             setup: hookRegistrar,
             repository: hookEvents,
@@ -287,9 +159,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         let rolloutEvidence = CodexRolloutTurnEvidence(turnAbort: turnAbort, timing: timing)
         self.rolloutEvidence = rolloutEvidence
         self.screenAvailability = screenAvailability
-        // Background reads land after the snapshot that started them has already
-        // been published, so their results need a trigger of their own. The
-        // one-second poll used to supply that by accident.
+        // Background reads land after their snapshot was published, so they need their own trigger.
         let (invalidations, invalidationContinuation) = AsyncStream.makeStream(
             of: Void.self,
             bufferingPolicy: .bufferingNewest(1)
@@ -303,28 +173,17 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             onUpdate: { invalidationContinuation.yield(()) }
         )
         self.stateChangeEvents = DirectoryChangeWatcher.merged([
-            // The store signals only when what a row draws has changed, so a
-            // 17-event turn is one wake-up rather than seventeen. There is no
-            // debounce in front of it any more: the 100 ms the queue watcher
-            // added landed on the one path where a user is watching for a row
-            // to change, and it was there to collapse a burst of files that no
-            // longer exists.
+            // The store signals only when what a row draws changed, so a 17-event turn is one wake-up.
+            // No debounce: it delayed the path a user watches.
             hookEvents.changeEvents(),
-            // The registration changing underneath us -- the user running
-            // `/hooks`, or editing the file. It is what replaced re-deriving
-            // installation health on a 60-second cadence.
+            // The registration changing: the user running `/hooks` or editing the file.
             hookRegistrar.changeEvents(),
             unreadState.changeEvents(),
-            // The screen coming back. A row waiting on the user books no
-            // re-check while there is no screen to read it on, so this is what
-            // re-arms it -- without it the row would wait out the heartbeat
-            // after an unlock, which is the one moment the user is most likely
-            // to be looking at the notch.
+            // The screen returning re-arms re-checks booked off while locked, instead of waiting out
+            // the heartbeat after an unlock.
             screenAvailability.changeEvents(),
-            // A running Turn's rollout gaining a record. It is a signal and not
-            // a reading -- what arrived is answered by the refresh, in the
-            // reader that knows how to answer it -- and the one record that
-            // matters is the abort no hook reports. See ``rolloutWatcher``.
+            // A running Turn's rollout gaining a record: a signal only; the abort no hook reports is
+            // what matters (``rolloutWatcher``).
             rolloutEvidence.rolloutWatcher.events(),
             invalidations
         ])
@@ -336,67 +195,23 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
 
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         observationStopped = false
-        // The transport, before the status gate. A trusted definition can fire
-        // before this app decides the registration is complete -- a Codex that
-        // was already running has them loaded -- so the socket has to be bound
-        // by then, not after.
+        // Before the status gate: an already-running Codex fires trusted definitions immediately.
         await hooks.prepareTransport()
-        // Every branch below that returns without evaluating rows has to say so,
-        // because the gate is the one piece of state here that a refresh must
-        // *touch* to keep honest. Its entries are pruned and hidden inside
-        // `sessions(from:)`, which only the live-hook branch reaches; left
-        // alone by the others they freeze in place, unhidden, and go on
-        // re-issuing a re-check one second forward from now. Nothing can clear
-        // them, because no refresh reachable from those branches evaluates a
-        // row -- so losing Desktop with one unread row left the app waking at
-        // 1 Hz forever, with nothing on screen (CR-Fable-050).
-        //
-        // Written as a `defer` over one flag rather than a `reset()` at each
-        // `return`: the branches here are the ones that exist today, and the
-        // failure was a branch added later that nobody remembered to teach.
-        // The Claude Code service does the same thing at each of its two early
-        // returns, which is the same rule with a smaller surface.
+        // Branches that return without evaluating rows must reset the gate, or its entries re-issue
+        // a 1 Hz re-check forever (CR-Fable-050). A `defer` over one flag so new branches are covered.
         var didEvaluateRows = false
         defer {
             if !didEvaluateRows {
                 terminalUnreadMembershipGate.reset()
-                // And the rollout watches, for the same reason and by the same
-                // rule. Only the live-Hook branch has Turns to watch the
-                // rollouts of; a watcher left pointing at a file from a branch
-                // that publishes no rows goes on waking a refresh that will
-                // not read it, once per record the turn appends.
+                // Likewise the rollout watches: a stale watch wakes a refresh that will not read it.
                 rolloutWatcher.watch(paths: [])
             }
         }
         let desktopProcessIdentifier = await self.presence.processIdentifier()
-        // The pid binds the Turns, not just the decision to publish them.
-        //
-        // `hasCurrentHookObservation` gates whether this refresh trusts the
-        // reducer, and that gate was the whole of the pid binding: the Turns
-        // themselves were never bound to anything. So a Desktop that died
-        // mid-turn -- a crash or an update sends no `Stop`, and a user quitting
-        // it has not been measured either way -- left its Running Turn in the
-        // reducer. It correctly vanished from the notch while Desktop was
-        // closed, and then came back in full on the first hook event from the
-        // *relaunched* process, elapsed clock still counting from before the
-        // crash, because that event rebound the observation to the new pid and
-        // republished everything the reducer held (CR-Fable-007). Nothing
-        // could clear it afterwards: membership reconciliation kept the row
-        // because the thread is still listed and unarchived, no hook will ever
-        // name that retired `turn_id` again, and
-        // Codex has no activity-status read to settle
-        // it the way `claude agents --json` does for Claude Code (ADR 0011).
-        // Only resuming that exact thread, or dismissing the row by hand, took
-        // it off the notch.
-        //
-        // ``CodexRolloutTurnEvidence`` does not rescue this one, and the difference
-        // is worth naming: that reading answers a Turn Codex *stopped*, and a
-        // Desktop that died wrote no `turn_aborted` any more than it sent a
-        // `Stop`. The evidence for a dead producer is the dead producer.
-        //
-        // Retired *before* the drain, so the relaunched process's events land
-        // in a reducer that no longer holds its predecessor's Turns -- after
-        // the drain they would be indistinguishable from them.
+        // A pid change retires the Turns the old process vouched for. Desktop dying mid-turn sends
+        // no `Stop` and writes no `turn_aborted`, and its Running Turn returned on the relaunched
+        // process's first event with nothing to clear it (CR-Fable-007; no activity-status read as
+        // ADR 0011 gives Claude Code). Retired before the drain so new events cannot mix in.
         if let vouchingProcessIdentifier = observedDesktopProcessIdentifier,
            vouchingProcessIdentifier != desktopProcessIdentifier {
             await retireHookTurns()
@@ -404,22 +219,14 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         var hookState = await hookEvents.drainDeliveredEvents()
         let hookDiagnostic = hookState.diagnostic
         if desktopProcessIdentifier == nil {
-            // And *after* the drain while nothing is running, because a helper
-            // spawned by the dying process can still deliver on its way out.
-            // That payload is no better vouched for than the Turn it belongs
-            // to, and left in the reducer it would outlive this window and be
-            // adopted by the next Desktop exactly as above.
+            // And after the drain while nothing runs: a dying process's helper can still deliver.
             hookState = await retireHookTurns(
                 didConsumeEvents: hookState.didConsumeEvents
             )
         } else if hookState.didConsumeEvents {
             observedDesktopProcessIdentifier = desktopProcessIdentifier
         }
-        // Presence is kernel truth here, so it is never `unknown`: the running
-        // application list cannot go stale or fail to answer the way a cached
-        // command output can. It is also knowable before anything is known
-        // about turns, which is the asymmetry worth keeping — a just-launched
-        // app can say Codex is open while still knowing nothing about its work.
+        // Presence is kernel truth, never `unknown`, and known before anything about turns.
         let presence = RunningApplicationPresence.presence(of: desktopProcessIdentifier)
 
         let hasLiveHookObservation = hasCurrentHookObservation(
@@ -456,17 +263,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 let unreadSnapshot = await unreadState.snapshot()
                 let hookThreadIDs = Set(hookState.turns.map(\.threadID))
                 hookTrackedThreadIDs = hookThreadIDs
-                // A thread the last sweep did not carry is a reason to sweep
-                // again -- unless the App Server has already answered that it
-                // has no such thread, or the product has said the same thing
-                // itself. Re-paginating the user's whole history to look for a
-                // thread its owner says does not exist buys nothing, and a
-                // Codex side chat would otherwise ask for that sweep on every
-                // refresh for as long as it ran.
-                //
-                // The second of those arrives on the thread's first event and
-                // the first only after a round trip, so this is also the sweep
-                // a side chat used to get before the refusal landed.
+                // Resweep for a thread the last sweep missed, unless the App Server or the product has said
+                // it does not exist (a Codex side chat would otherwise resweep every refresh).
                 let containsUnlistedHookThread = hookState.turns.contains { state in
                     let threadID = state.threadID
                     guard !listedThreadIDs.contains(threadID) else { return false }
@@ -475,15 +273,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                     return record.isAddressable
                 }
 
-                // Hook state is the low-latency source; App Server reads only
-                // decorate it, so both refreshes stay in the background where a
-                // slow request cannot hold an Idle -> Running transition.
-                //
-                // The two reads are deliberately split by cost. Per-thread
-                // metadata covers the Hook reducer's own threads and is cheap
-                // enough to follow Hook activity; the paginated full list is
-                // needed only to reconcile membership, so it keeps the low
-                // frequency the design calls for.
+                // Hook state is the low-latency source; App Server reads only decorate it, in the background
+                // so a slow request cannot hold Idle -> Running. Cheap per-thread metadata follows Hook
+                // activity; the paginated full list only reconciles membership, at low frequency.
                 scheduleThreadMetadataRefreshIfNeeded(for: hookState.turns)
                 let fullListMustSupplyMetadata = !supportsThreadMetadataRead
                     && hookState.didConsumeEvents
@@ -492,29 +284,19 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                     || fullListMustSupplyMetadata {
                     scheduleThreadListRefreshIfNeeded()
                 }
-                // A request parked by a backoff is still outstanding; this is
-                // where it gets picked back up once the cool-off expires.
+                // Picks up a request parked by a backoff once the cool-off expires.
                 startThreadListRefreshIfPossible()
                 startThreadMetadataRefreshIfPossible()
 
                 hookState = await hookEvents.applying(threadAdmission, to: hookState)
-                // The one thing that ends a Codex Turn without a hook event, and
-                // the Turn a thread is really on when a prompt was held back,
-                // both read out of the thread's rollout
-                // (``CodexRolloutTurnEvidence``). After the reconciliation above,
-                // so a Turn this refresh is about to drop is never asked about,
-                // and before the rows are built, so an abort found here is a
-                // Completed row in this snapshot rather than in the next one.
+                // Rollout evidence (``CodexRolloutTurnEvidence``): aborts with no hook, and the real Turn
+                // behind a held prompt. After reconciliation, before rows are built, so an abort is Completed
+                // in this snapshot.
                 await rolloutEvidence.hold(rolloutPaths: rolloutPaths(ofThreadsIn: hookState))
                 hookState = await SupplementaryEvidenceApplication.settle(rolloutEvidence, from: hookState, in: hookEvents)
-                // After the reduction, so a Turn this refresh just ended stops
-                // being watched in the same pass that ended it.
+                // After the reduction, so a Turn just ended stops being watched in the same pass.
                 await rolloutEvidence.watch(openTurnsIn: hookState)
-                // After the reconciliation above, so a turn this refresh is
-                // about to drop is never asked about -- and, like the two reads
-                // above it, in the background: what it fetches is the row's
-                // third line, and a slow request for it must not hold up the
-                // status the first two lines carry.
+                // In the background: the row's third line must not hold up its status.
                 scheduleTurnProgressRefreshIfNeeded(for: hookState.turns)
                 startTurnProgressRefreshIfPossible()
                 let sessions = await sessions(
@@ -525,10 +307,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                     approvalRouting: await approvalRouting.snapshot(),
                     dismissedRowIDs: dismissedRowIDs
                 )
-                // The one branch that looked at every listed row and pruned the
-                // gate to match. Anything it hid or dropped is hidden or
-                // dropped; anything still in there is there because this pass
-                // put it there.
+                // The only branch that prunes the gate against every listed row.
                 didEvaluateRows = true
                 await usage.readIfStale()
                 return remember(
@@ -550,34 +329,14 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 )
             }
 
-            // No post-launch Hook observation yet. The product deliberately does
-            // not reconstruct anything that started before this launch, so this
-            // branch never builds sessions — it only confirms that the App
-            // Server answers a real read, which separates Ready from
-            // Disconnected and surfaces an unsupported protocol version.
-            //
-            // Reconstruction was removed rather than fixed: measured against
-            // Codex CLI 0.148.0-alpha.9 with a live turn running, an
-            // independent App Server reports `thread/loaded/list` empty, every
-            // thread `notLoaded`, and never a single `inProgress` turn. There is
-            // no supported read that answers "what is Codex Desktop doing right
-            // now", so any startup list would have been a guess.
-            //
-            // The confirmation is one bounded page, not the membership sweep
-            // (CR-Fable-023). The sweep answered this question by accident and
-            // charged the whole user history for it: nothing here consumes a
-            // membership set -- sessions cannot exist without a live Hook, by
-            // rule -- so with Codex Desktop closed all day the App Server was
-            // re-paginating every unarchived thread every thirty seconds to
-            // answer "does the transport work", for data no layer would read.
+            // No post-launch Hook observation yet: build no sessions, only confirm the App Server answers
+            // a real read (Ready vs Disconnected, unsupported protocol). Nothing started before launch is
+            // reconstructed: an independent App Server reports every thread `notLoaded` and no
+            // `inProgress` turn (measured CLI 0.148.0-alpha.9). One bounded page, not the membership
+            // sweep (CR-Fable-023).
             hookTrackedThreadIDs = []
-            // And the reads that only the live-Hook branch can consume or clear
-            // go with it. A membership or metadata request parked by a backoff
-            // publishes its retry marker as a deadline, and nothing reachable
-            // from here picks it back up: the store would wake at the marker,
-            // find it still in the past, and spin at the refresh floor for as
-            // long as Desktop stayed shut. Same shape as CR-Fable-050, one
-            // branch further down.
+            // Stop reads only the live-Hook branch consumes, or a parked retry marker becomes a deadline
+            // nothing clears and the store spins at the refresh floor (as CR-Fable-050).
             stopThreadReadsWithNoConsumer()
             try await confirmAppServerAnswersReads(
                 timeoutNanoseconds: nanoseconds(timing.coreRequestTimeout)
@@ -646,34 +405,13 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         }
     }
 
-    /// Brings the App Server transport up, behind a cool-off after a failure.
+    /// Brings the App Server transport up, behind a cool-off after a failure. The only backoff
+    /// that guards a subprocess: a broken `codex` exits in milliseconds, and a 1 Hz re-check
+    /// forked `codex app-server` every second (CR-Fable-014). Refreshes turned away replay the
+    /// last failure.
     ///
-    /// This is the only backoff in this service that guards a *subprocess*.
-    /// Every other one parks a request on a transport that already exists; a
-    /// connect in the `.disconnected` phase forks and execs `codex app-server`
-    /// before it can find out whether that was going to work.
-    ///
-    /// So the failure it exists for is not a slow server, it is a broken one. A
-    /// `codex` that launches and exits -- a version mismatch after Codex
-    /// updates underneath a running app, a partially-installed binary -- ends
-    /// its stream immediately and fails the connect in milliseconds. Nothing
-    /// then throttles the next attempt: `fetchSnapshot` connects unconditionally
-    /// once the registration gate passes, and a refresh reaches every product
-    /// no matter which one asked for it. One Claude Code row waiting on the
-    /// user re-checks at 1 Hz, and that alone was enough to fork a Codex app
-    /// server every second, for as long as the app stayed open (CR-Fable-014).
-    ///
-    /// The cool-off is a floor on the *attempt*, not a suppression of the
-    /// answer: the refresh it turns away still reports the failure, replayed
-    /// from the connect that actually happened, so the notch says the same
-    /// thing it would have said had this refresh paid for a spawn to be told
-    /// it again.
-    ///
-    /// - Parameter bypassingCoolOff: For a connect the user asked for by
-    ///   clicking something. A cool-off is a budget on work nobody is waiting
-    ///   for; a click is somebody waiting. The attempt still records its
-    ///   outcome, so a click that succeeds clears the backoff for everyone and
-    ///   a click that fails does not shorten it.
+    /// - Parameter bypassingCoolOff: for a user click. The outcome is still recorded: success
+    ///   clears the backoff; failure does not shorten it.
     private func connectToAppServer(bypassingCoolOff: Bool = false) async throws {
         if !bypassingCoolOff,
            let connectRetryAfter,
@@ -693,37 +431,17 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         }
     }
 
-    /// Earliest moment a refresh could produce different output.
-    ///
-    /// Every deadline here must be one a refresh can actually clear. The store
-    /// wakes at whatever this reports and refreshes; if the refresh leaves the
-    /// deadline where it was, the same wake-up fires again immediately and the
-    /// monitor spins. So each entry mirrors the exact condition its scheduler
-    /// tests, and a source with no pending work reports nothing at all.
+    /// Earliest moment a refresh could produce different output. Every deadline must be one a
+    /// refresh can clear, or the store spins: each entry mirrors its scheduler's condition.
     func nextRefreshDeadline() async -> Date? {
         guard !observationStopped else { return nil }
         var deadlines: [Date] = []
-        // Asked once. Two entries below consult it, and a deadline that
-        // disagreed with the guard its scheduler tests is the busy-wait this
-        // whole doc comment is about.
+        // Asked once, so both entries that consult it agree with their schedulers.
         let screenIsAvailable = screenAvailability.isAvailable()
 
-        // Membership reconciliation, and only while a Hook-tracked Turn gives
-        // the set a consumer (CR-Fable-023).
-        //
-        // The condition mirrors its scheduler exactly, like every other entry
-        // here: the re-read is reachable only from the live-Hook branch, so
-        // with no Hook observation this deadline is one no refresh can clear --
-        // the store would wake at it, find it unmoved, and spin. It is also the
-        // honest answer on its own terms. `threadRecords` decorates Hook Turns
-        // and `removeThreads(notIn:)` reconciles them; with none of them held,
-        // re-paginating the user's whole history buys nothing anyone reads.
-        // Freshness is a ceiling on how stale an answer may get, not a reason
-        // to buy one nobody asked for (CR-Fable-002).
-        //
-        // Nothing is lost when a Turn does appear: a Hook naming a thread the
-        // last list did not carry schedules a read on the spot, and a Hook
-        // event is itself a wake-up.
+        // Membership reconciliation, only while a Hook-tracked Turn consumes it (CR-Fable-023,
+        // CR-Fable-002): the re-read is reachable only from the live-Hook branch. A new Turn's Hook
+        // schedules a read and wakes the store itself.
         if let threadListReadAt, !hookTrackedThreadIDs.isEmpty {
             deadlines.append(
                 deferred(
@@ -735,11 +453,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             )
         }
 
-        // Per-thread metadata, over the threads that read actually revisits --
-        // and only while this Codex build supports it. The rest of
-        // `threadRecords` is refreshed by the membership read above, on its own
-        // interval, so measuring it here would report a deadline that comes due
-        // twenty seconds before anything is scheduled to clear it.
+        // Only Hook-tracked threads; the rest of `threadRecords` refreshes with the membership read,
+        // so measuring it here reports a deadline twenty seconds early.
         if supportsThreadMetadataRead,
            let oldestMetadata = hookTrackedThreadIDs
             .compactMap({ threadRecords[$0]?.observedAt })
@@ -754,15 +469,13 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             )
         }
 
-        // Quota and account, mirroring the reader's own scheduler -- see
-        // ``CodexUsageReader/nextReadDeadline()``.
+        // Quota and account: see ``CodexUsageReader/nextReadDeadline()``.
         if let quota = await usage.nextReadDeadline() {
             deadlines.append(quota)
         }
 
-        // Work a backoff parked. Reported only while backing off: a pending
-        // request with no cool-off is already looping, and publishing a
-        // deadline the refresh cannot clear is how the loop starts spinning.
+        // Only while backing off: a pending request with no cool-off is already looping, and a
+        // deadline the refresh cannot clear makes the loop spin.
         if threadListGate.isPending, let threadListRetryAfter {
             deadlines.append(threadListRetryAfter)
         }
@@ -773,27 +486,20 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             deadlines.append(turnProgressRetryAfter)
         }
 
-        // Both the settling window and the floor under the unread watcher. This
-        // is the one deadline here measured partly forward from now rather than
-        // from when its work became due, because the row it covers is waiting
-        // on the user and not on an interval that started somewhere.
+        // Measured partly from now: the row waits on the user, not on an interval.
         if let terminal = terminalUnreadMembershipGate.nextDeadline(
             now: clock.now(),
             screenIsAvailable: screenIsAvailable
         ) {
             deadlines.append(terminal)
         }
-        // A held answer window running out: the refresh that withdraws the
-        // handle is what turns the mark from `Answer` to `Read`.
+        // A held answer window expiring: the refresh that withdraws the handle turns `Answer` into `Read`.
         if let expiry = hookEvents.nextAnswerExpiry() { deadlines.append(expiry) }
         return deadlines.min()
     }
 
-    /// A due date pushed out by its source's retry backoff.
-    ///
-    /// A backoff is a floor on the *next attempt*, never a reason to wake on its
-    /// own: waking at a bare retry marker asks a scheduler that may have decided
-    /// it has nothing to do, which leaves the marker in the past forever.
+    /// A due date pushed out by its source's retry backoff. A backoff floors the next attempt and
+    /// never wakes on its own: a bare retry marker can stay in the past forever.
     nonisolated private func deferred(_ due: Date, by retryAfter: Date?) -> Date {
         guard let retryAfter else { return due }
         return max(due, retryAfter)
@@ -808,15 +514,11 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         lastTrustedSnapshot = nil
         stopThreadReadsWithNoConsumer()
         await rolloutEvidence.stopMonitoring()
-        // The text goes with the connection that answered for it. It is a fact
-        // about a turn that is still running, and this call is the app deciding
-        // it no longer knows what is running.
+        // Turn text belongs to the connection that answered for it.
         turnProgressByThreadID.removeAll()
-        // And so does the refusal: it was this server's answer about this
-        // thread, and the next connection is entitled to be asked again.
+        // So does the refusal: the next connection is entitled to be asked again.
         threadsWithoutItemsRead.removeAll()
-        // And so does the confirmation that it answers reads at all: the next
-        // connection is a different process, and may be a different build.
+        // And the read confirmation: the next connection may be a different build.
         threadListAnsweredAt = nil
         await usage.cancel()
         terminalUnreadMembershipGate.reset()
@@ -825,41 +527,17 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         await client.disconnect()
     }
 
-    /// Whether the App Server still hands this thread over as a navigable root.
+    /// Whether the App Server still hands this thread over as a navigable root (ADR 0017).
     ///
-    /// **It asks about one thread, not about the whole history.** This is the
-    /// question [ADR 0017](../../docs/adr/0017-a-row-requires-a-thread-the-app-server-vouches-for.md)
-    /// already puts to the App Server before a row is drawn, asked again at the
-    /// moment the user clicks -- so the click can never demand more evidence
-    /// than the row was admitted on. It used to be answered by re-paginating
-    /// every unarchived thread, which is the transport's most expensive call
-    /// and grows with the user's history: measured 2026-08-26 against CLI
-    /// `0.149.0-alpha.4.3`, a full pagination costs 51ms at 50 threads, 335ms
-    /// at 199, 754ms at 400 and **2.2s at 799**, against 1.4ms median for one
-    /// `thread/read`. That was the whole of the 1-2s lag between clicking a
-    /// Codex row and Codex Desktop coming forward.
-    ///
-    /// **Archiving is not this gate's question.** A thread the user archived is
-    /// still a thread Codex Desktop holds and a deep link still names; what
-    /// archiving ends is the row's monitoring lifecycle, and that is already
-    /// owned by the membership sweep, which retires the Turn outright via
-    /// `removeThreads(notIn:)` within `threadListRefreshInterval`. So a row the
-    /// user can still see is a row the last sweep still listed, and re-asking
-    /// here bought a second copy of an answer the row already carries. It could
-    /// not be asked cheaply either: `thread/read` returns an archived thread
-    /// with no marker of it (measured against a real `thread/archive` in an
-    /// isolated `CODEX_HOME`), and the `thread/archived` notification that
-    /// would have carried it reaches only the client that did the archiving --
-    /// never this app's independent App Server.
-    ///
-    /// A refusal is recorded exactly as the metadata read records one, and for
-    /// the same reason: it is an *answer* about this thread, so it retires the
-    /// row rather than being asked again on every refresh.
+    /// - One `thread/read` (1.4ms median), not a full pagination (2.2s at 799 threads, measured
+    ///   2026-08-26 on CLI `0.149.0-alpha.4.3`), which was the 1-2s click lag.
+    /// - Archiving is left to the membership sweep (`removeThreads(notIn:)`): `thread/read`
+    ///   returns an archived thread unmarked.
+    /// - A refusal retires the row.
     func isThreadNavigable(_ threadID: String) async throws -> Bool {
         guard !threadID.isEmpty else { return false }
 
-        // The user clicked a row. Whatever the last refresh concluded about the
-        // server, this is worth one spawn to find out for certain.
+        // A click is worth one spawn, whatever the last refresh concluded.
         try await connectToAppServer(bypassingCoolOff: true)
 
         if supportsThreadMetadataRead,
@@ -867,8 +545,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             return isNavigable
         }
 
-        // A Codex without `thread/read` has only the paginated list left to be
-        // asked, which is the shape this check had for every build.
+        // Without `thread/read` only the paginated list can be asked.
         let listedThreads = try await readAllUnarchivedThreads(
             forceRefresh: true,
             timeoutNanoseconds: nanoseconds(timing.coreRequestTimeout)
@@ -879,16 +556,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         }
     }
 
-    /// Reads one thread and judges it; `nil` when this build cannot be asked.
-    ///
-    /// Only `-32601` answers `nil`, and it answers it once: the flag it clears
-    /// is the same one the metadata path keeps, so a build without the method
-    /// falls back to the list here and everywhere else. Every other remote
-    /// error is the App Server *answering* about this thread -- it took the
-    /// request and refused it -- which is `false`, not a reason to go and
-    /// paginate. A transport failure is not an answer at all and is rethrown,
-    /// so the user is told the target could not be confirmed rather than told
-    /// their session is gone.
+    /// Reads one thread and judges it; `nil` only on `-32601` (clears the metadata path's flag).
+    /// Other remote errors are a refusal (`false`); a transport failure is rethrown, since it is
+    /// not an answer.
     private func readNavigableRootThread(
         _ threadID: String
     ) async throws -> Bool? {
@@ -899,8 +569,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 method: "thread/read",
                 params: .object([
                     "threadId": .string(threadID),
-                    // Never the turn history -- see
-                    // `refreshThreadMetadataInBackground` for why.
+                    // Never the turn history: see `refreshThreadMetadataInBackground`.
                     "includeTurns": .bool(false)
                 ]),
                 timeoutNanoseconds: nanoseconds(timing.coreRequestTimeout)
@@ -928,10 +597,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         return CodexSnapshotParser.isEligibleRootThread(thread)
     }
 
-    /// Files what the App Server just said about one thread.
-    ///
-    /// The click pays for a read either way, so the row it came from gets the
-    /// fresher title, and a refusal gets filed as a refusal.
+    /// Files a click's read: a fresher title, or a refusal.
     private func recordThreadRead(
         threadID: String,
         thread: JSONValue?,
@@ -944,27 +610,13 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         invalidatePublishedSnapshot()
     }
 
-    /// Reads integration health without draining the store.
-    ///
-    /// Draining here would reduce payloads the snapshot path is about to look
-    /// at, costing a full refresh cycle of latency for whatever it swallowed.
-    ///
-    /// The user asking for a re-check is one of the two moments registration
-    /// health can change without this app having caused it, so the cached
-    /// reading is dropped here. The other is the file changing underneath us,
-    /// which the registrar watches for itself.
-    /// One answer, on the connection its request is still being held on.
-    ///
-    /// A pass-through, and deliberately nothing more: which bytes a product
-    /// will act on is its vocabulary's business (``RequestAnswering``), and
-    /// which connection they go down is the registry's. This is the boundary
-    /// the store reaches both through.
+    /// One answer, on the connection its request is still held on. A pass-through: the bytes are
+    /// ``RequestAnswering``'s business, the connection the registry's.
     func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> AnswerOutcome {
         await hooks.answer(answer, on: handle)
     }
 
-    /// Nothing: the quota arrives over the App Server and leaves no files
-    /// anywhere.
+    /// Nothing: the quota arrives over the App Server.
     func diskFootprint() async -> AgentDiskFootprintReport { .leavesNothing }
 
     func setupStatus() async -> IntegrationSetupStatus {
@@ -974,10 +626,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
 
     func installIntegration() async throws {
         try await hooks.install()
-        // The support directory exists now. On a first run the socket could not
-        // bind at launch because there was nowhere to bind it; this is the
-        // moment it becomes possible, and doing it here is what keeps the first
-        // turn after setup from waiting out a refresh deadline.
+        // On a first run the socket could not bind at launch; binding now keeps the first turn from
+        // waiting out a refresh deadline.
         await hooks.prepareTransport()
     }
 
@@ -992,10 +642,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         UInt64(max(0, seconds) * 1_000_000_000)
     }
 
-    /// Tells the store that background work changed what a snapshot would say.
-    ///
-    /// Every background read must end in this, or its result sits in the actor
-    /// until some unrelated deadline happens to fire.
+    /// Every background read must end in this, or its result waits for an unrelated deadline.
     nonisolated private func invalidatePublishedSnapshot() {
         snapshotInvalidations.yield(())
     }
@@ -1008,39 +655,20 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         approvalRouting: DesktopApprovalRoutingSnapshot,
         dismissedRowIDs: Set<String>
     ) async -> [MonitoredSession] {
-        // Only the rows built are handed to the gate, not every Hook state. A
-        // state whose thread turns out to be a sub-agent stops producing a
-        // session at all, and keying on states kept its gate entry alive,
-        // frozen mid-window, reporting a deadline that could never be cleared
-        // because nothing evaluated it again.
+        // Only built rows go to the gate: keying on states left a sub-agent's entry frozen with a
+        // deadline nothing could clear.
         var candidates: [ReadGateCandidate] = []
-        // Every Turn this pass walked, whether or not it produced a row: the
-        // pin is retained on what the reducer still holds, not on what the
-        // panel happens to draw.
+        // Every Turn walked, row or not: the pin is retained on what the reducer holds.
         var observedTurns: Set<TurnApprovalRoutingPin.TurnIdentity> = []
 
-        // The reviewer readings first, and all of them, so the loop below --
-        // which mutates the pin and the two gates -- has nothing to await in
-        // the middle of it. Asked for every Turn rather than only for the ones
-        // sitting on an approval, because the question is what this Turn
-        // *started* under and a Turn that has reached Approval needed is
-        // already too late to ask it.
+        // Reviewer readings first, for every Turn, so the loop below has no await mid-mutation.
         for state in states {
             let turn = TurnApprovalRoutingPin.TurnIdentity(
                 threadID: state.threadID,
                 turnID: state.turnID
             )
-            // The rollout's own path, as the App Server reports it. A thread
-            // this app has not been handed yet is one it draws no row for
-            // either, so there is nothing to be early for -- and the reading is
-            // simply made on the refresh that does have the path.
-            //
-            // **When the path was reported goes in with it.** The path is not
-            // a fixed property of the thread: resuming an interrupted Turn
-            // rotates the rollout, so a record read a metadata interval ago
-            // can name the file the *previous* Turn was written to. The pin
-            // uses the stamp to tell a Turn whose record is genuinely absent
-            // from a Turn that was looked for in the wrong file.
+            // The path's stamp goes in too: resuming a Turn rotates the rollout, and the pin uses it
+            // to tell an absent record from one read in the wrong file.
             guard let record = threadRecords[state.threadID],
                   let rolloutPath = record.thread?["path"]?.stringValue else {
                 continue
@@ -1069,29 +697,19 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 turnID: state.turnID
             )
             observedTurns.insert(turn)
-            // Whatever the rollout said, if it said anything. The map answers
-            // for the Turns it could not -- and only where it was written late
-            // enough to be describing them, which is why the Turn's own start
-            // goes in with it.
+            // The map answers for Turns the rollout could not, only if written after the Turn started.
             let approvalsReachTheUser = approvalRoutingPin.approvalsReachTheUser(
                 forTurn: turn,
                 startedAt: state.startedAt,
                 in: approvalRouting
             )
-            // Pinned to the turn it was read for. A record left over from
-            // the turn before this one describes work that has already
-            // finished, and the row must not present it as what is happening
-            // now.
+            // Pinned to the turn it was read for: a previous turn's record describes finished work.
             let liveProgress = turnProgressByThreadID[state.threadID]
                 .flatMap { $0.turnID == state.turnID ? $0.text : nil }
-            // Status is the reducer's alone: an independent App Server reports
-            // every thread as `notLoaded` even while a turn is running, so it
-            // has no runtime evidence to correct with. The thread record is
-            // what says the row may exist at all -- "not asked yet", "asked,
-            // and Codex has no such thread" and "Codex says it is writing this
-            // thread down nowhere, so it was never asked" all arrive here as no
-            // payload, and none of the three is grounds for a row (see
-            // ``CodexSnapshotParser/session(from:thread:projectName:approvalsReachTheUser:liveProgress:)``).
+            // Status is the reducer's alone: an independent App Server reports every
+            // thread `notLoaded` even mid-turn. A missing thread record (not asked,
+            // refused, or no transcript) means no row; see
+            // ``CodexSnapshotParser/session(from:thread:projectName:approvalsReachTheUser:liveProgress:)``.
             guard let session = CodexSnapshotParser.session(
                 from: state,
                 thread: threadRecords[state.threadID].flatMap(\.thread),
@@ -1103,11 +721,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             ) else {
                 continue
             }
-            // The Turn's own terminal goes in beside the thread's boundary and
-            // the two must not be collapsed back into one. The window is about
-            // how long this thread has been quiet; the blue dot is about a
-            // Turn's answer, and that answer was there to be read from the
-            // moment the Turn ended.
+            // Do not collapse these: the window measures thread quiet, the blue dot a Turn's answer.
             candidates.append(
                 ReadGateCandidate(
                     row: session,
@@ -1118,11 +732,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         }
 
         approvalRoutingPin.retain(turns: observedTurns)
-        // Every row this product can draw is judged against Desktop's own
-        // unread set; there is no row here nothing can speak for. A row the
-        // user has taken off the list is still reported and judged by nobody,
-        // and a finished row whose thread is still working takes the running
-        // path -- both the filter's rules, shared with every product.
+        // Every row is judged against Desktop's own unread set.
         return terminalUnreadMembershipGate.rows(
             candidates,
             dismissedRowIDs: dismissedRowIDs,
@@ -1130,8 +740,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         ) { _ in .judged(by: unreadState) }
     }
 
-    /// Which threads Codex vouches for (ADR 0017): the membership sweep's set,
-    /// as of the moment that sweep started, once one has answered.
+    /// Threads Codex vouches for (ADR 0017): the membership sweep's set as of that sweep's start.
     private var threadAdmission: ThreadAdmission {
         guard let threadListReadAt else { return .unknown }
         return .exactly(listedThreadIDs, readAt: threadListReadAt)
@@ -1143,11 +752,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             >= timing.threadListRefreshInterval
     }
 
-    /// Records that membership needs re-reading, and starts a read if idle.
-    ///
-    /// The request is recorded before the backoff is consulted, so an
-    /// invalidation that arrives during a read -- or during its cool-off -- is
-    /// still outstanding afterwards rather than dropped on the floor (CR-003).
+    /// Recorded before the backoff is consulted, so a request mid-read or in cool-off is not
+    /// dropped (CR-003).
     private func scheduleThreadListRefreshIfNeeded() {
         threadListGate.request()
         startThreadListRefreshIfPossible()
@@ -1166,10 +772,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         }
     }
 
-    /// Runs one membership read; returns whether another should follow now.
-    ///
-    /// A failed read leaves its request outstanding and stops here; the retry
-    /// is scheduled by `nextRefreshDeadline` reporting the backoff.
+    /// Returns whether another read should follow now. A failure leaves the request outstanding
+    /// for `nextRefreshDeadline` to retry.
     private func runThreadListRefresh() async -> Bool {
         let succeeded = await refreshThreadListInBackground()
         return threadListGate.endRun(covered: succeeded)
@@ -1179,12 +783,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         threadListRefreshTask = nil
     }
 
-    /// Refreshes thread-level metadata for the threads the Hook reducer tracks.
-    ///
-    /// This is the read that follows Hook activity. `thread/read` returns the
-    /// same `Thread` payload as `thread/list` for a single thread, so it covers
-    /// title, preview, root-thread eligibility and `status.activeFlags` at a
-    /// fraction of the cost of paginating every unarchived thread.
+    /// `thread/read` returns the same `Thread` payload as `thread/list` at a fraction of the cost.
     private func scheduleThreadMetadataRefreshIfNeeded(for states: [HookTurnState]) {
         guard supportsThreadMetadataRead else { return }
 
@@ -1193,31 +792,14 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         var observedThreadIDs: Set<String> = []
         for state in states {
             let threadID = state.threadID
-            // **A thread the product says it is writing down nowhere is never
-            // asked about.** This read is the one a row waits on, and its
-            // answer for such a thread is already known: `thread/read` refuses
-            // it, once per interval for as long as it runs, and the row it
-            // would decide is a row that is not drawn either way. See
-            // ``HookTurnState/threadHasNoTranscript``.
-            //
-            // No record is written in its place. "The product says there is
-            // nothing to ask about" and "asked, and the answer was no" reach
-            // every consumer as the same absence of a Thread -- no row, no
-            // rollout to read -- and leaving the record absent is what keeps
-            // this thread out of `nextRefreshDeadline()`'s metadata staleness,
-            // which measures stamps that only a read can move.
+            // Never asked: `thread/read` refuses it and no row is drawn. No record is written, keeping it
+            // out of `nextRefreshDeadline()`'s metadata staleness.
             guard !state.threadHasNoTranscript else { continue }
             observedThreadIDs.insert(threadID)
-            // A read already out for this thread is going to write the record
-            // the checks below are looking for, stamped when it was issued.
+            // An in-flight read will write the record the checks below look for.
             guard !inFlightMetadataThreadIDs.contains(threadID) else { continue }
-            // **A prompt this thread is holding back counts as its newest
-            // Turn here.** Settling one reads the rollout path this record
-            // carries (``CodexRolloutTurnEvidence``), and the resumed-Turn case
-            // is the very one that moves that path -- so a hold is behind the
-            // record for the same reason a Turn is, and asks again on the same
-            // terms. Without it the path stayed up to an interval behind and
-            // the resumed Turn waited that long to take its row back.
+            // A held prompt counts as the newest Turn: settling it reads this record's rollout path
+            // (``CodexRolloutTurnEvidence``), which a resumed Turn moves.
             let newestTurn: (id: String, startedAt: Date) =
                 if let held = state.heldTurnStart, held.startedAt > state.startedAt {
                     (held.turnID, held.startedAt)
@@ -1229,27 +811,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 metadataReadTurnIDsByThreadID[threadID] = newestTurn.id
                 continue
             }
-            // **A record older than the Turn is a reason to ask again,
-            // whatever the interval says.** The record carries the thread's
-            // rollout path, and that path moves: Codex writes a Turn resumed
-            // after an interrupt into a rollout of its own (measured
-            // 2026-08-31 on thread `01a058c7`, CLI `0.151.0-alpha.7.2` --
-            // interrupted at `…38.039`, new rollout at `…44.592`, the resumed
-            // Turn's own hook at `…46.263`). Held to the interval alone the
-            // path stayed up to ten seconds behind the Turn -- 6.7 s in that
-            // measurement -- and the reviewer reading
-            // ``TurnApprovalRoutingPin`` makes went to the file the
-            // interrupted Turn was written to, which is what put *Approval
-            // needed* on a row nobody was being asked about.
-            //
-            // **Once per Turn, not once per refresh.** The read is asked for
-            // when the Turn is new to this thread and its path predates it;
-            // whether the answer arrives is then the retry machinery's
-            // business rather than this condition's, which must not go on
-            // re-asking on a clock that has not caught up with the Turn's own
-            // stamp. One extra `thread/read` per Turn buys the row its own
-            // rollout, and it is the same read the title and preview already
-            // come from.
+            // A record older than the Turn is re-read regardless of interval: a resumed Turn gets its
+            // own rollout (measured 2026-08-31, CLI `0.151.0-alpha.7.2`), and a stale path sent
+            // ``TurnApprovalRoutingPin`` to the old file. Once per Turn; retries are the gate's job.
             let isFirstLookAtThisTurn =
                 metadataReadTurnIDsByThreadID[threadID] != newestTurn.id
             let isBehindTheTurn = isFirstLookAtThisTurn
@@ -1263,15 +827,13 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 staleThreadIDs.insert(threadID)
             }
         }
-        // Held to the threads the reducer still tracks, like every other table
-        // keyed on one.
+        // Held to the threads the reducer still tracks.
         metadataReadTurnIDsByThreadID = metadataReadTurnIDsByThreadID.filter {
             observedThreadIDs.contains($0.key)
         }
         guard !staleThreadIDs.isEmpty else { return }
 
-        // Accumulated rather than replaced: threads that went stale while a
-        // read was in flight belong to the next read, not to nobody.
+        // Accumulated: threads that went stale mid-read belong to the next read.
         pendingMetadataThreadIDs.formUnion(staleThreadIDs)
         threadMetadataGate.request()
         startThreadMetadataRefreshIfPossible()
@@ -1294,11 +856,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     }
 
     private func runThreadMetadataRefresh() async -> Bool {
-        // Checked at dispatch and not only where the read was queued: the
-        // answer that this build has no `thread/read` arrives mid-run, and
-        // whatever the loop had queued behind it must not go out anyway. The
-        // request is settled rather than left pending -- there is no later
-        // moment at which this build grows the method.
+        // Checked at dispatch: the "no `thread/read`" answer arrives mid-run. The request is settled,
+        // since this build never grows the method.
         guard supportsThreadMetadataRead else {
             pendingMetadataThreadIDs.removeAll()
             _ = threadMetadataGate.endRun(covered: true)
@@ -1318,7 +877,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         )
         inFlightMetadataThreadIDs.removeAll()
         if !succeeded {
-            // Put them back so the retry has something to read.
             pendingMetadataThreadIDs.formUnion(threadIDs)
         }
         return threadMetadataGate.endRun(covered: succeeded)
@@ -1330,31 +888,14 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
 
     // MARK: - Live progress
 
-    /// How many of a turn's newest items one progress read asks for.
-    ///
-    /// A window, and a small one on purpose. Every item in the page is decoded,
-    /// and a `commandExecution` item carries its own `aggregatedOutput` --
-    /// measured over the 381 command items in this machine's rollouts, the
-    /// largest is 290 KB, so the page size is also the multiplier on the worst
-    /// case. Six is enough to see past the reasoning and command items Codex
-    /// interleaves between two things it says (measured against
-    /// 0.149.0-alpha.4.3: at most four such items separated two consecutive
-    /// `agentMessage`s across three instrumented turns), and a message that
-    /// does fall out of the window is not lost -- ``TurnProgress/text`` keeps
-    /// the last one that was seen.
+    /// Kept small: a `commandExecution` item carries `aggregatedOutput` (up to 290 KB measured).
+    /// At most four items separated two `agentMessage`s (0.149.0-alpha.4.3).
     private static let turnProgressItemLimit = 6
 
-    /// Records which unfinished turns need their progress re-read.
-    ///
-    /// Keyed on the turn's own `lastEventAt` rather than on a clock interval:
-    /// this read has nothing to say until the turn does something, and the
-    /// events that move that stamp are the same ones the reducer wakes the
-    /// refresh for. So a turn sitting on a ten-minute command is read once and
-    /// then left alone, and a turn calling tools in a burst is read once per
-    /// call rather than once per second.
+    /// Keyed on `lastEventAt`, not an interval: a long command is read once, a tool burst once
+    /// per call.
     private func scheduleTurnProgressRefreshIfNeeded(for states: [HookTurnState]) {
-        // Whatever the reducer still holds, finished or not: the pruning below
-        // is against the threads that exist, not against the ones being read.
+        // Pruned against threads that exist, finished or not.
         let liveThreadIDs = Set(states.map(\.threadID))
         turnProgressByThreadID = turnProgressByThreadID.filter {
             liveThreadIDs.contains($0.key)
@@ -1368,15 +909,10 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         threadsWithoutItemsRead.formIntersection(liveThreadIDs)
 
         for state in states {
-            // A finished turn already has its own last word, carried by the
-            // `Stop` that ended it. Asking the App Server for it again would
-            // be a request for something this process was handed.
+            // A finished turn's last word came with its `Stop`.
             guard state.status != .completed else { continue }
-            // A thread that has already refused is not asked twice.
             guard !threadsWithoutItemsRead.contains(state.threadID) else { continue }
-            // Neither is one the App Server has said it does not have, nor one
-            // the product says it is writing down nowhere. This read fetches
-            // the third line of a row that is not being drawn.
+            // Skip a thread the App Server lacks or with no transcript: its row is not drawn.
             if let record = threadRecords[state.threadID], !record.isAddressable {
                 continue
             }
@@ -1386,15 +922,12 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                held?.readAtEventStamp == state.lastEventAt {
                 continue
             }
-            // Nor is a question already out there waiting for its answer.
             if let inFlight = inFlightProgressReads[state.threadID],
                inFlight.turnID == state.turnID,
                inFlight.eventStamp == state.lastEventAt {
                 continue
             }
-            // Replaced rather than accumulated, unlike the metadata read: a
-            // second request for the same thread is the same question asked
-            // about a later moment, and only the later answer is wanted.
+            // Replaced, unlike the metadata read: only the later answer is wanted.
             pendingProgressReads[state.threadID] = TurnProgressRequest(
                 turnID: state.turnID,
                 eventStamp: state.lastEventAt
@@ -1420,10 +953,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     }
 
     private func runTurnProgressRefresh() async -> Bool {
-        // Filtered here and not only where it was queued: a thread that refused
-        // while its own read was in flight had already had the next question
-        // queued behind it, and "a thread that has already refused is not asked
-        // twice" is a fact about the moment the read goes out.
+        // Filtered at dispatch: a thread may have refused while its own read was in flight.
         let requests = pendingProgressReads.filter {
             !threadsWithoutItemsRead.contains($0.key)
         }
@@ -1437,7 +967,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         let succeeded = await refreshTurnProgressInBackground(requests: requests)
         inFlightProgressReads.removeAll()
         if !succeeded {
-            // Put back only what a later request has not already superseded.
             for (threadID, request) in requests where pendingProgressReads[threadID] == nil {
                 pendingProgressReads[threadID] = request
             }
@@ -1449,11 +978,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         turnProgressRefreshTask = nil
     }
 
-    /// Reads the newest thing each of these turns has said.
-    ///
-    /// Returns whether the read covered them, on the same terms as the metadata
-    /// read beside it: one unreadable turn is a line of text missing from one
-    /// row, and every other fact about that row comes from somewhere else.
+    /// Returns whether the read covered these turns.
     @discardableResult
     private func refreshTurnProgressInBackground(
         requests: [String: TurnProgressRequest]
@@ -1469,11 +994,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                     method: "thread/items/list",
                     params: .object([
                         "threadId": .string(threadID),
-                        // Scoped to the turn the reducer owns, and never
-                        // widened to the thread. Without it a turn that has not
-                        // said anything yet answers with the *previous* turn's
-                        // closing words, which is the row confidently
-                        // describing work that is over.
+                        // Scoped to the turn: otherwise a silent turn answers with
+                        // the previous turn's closing words.
                         "turnId": .string(request.turnID),
                         "sortDirection": .string("desc"),
                         "limit": .number(Double(Self.turnProgressItemLimit))
@@ -1484,7 +1006,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 let text = CodexSnapshotParser.newestAgentMessage(in: response)
                 if var held = turnProgressByThreadID[threadID],
                    held.turnID == request.turnID {
-                    // A window that found nothing keeps what the last one saw.
                     if let text {
                         held.text = text
                     }
@@ -1499,15 +1020,10 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 }
             } catch let error as CodexAppServerError {
                 if error.isUnsupportedMethod {
-                    // Two different absences arrive as the same code, and both
-                    // are expected answers rather than faults: a thread whose
-                    // `historyMode` is `legacy` (`thread/items/list is not
-                    // supported yet`), and a Codex without this experimental
-                    // method at all. Recorded against the thread either way --
-                    // see ``threadsWithoutItemsRead`` for why the difference is
-                    // not worth reading out of the message text. This row falls
-                    // back to the prompt preview, which is what every Codex row
-                    // showed before this read existed.
+                    // Same code for a `legacy` `historyMode` thread and a Codex
+                    // without this experimental method; both are recorded (see
+                    // ``threadsWithoutItemsRead``). The row falls back to the
+                    // prompt preview.
                     threadsWithoutItemsRead.insert(threadID)
                     turnProgressByThreadID.removeValue(forKey: threadID)
                     didReadAnyTurn = true
@@ -1530,10 +1046,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         return didReadAnyTurn
     }
 
-    /// Reads metadata for `threadIDs`; returns whether the read covered them.
-    ///
-    /// The task handle and the loop belong to the caller now, so this reports
-    /// its outcome instead of clearing state the gate owns.
+    /// Returns whether the read covered `threadIDs`; the gate owns the state.
     @discardableResult
     private func refreshThreadMetadataInBackground(
         threadIDs: Set<String>
@@ -1550,10 +1063,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                     method: "thread/read",
                     params: .object([
                         "threadId": .string(threadID),
-                        // Turn history is never requested. `includeTurns` would
-                        // return the thread's entire rollout — hundreds of KB
-                        // for a long thread — and every Turn-level fact this
-                        // product needs already comes from the Hook reducer.
+                        // `includeTurns` would return the whole rollout (hundreds
+                        // of KB); the Hook reducer has the Turn facts.
                         "includeTurns": .bool(false)
                     ]),
                     timeoutNanoseconds: nanoseconds(timing.threadMetadataTimeout)
@@ -1566,8 +1077,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 )
             } catch let error as CodexAppServerError {
                 if error.isUnsupportedMethod {
-                    // Older Codex builds fall back to whole-list metadata.
-                    // Nothing more to ask for, so the request is settled.
+                    // Older builds fall back to whole-list metadata; the request
+                    // is settled.
                     supportsThreadMetadataRead = false
                     return true
                 }
@@ -1575,28 +1086,16 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                     await client.disconnect()
                     return false
                 }
-                // Every other remote error is the App Server *answering* about
-                // this thread: it took the request and rejected it. Recording
-                // the refusal is what makes it worth something -- an ephemeral
-                // thread refuses forever, and without a record this read is
-                // reissued on every refresh and the membership sweep is
-                // requested alongside it. It is deliberately not read for its
-                // wording or its code: whatever the reason, a thread the App
-                // Server will not hand over is one this app cannot address.
-                //
-                // The distinction that matters is against the errors above and
-                // below -- a reset transport and a timeout answered nothing, so
-                // they leave no record and the next refresh asks again.
+                // Any other remote error is a refusal about this thread, recorded whatever
+                // its wording: an ephemeral thread refuses forever and would otherwise be
+                // reissued every refresh. A reset transport or timeout leaves no record.
                 if case .remote = error {
                     threadRecords[threadID] = ThreadRecord(
                         thread: nil,
                         observedAt: startedAt
                     )
-                    // And it counts as a read, so a batch of nothing but
-                    // refusals does not park every later metadata read behind
-                    // a request-failure cool-off. A row now waits on this read,
-                    // so a side chat must not be able to delay a real thread's
-                    // row by a minute.
+                    // Counts as a read, so a batch of refusals (a side chat)
+                    // does not park later reads behind a request-failure cool-off.
                     didReadAnyThread = true
                 }
                 continue
@@ -1612,7 +1111,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         return didReadAnyThread
     }
 
-    /// Reads membership; returns whether the read succeeded.
     @discardableResult
     private func refreshThreadListInBackground() async -> Bool {
         defer { invalidatePublishedSnapshot() }
@@ -1661,18 +1159,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         return MonitorDiagnostics.combined(metadata.diagnostic, unresolvedDiagnostic)
     }
 
-    /// Keeps the last trusted *observation* while a request is transiently
-    /// failing -- and only that.
-    ///
-    /// Presence and registration health are not part of what failed. Both were
-    /// measured by this same refresh: presence from the running-application
-    /// list, which is kernel truth and cannot time out, and setup from the
-    /// registrar, which never asked the App Server anything. So both are
-    /// passed in and used rather than inherited from the kept snapshot or left
-    /// to the initialiser's defaults -- which claim `.open` and `.active`, and
-    /// would have this branch draw a Connected mark for a Codex Desktop the
-    /// user can see is not running (PRD §6.3, §12), and report a healthy
-    /// integration over a `reviewRequired` the Settings row exists to surface.
+    /// Keeps the last trusted observation while a request is transiently failing. Presence and
+    /// setup are passed in: the initialiser's `.open`/`.active` defaults would draw Connected for
+    /// a closed Desktop (PRD §6.3, §12).
     private func snapshotPreservingTrustedState(
         after error: CodexAppServerError,
         setupStatus: IntegrationSetupStatus,
@@ -1704,25 +1193,12 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         )
     }
 
-    /// One page of `thread/list`, asked for only to see it answered.
+    /// One page of `thread/list`, asked for only to see it answered, so an unsupported Codex
+    /// reports `unsupportedVersion` rather than an empty Ready.
     ///
-    /// This is what the no-hook branch needs and the whole of it: a real read,
-    /// on the same method and the same parameter shape the membership sweep
-    /// uses, so a Codex that does not support it fails here exactly as it would
-    /// there and the branch can report `unsupportedVersion` rather than an
-    /// empty Ready. One row is enough to be answered; the rows themselves are
-    /// discarded unread.
-    ///
-    /// Nothing it learns is written into the membership caches. A first page is
-    /// not the membership set, and a truncated `listedThreadIDs` stamped with a
-    /// current `threadListReadAt` would make the next live-Hook refresh retire
-    /// every Turn whose thread did not happen to be on it.
-    ///
-    /// The freshness window is a ceiling, not a cadence: `nextRefreshDeadline()`
-    /// never wakes for it, so the confirmation is bought only when a refresh
-    /// was going to happen anyway. Its consumer is the collapsed mark --
-    /// Connected against Disconnected -- which is what separates it from the
-    /// membership set, whose consumers are all in the live-Hook branch.
+    /// Nothing is written into the membership caches: a truncated `listedThreadIDs` with a current
+    /// `threadListReadAt` would retire every Turn not on the first page. The freshness window is a
+    /// ceiling, not a cadence: `nextRefreshDeadline()` never wakes for it.
     private func confirmAppServerAnswersReads(
         timeoutNanoseconds: UInt64
     ) async throws {
@@ -1741,13 +1217,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         threadListAnsweredAt = startedAt
     }
 
-    /// One page's worth of `thread/list` parameters.
-    ///
-    /// Shared by the membership sweep and the bounded confirmation so the two
-    /// present the same request to the server and differ only in how much they
-    /// ask for. A confirmation that narrowed the shape as well as the size
-    /// could be answered by a build whose real `thread/list` this app cannot
-    /// use.
+    /// Shared by the membership sweep and the confirmation so both send the same request shape and
+    /// differ only in size.
     nonisolated private func threadListParameters(
         limit: Int,
         cursor: String? = nil
@@ -1770,18 +1241,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         return .object(params)
     }
 
-    /// Drops the reads only a live Hook observation can consume or clear.
-    ///
-    /// Called from the branch that has no such observation. Membership and
-    /// per-thread metadata are both scheduled from the live-Hook branch alone,
-    /// so a request left outstanding here has nobody to run it and a backoff
-    /// marker left behind it has nobody to clear it -- and
-    /// `nextRefreshDeadline()` publishes a parked request's marker as a wake-up.
-    ///
-    /// Only the pending work is dropped, not what it had already read: the
-    /// cached thread metadata is still the best answer there is about those
-    /// threads, and the next Hook to name one is entitled to draw a title
-    /// immediately rather than after a round trip.
+    /// Drops the reads only a live Hook observation can consume or clear: left here, a request has
+    /// nobody to run it and `nextRefreshDeadline()` publishes its backoff marker as a wake-up.
+    /// Cached thread metadata is kept.
     private func stopThreadReadsWithNoConsumer() {
         threadListRefreshTask?.cancel()
         threadListRefreshTask = nil
@@ -1801,10 +1263,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         inFlightProgressReads.removeAll()
     }
 
-    /// The rollout this thread is written to, as the App Server reports it.
-    ///
-    /// The only source for it. A thread this app has not been handed yet draws
-    /// no row either, so there is nothing to be early for.
+    /// The rollout this thread is written to; the App Server is the only source.
     private func rolloutPath(ofThread threadID: String) -> String? {
         guard let path = threadRecords[threadID]?.thread?["path"]?.stringValue,
               !path.isEmpty else {
@@ -1813,8 +1272,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         return path
     }
 
-    /// The rollout of every thread these Turns are on that the App Server has
-    /// reported one for.
     private func rolloutPaths(ofThreadsIn hookState: HookStateSnapshot) -> [String: String] {
         var paths: [String: String] = [:]
         for turn in hookState.turns {
@@ -1823,12 +1280,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         return paths
     }
 
-    /// Reads every unarchived thread.
-    ///
-    /// This is the transport's most expensive call, so it exists for exactly one
-    /// job the cheap per-thread read cannot do: establishing which threads still
-    /// exist. It also refreshes `threadRecords` in bulk, which keeps the whole
-    /// pipeline working on builds without `thread/read`.
+    /// Reads every unarchived thread: the most expensive call, used only to establish which threads
+    /// still exist (and for `threadRecords` on builds without `thread/read`).
     private func readAllUnarchivedThreads(
         forceRefresh: Bool,
         timeoutNanoseconds: UInt64
@@ -1861,13 +1314,11 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             cursor = page["nextCursor"]?.stringValue
         } while cursor != nil
 
-        // Use the request start, not completion, as the freshness boundary.
-        // A Hook can arrive while a slow paginated list is still in flight.
+        // Request start is the freshness boundary: a Hook can arrive mid-pagination.
         let listedIDs = Set(threads.compactMap { $0["id"]?.stringValue })
         for thread in threads {
             guard let threadID = thread["id"]?.stringValue else { continue }
-            // A newer single-thread read must not be overwritten by an older
-            // list that happened to finish after it.
+            // A newer single-thread read must not be overwritten by an older list.
             if let existing = threadRecords[threadID],
                existing.observedAt > snapshotStartedAt {
                 continue
@@ -1879,33 +1330,21 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         }
         threadRecords = threadRecords.filter { threadID, record in
             if listedIDs.contains(threadID) { return true }
-            // A refusal survives the sweep that could never have carried it.
-            // Dropping it here would restore exactly the loop it exists to
-            // stop: the thread goes back to "not asked yet", the next refresh
-            // asks again and requests another full pagination alongside. It is
-            // kept only while a Turn still names the thread, so the set cannot
-            // outgrow what the reducer holds.
+            // A refusal survives the sweep, or the thread is re-asked with a full pagination every
+            // refresh. Kept only while a Turn names the thread.
             return !record.isAddressable
                 && hookTrackedThreadIDs.contains(threadID)
         }
         listedThreadIDs = listedIDs
         threadListReadAt = snapshotStartedAt
-        // The sweep answers the transport's question too, so a Desktop that
-        // quits just after one does not pay for a confirmation of what was
-        // confirmed a moment ago.
+        // The sweep also confirms the transport answers reads.
         threadListAnsweredAt = snapshotStartedAt
         return threads
     }
 
-    /// Drops the Hook evidence held for a Desktop process that is not the one
-    /// running now, along with the reads that were following it.
-    ///
-    /// The binding goes with the Turns: nothing is left that a later pid could
-    /// be matched against, so the next process starts from an empty reducer and
-    /// binds itself with its own first event. `hookTrackedThreadIDs` goes too
-    /// -- it is what `nextRefreshDeadline()` measures per-thread metadata
-    /// staleness over, and threads whose Turn has been retired must stop asking
-    /// to be re-read.
+    /// Drops the Hook evidence held for a Desktop process that is no longer running, with its
+    /// reads. The next process binds with its own first event; `hookTrackedThreadIDs` goes too so
+    /// retired threads stop asking to be re-read.
     @discardableResult
     private func retireHookTurns(
         didConsumeEvents: Bool = false
@@ -1941,20 +1380,10 @@ enum CodexSnapshotParser {
         .joined(separator: "|")
     }
 
-    /// Both of the account's rate-limit windows, in the order the App Server
-    /// reports them.
-    ///
-    /// `secondary` is null for most accounts and was never read; where it is
-    /// present it is a second window of the same limit, and a window is a line
-    /// (`quota-footer-v2.md` §5). `primary` stays first, so every surface that
-    /// draws one rule — ``QuotaSnapshot/remainingPercent`` and
-    /// ``QuotaSnapshot/resetsAt`` both read `windows.first` — reads exactly what
-    /// it read before.
-    ///
-    /// The per-limit map under `rateLimitsByLimitId` is **not** read. It
-    /// repeats the account's own limit under the id `codex` and adds one entry
-    /// per model-specific cap, and which of those actually binds a given
-    /// request is not something this response says.
+    /// Both of the account's rate-limit windows, `primary` first, so ``QuotaSnapshot/remainingPercent``
+    /// and ``QuotaSnapshot/resetsAt`` still read it (`quota-footer-v2.md` §5). `secondary` is null
+    /// for most accounts. `rateLimitsByLimitId` is not read: the response does not say which
+    /// model-specific cap binds.
     nonisolated static func quota(from response: JSONValue) -> QuotaSnapshot {
         guard let limits = response["rateLimits"] else { return .unavailable }
 
@@ -1965,7 +1394,7 @@ enum CodexSnapshotParser {
             }
             return QuotaWindow(
                 label: windowLabel(minutes: window["windowDurationMins"]?.intValue),
-                // Reported as used; the rule draws what is left.
+                // Reported as used.
                 remainingPercent: 100 - usedPercent,
                 resetsAt: window["resetsAt"]?.doubleValue.map {
                     Date(timeIntervalSince1970: $0)
@@ -1976,15 +1405,9 @@ enum CodexSnapshotParser {
         return QuotaSnapshot(windows: windows)
     }
 
-    /// What Codex calls a window, from the only thing it publishes about one.
-    ///
-    /// `account/rateLimits/read` names the *limit* — and `limitName` is null
-    /// for the account's own — while it gives every window a duration in
-    /// minutes. So the name is the duration, in the product's own terms: `300`
-    /// is the 5-hour limit and `10080` the weekly one, which is how Codex
-    /// presents them to the same account. Anything else is written out from the
-    /// minutes rather than guessed at, and a window reporting no duration keeps
-    /// the empty label the single unlabelled rule always had.
+    /// A window's label from its duration, the only thing Codex publishes about one: `300` is the
+    /// 5-hour limit, `10080` the weekly one; others are written out from the minutes, and no
+    /// duration keeps the empty label.
     nonisolated static func windowLabel(minutes: Int?) -> String {
         switch minutes {
         case 300: "5h limit"
@@ -2041,60 +1464,23 @@ enum CodexSnapshotParser {
         guard thread["agentRole"]?.stringValue == nil else { return false }
         guard thread["agentNickname"]?.stringValue == nil else { return false }
 
-        // `threadSource == user` is the public root-thread discriminator in the
-        // current schema. A missing value is tolerated because older versions do
-        // not populate it in thread/list; thread/read normally supplies it.
+        // `threadSource == user` is the root-thread discriminator; older versions omit it in
+        // thread/list, so a missing value is tolerated.
         if let source = thread["threadSource"]?.stringValue {
             return source == "user"
         }
         return true
     }
 
-    // A Thread-only session builder used to live here so a launch could
-    // reconstruct whatever Codex Desktop was already doing. That capability is
-    // out of scope: sessions now only ever originate from a Hook received after
-    // this process started, so there is no caller that builds a session from a
-    // Thread payload alone.
-
-    /// Builds a display row for a Turn the Hook reducer already owns.
+    /// Builds a display row for a Turn the Hook reducer already owns: `thread` decides eligibility
+    /// and supplies title and preview; status and timing come from the reducer.
     ///
-    /// `thread` decides eligibility and supplies title and preview; status and
-    /// timing come from the reducer, because no field of a Thread payload
-    /// carries Turn-level runtime truth for this topology.
-    ///
-    /// **A Turn with no Thread payload gets no row.** Eligibility fails closed
-    /// here rather than open: "the App Server has not handed us this thread" is
-    /// not evidence that it is a navigable root thread, and a row is a promise
-    /// that clicking it goes somewhere. Codex Desktop runs threads it never
-    /// materialises -- the one the user meets is a side chat, and Desktop
-    /// starts others of its own -- and such a thread is absent from
-    /// `thread/list`, refused by `thread/read`, and unreachable by deep link.
-    /// Failing open drew a row for the ones that fire Turn hooks: no Project,
-    /// no way back, and gone again a reconciliation grace later. Nothing is
-    /// lost on a real thread, which is already written to disk before its first
-    /// Hook fires (measured 2026-08-25, CLI `0.149.0-alpha.4.3`: at
-    /// `UserPromptSubmit` the rollout exists and an independent App Server
-    /// reads the thread), so the wait this adds is one local `thread/read`.
-    ///
-    /// **And on the threads it exists to stop, not even that.** Those hooks
-    /// carry `transcript_path: null`, which is the product saying the same
-    /// thing the App Server would, so the read is not issued at all and this
-    /// check answers on an absent Thread as before
-    /// (``HookTurnState/threadHasNoTranscript``).
-    ///
-    /// `approvalsReachTheUser` is the one exception, and it subtracts rather
-    /// than adds: the reducer proves a permission pipeline opened over a call
-    /// that is still open, which on a thread reviewed by Codex itself is not a
-    /// person being asked anything. See
-    /// ``CodexDesktopApprovalRoutingRepository``. It defaults to the answer
-    /// that changes nothing, so a caller with no evidence keeps every state
-    /// the reducer reached.
-    ///
-    /// `liveProgress` is the newest thing this turn has said, read from the App
-    /// Server against this exact turn. It defaults to absent, which is the
-    /// answer that leaves a Running row showing the prompt it started from --
-    /// what every Codex row showed before that read existed, and what one still
-    /// shows on a Codex that cannot answer it.
+    /// - No Thread payload, no row: Desktop runs unmaterialised threads (side chats) that no
+    ///   deep link reaches. A real thread is on disk before its first Hook (measured 2026-08-25,
+    ///   CLI `0.149.0-alpha.4.3`).
+    /// - `approvalsReachTheUser` only subtracts: on a thread Codex reviews itself, an open
+    ///   permission call asks nobody (``CodexDesktopApprovalRoutingRepository``).
+    /// - `liveProgress` is this turn's newest message; absent, a Running row shows its prompt.
     nonisolated static func session(
         from state: HookTurnState,
         thread: JSONValue?,
@@ -2107,66 +1493,25 @@ enum CodexSnapshotParser {
         }
 
         let threadPreview = normalizedPreview(thread["preview"]?.stringValue)
-        // Empty when nothing above answers; ``MonitoredSession/init`` supplies
-        // ``RowContentFallback/title`` for the row.
+        // Empty here; ``MonitoredSession/init`` supplies ``RowContentFallback/title``.
         let title = normalizedTitle(thread["name"]?.stringValue)
             ?? threadPreview
             ?? normalizedPreview(state.promptPreview)
             ?? ""
-        // Only the approval wait is answered elsewhere. `request_user_input`
-        // still asks the person -- the automatic reviewer decides approvals
-        // and nothing else -- so Input needed is left exactly as it was.
+        // Only the approval wait is subtracted: the reviewer never answers `request_user_input`.
         let status = approvalsReachTheUser || state.status != .approvalNeeded
             ? state.status
             : .running
-        // The same subtraction, for the same reason, on the thread's subagents.
-        // A subagent inherits the thread's reviewer: measured 2026-08-23 over
-        // the 119 rollouts on one machine, every one of the 72 subagent
-        // rollouts whose parent was also on disk carried the parent's
-        // `approvals_reviewer` as it stood when the subagent was spawned, with
-        // both values represented. So on a thread Codex reviews itself, a
-        // subagent's `PermissionRequest` is not a person being asked either.
+        // Subagents inherit the thread's `approvals_reviewer` (measured 2026-08-23: all 72 subagent
+        // rollouts with a parent on disk).
         let subagentsAwaitingApprovalCount = approvalsReachTheUser
             ? state.subagentsAwaitingApprovalCount
             : 0
-        // A finished turn's last word is carried by the `Stop` that ended it,
-        // which is the turn's own answer and needs no read. An unfinished one
-        // shows the step it is on, and falls back to the prompt only when
-        // nothing has been read for it yet -- the first seconds of a turn, a
-        // Codex without `thread/items/list`, or a read that failed.
-        //
-        // **The same fallback serves a turn that ended without a `Stop`.** One
-        // the user stopped has no last word, because the event that would have
-        // carried it is the one Codex never sends (ADR 0011,
-        // ``CodexRolloutTurnAbortReader``) -- so it keeps the last thing it was
-        // seen saying, and the prompt behind that, rather than going blank at
-        // the moment it stops. Reached only where `assistantPreview` is absent,
-        // so a turn that did end on a `Stop` is untouched.
-        //
-        // **A question the turn asked without waiting outranks the step it is
-        // on** (2026-09-08). Codex's `request_user_input_async` asks a person
-        // and keeps working, and the CLI's own system prompt tells it to --
-        // "continue useful work that does not depend on the answer while
-        // waiting" -- so the question is overwritten within seconds by whatever
-        // the turn says next, which is how a user came to watch a row report a
-        // SQL rewrite while Codex Desktop held an unanswered question card. Of
-        // everything a *running* turn has said, the sentence addressed to a
-        // person is the one worth the row.
-        //
-        // **A completed turn keeps its own last word**, and this is the
-        // narrower half of the rule on purpose. That word is the turn's answer,
-        // written after the question and knowing what came of it, and where the
-        // question still mattered the model tends to restate it -- measured on
-        // the one async question in this machine's history, whose
-        // `last_assistant_message` was the question again. So here the question
-        // ranks *below* the final answer and above the prompt, which is where
-        // it earns its place: a turn the user stopped has no last word at all
-        // (ADR 0011), and the question is a better answer to "what happened"
-        // than the prompt it started from.
-        //
-        // Neither branch claims anybody is waiting. This app cannot see the
-        // question answered, skipped, snoozed or auto-resolved, so it says only
-        // what the turn said -- see ``HookTurnState/questionAskedWithoutWaiting``.
+        // - Completed: the `Stop`'s last word, then a question asked without waiting, then the prompt.
+        //   A stopped turn has no last word (ADR 0011, ``CodexRolloutTurnAbortReader``).
+        // - Running: a question asked without waiting (`request_user_input_async` keeps working and
+        //   overwrites it within seconds), then the step read, then the prompt.
+        // Neither claims anybody is waiting (``HookTurnState/questionAskedWithoutWaiting``).
         let preview = status == .completed
             ? (normalizedPreview(state.assistantPreview)
                 ?? normalizedPreview(state.questionAskedWithoutWaiting)
@@ -2186,34 +1531,20 @@ enum CodexSnapshotParser {
             startedAt: state.startedAt,
             runningSubagentCount: state.runningSubagentIDs.count,
             subagentsAwaitingApprovalCount: subagentsAwaitingApprovalCount,
-            // How long the turn took, for the row that draws it once the clock
-            // has stopped. `lastEventAt` is the turn's own last moment and is
-            // held there against a subagent's chatter, which is what makes it
-            // an end rather than a moving target.
+            // `lastEventAt` is held against a subagent's chatter, so it is a fixed end.
             finishedAt: status == .completed ? state.lastEventAt : nil,
-            // **The same subtraction the status gets, in the same breath.** A
-            // thread whose approvals an automatic reviewer is handling does not
-            // draw `Approval needed`, and must not offer a request to answer
-            // either -- an `Answer` control over a decision nobody is being
-            // asked to make is the unsafe direction this reading exists to
-            // prevent. `inputNeeded` is the turn's own question and is never
-            // reviewed away, so it keeps its request whatever the reviewer is.
+            // Same subtraction as the status: no `Answer` control over an approval the reviewer handles.
+            // `inputNeeded` is never reviewed away.
             requests: approvalsReachTheUser || status == .inputNeeded
                 ? state.requestsAwaitingAnAnswer
                 : []
         )
     }
 
-    /// The item type Codex files an assistant message under.
     nonisolated static let agentMessageItemType = "agentMessage"
 
-    /// The newest assistant message in one `thread/items/list` page.
-    ///
-    /// The page is requested newest-first, so this is the first match rather
-    /// than the last. Every other item type is skipped rather than described:
-    /// the row reports what the agent *said* it is doing, which is the same
-    /// thing Claude Code's row reports, and a tool name is neither the agent's
-    /// words nor a sentence.
+    /// The newest assistant message in one newest-first `thread/items/list` page. Other item types
+    /// are skipped: the row reports what the agent said, as Claude Code's row does.
     nonisolated static func newestAgentMessage(in response: JSONValue) -> String? {
         guard let entries = response["data"]?.arrayValue else { return nil }
         for entry in entries {

@@ -3,40 +3,25 @@ import Darwin
 import Foundation
 import os
 
-/// Which process is running a session right now — a Claude Code session, or
-/// an Antigravity CLI conversation.
-///
-/// Navigation needs this and the row cannot carry it: ``MonitoredSession``
-/// names a thread and a turn, and such a session's host is a *process*.
-/// It is asked at click time rather than stored on the row, which is also the
-/// re-confirmation the PRD requires before a click: a session that has ended is
-/// no longer listed, so the answer is `nil` and the click fails rather than
-/// raising a window that has nothing to do with the row.
+/// Which process is running a session right now: a Claude Code session or an Antigravity CLI
+/// conversation. Asked at click time as the PRD's re-confirmation: an ended session returns
+/// `nil` and the click fails.
 nonisolated protocol SessionProcessLocating: Sendable {
     func processIdentifier(forThreadID threadID: String) async -> Int32?
 }
 
-/// An application that is already running, and that this app may raise.
 struct HostApplication: Sendable, Equatable {
     let bundleIdentifier: String
-    /// What the sentence after the click calls it — the bundle's own name, so
-    /// a host this app has never heard of still gets named correctly.
+    /// The bundle's own name, so an unknown host is still named correctly.
     let displayName: String
-    /// The ancestor that was found in the chain.
-    ///
-    /// Usually the application process itself. iTerm2 is the exception worth
-    /// naming: with session restoration on, shells are children of an
-    /// `iTermServer` helper that the window server does not know as an
-    /// application at all. The bundle identifier is carried alongside so the
-    /// activation can fall back to it.
+    /// The ancestor found in the chain, usually the application itself. With session restoration,
+    /// iTerm2 shells are children of an `iTermServer` helper the window server does not know as an
+    /// application, so activation can fall back to the bundle identifier.
     let processIdentifier: Int32
 }
 
-/// What is showing a process-hosted session.
 enum ClaudeCodeHost: Sendable, Equatable {
-    /// The session belongs to the Claude Code desktop app.
     case desktop(HostApplication)
-    /// The session was started in a terminal, and this is that terminal.
     case terminal(HostApplication)
 }
 
@@ -44,52 +29,29 @@ nonisolated protocol SessionHostResolving: Sendable {
     func host(ofProcess pid: Int32) async -> ClaudeCodeHost?
 }
 
-/// One application bundle, as far as anything here cares about it.
 struct ApplicationBundle: Sendable, Equatable {
     let identifier: String
     let displayName: String
 }
 
-/// Reads the host off the process tree, which is the only place it is written.
+/// Reads the host off the process tree.
 ///
-/// **Why the tree and not `~/.claude/sessions/<pid>.json`.** That file does
-/// carry `entrypoint`, and it says `claude-desktop` or `cli` exactly as this
-/// walk concludes. It is also a private file with an unpublished schema, and
-/// nothing here needs it: the ancestry is a public kernel fact, reported by
-/// calls this app already uses for the terminal read route. The file stays
-/// useful as corroboration when this ever disagrees, and as nothing else.
-///
-/// **The walk starts at the parent, deliberately.** A desktop-hosted session's
-/// own executable lives inside an application bundle too — measured at
-/// `~/Library/Application Support/Claude/claude-code/<version>/claude.app`,
-/// bundle identifier `com.anthropic.claude-code` — so a scan that included the
-/// session process would find an "application" for every desktop session and
-/// mistake it for the host.
-///
-/// **Claude Desktop wins over position.** The whole chain is searched for it
-/// before the nearest application is taken as a terminal, because the desktop
-/// app reaches the CLI through a helper of its own
-/// (`Claude.app/Contents/Helpers/disclaimer`, measured 2026-08-19) and a future
-/// version could put something else in between.
+/// - Not `~/.claude/sessions/<pid>.json`: its `entrypoint` agrees, but the schema is private.
+/// - The walk starts at the parent: a desktop session's own executable is in a bundle too
+///   (`~/Library/Application Support/Claude/claude-code/<version>/claude.app`,
+///   `com.anthropic.claude-code`).
+/// - Claude Desktop is searched for across the whole chain before the nearest application is
+///   taken as a terminal: it reaches the CLI via `Claude.app/Contents/Helpers/disclaimer`
+///   (measured 2026-08-19).
 struct ProcessAncestryHostResolver: SessionHostResolving {
-    /// How far up to walk before giving up.
-    ///
-    /// A cycle cannot happen in a process tree, but a pid that is reused
-    /// mid-walk can produce one, and a walk with no bound would then never
-    /// return. Real chains measured here are four deep.
+    /// Bounds the walk: a pid reused mid-walk can form a cycle. Real chains are four deep.
     static let maximumDepth = 32
 
     private let parent: @Sendable (Int32) -> Int32?
     private let executablePath: @Sendable (Int32) -> String?
     private let bundle: @Sendable (String) -> ApplicationBundle?
 
-    /// - Parameters:
-    ///   - parent: A process's parent, or nil when it has gone.
-    ///   - executablePath: What a process is running.
-    ///   - bundle: The identity of an application bundle at a path. All three
-    ///     are injected so the walk can be tested against a tree that is
-    ///     written down rather than against whatever this machine happens to be
-    ///     running.
+    /// All three are injected so the walk can be tested against a written-down tree.
     nonisolated init(
         parent: @escaping @Sendable (Int32) -> Int32? = {
             ProcessAncestryHostResolver.systemParent(ofProcess: $0)
@@ -111,8 +73,7 @@ struct ProcessAncestryHostResolver: SessionHostResolving {
         var applications: [HostApplication] = []
         var current = parent(pid)
         var depth = 0
-        // `launchd` is nobody's host, so pid 1 ends the walk rather than
-        // entering it.
+        // `launchd` (pid 1) is nobody's host.
         while let candidate = current, candidate > 1, depth < Self.maximumDepth {
             if let path = executablePath(candidate),
                let bundlePath = Self.enclosingApplicationBundlePath(ofExecutable: path),
@@ -134,22 +95,15 @@ struct ProcessAncestryHostResolver: SessionHostResolving {
         }) {
             return .desktop(Self.outermost(desktop, in: applications))
         }
-        // The nearest application above the session. For a terminal session
-        // that is the emulator; for a session started from an editor's built-in
-        // terminal it is the editor, which is the right thing to raise.
+        // The nearest application above the session: the terminal emulator, or the editor for its
+        // built-in terminal.
         guard let nearest = applications.first else { return nil }
         return .terminal(Self.outermost(nearest, in: applications))
     }
 
-    /// The highest ancestor belonging to the same application.
-    ///
-    /// An application can appear in the chain more than once, and the copy
-    /// nearest the session is the wrong one to name: a desktop-hosted session's
-    /// closest ancestor is `Claude.app/Contents/Helpers/disclaimer` (measured
-    /// 2026-08-19: `claude` -> 46867 disclaimer -> 24014 Claude), and a helper
-    /// is not a process the window server knows as an application. Walking to
-    /// the top of the run finds the application process itself, which is the
-    /// one that can be raised without going through Launch Services.
+    /// The highest ancestor belonging to the same application: the nearest may be a helper the
+    /// window server cannot raise (measured 2026-08-19: `claude` -> 46867 disclaimer -> 24014
+    /// Claude).
     nonisolated static func outermost(
         _ application: HostApplication,
         in applications: [HostApplication]
@@ -158,13 +112,8 @@ struct ProcessAncestryHostResolver: SessionHostResolving {
             ?? application
     }
 
-    /// The outermost `.app` an executable sits inside.
-    ///
-    /// Outermost rather than innermost so a helper is attributed to the
-    /// application that ships it: `Claude.app/Contents/Frameworks/Claude
-    /// Helper.app/...` is Claude Desktop, not a separate application, and
-    /// `Claude.app/Contents/Helpers/disclaimer` is the one that actually
-    /// appears in a desktop-hosted session's ancestry.
+    /// The outermost `.app` an executable sits inside, so a helper
+    /// (`Claude.app/Contents/Helpers/disclaimer`) is attributed to the application that ships it.
     nonisolated static func enclosingApplicationBundlePath(
         ofExecutable path: String
     ) -> String? {
@@ -178,21 +127,14 @@ struct ProcessAncestryHostResolver: SessionHostResolving {
         return nil
     }
 
-    /// A process's parent.
-    ///
-    /// Read by ``ControllingTerminalGestureReader``, which needs the same walk
-    /// to answer whether a session's terminal is the application in front of
-    /// the user. It used to be a second copy of that `sysctl` here.
+    /// A process's parent; shared with ``ControllingTerminalGestureReader``.
     nonisolated static func systemParent(ofProcess pid: Int32) -> Int32? {
         ControllingTerminalGestureReader
             .systemParentProcessIdentifier(forProcessIdentifier: pid)
     }
 
-    /// What a process is running, by absolute path.
-    ///
-    /// `proc_pidpath` rather than `ps -o comm=`: the accounting name `ps`
-    /// prints is truncated and is not always a path, and this walk has to
-    /// recognise an application by the bundle it sits in.
+    /// What a process is running, by absolute path. `proc_pidpath`, not `ps -o comm=`, whose name
+    /// is truncated and not always a path.
     nonisolated static func systemExecutablePath(ofProcess pid: Int32) -> String? {
         guard pid > 0 else { return nil }
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
@@ -212,12 +154,8 @@ struct ProcessAncestryHostResolver: SessionHostResolving {
     }
 }
 
-/// Whether a terminal tab was actually brought to the front.
-///
-/// Two values and not three, because every way of failing leads to the same
-/// place: the host gets raised instead, and the sentence the user reads says
-/// so. A host with no scripting dictionary, a user who refused Automation and
-/// a terminal that has already closed the tab are not distinguished here.
+/// Whether a terminal tab was actually brought to the front. Every failure (no scripting
+/// dictionary, Automation refused, tab closed) degrades the same way: the host is raised.
 enum TerminalTabFocus: Sendable, Equatable {
     case focused
     case unavailable
@@ -231,28 +169,16 @@ protocol TerminalTabFocusing: AnyObject {
     ) async -> TerminalTabFocus
 }
 
-/// Focuses the tab attached to a terminal device, through the terminal's own
-/// public scripting dictionary.
+/// Focuses the tab attached to a terminal device through the terminal's public scripting
+/// dictionary.
 ///
-/// **Which hosts can be asked, and how, lives in ``TerminalHostRegistry``**,
-/// not here: this type owns the consent choreography, the deadline and the
-/// AppleScript execution, and looks the script up by the host's bundle
-/// identifier. A host with no entry takes the documented degrade — the
-/// application is raised and the row says so — and adding one is an entry in
-/// the registry, not a branch in this file.
-///
-/// **The first click on a terminal row never focuses a tab, on purpose.**
-/// Automation consent is asked for in the background and the click degrades
-/// immediately, rather than the click blocking on a human. The alternative —
-/// running the script and letting TCC put its prompt up mid-click — freezes
-/// navigation for as long as the prompt sits unanswered, and the overlay has a
-/// single navigation in flight at a time. The cost is one imprecise click, and
-/// the sentence it produces is true.
-///
-/// **A refusal is final and silent.** Once TCC holds a denial,
-/// `AEDeterminePermissionToAutomateTarget` answers `errAEEventNotPermitted`
-/// without prompting, so nothing is ever asked again and nothing is ever shown
-/// to the user except the ordinary "raised the application" sentence.
+/// - Per-host scripts live in ``TerminalHostRegistry``; a host with no entry degrades to
+///   raising the application.
+/// - The first click never focuses a tab: consent is requested in the background and the click
+///   degrades immediately, since a TCC prompt mid-click would freeze the single in-flight
+///   navigation.
+/// - A refusal is final: `AEDeterminePermissionToAutomateTarget` then answers
+///   `errAEEventNotPermitted` without prompting.
 @MainActor
 final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
     nonisolated private static let log = Logger(
@@ -260,37 +186,24 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
         category: "TerminalTabFocus"
     )
 
-    /// Apple Events block on the application being talked to, so they do not
-    /// belong on a cooperative thread.
+    /// Apple Events block on the target application, so they stay off the cooperative pool.
     nonisolated private static let queue = DispatchQueue(
         label: "com.yinfenglu.Notchline.terminal-focus",
         qos: .userInitiated,
         attributes: .concurrent
     )
 
-    /// How long a scripted host may take before the click gives up on it.
-    ///
-    /// Only reached by a wedged terminal: consent is already granted by the
-    /// time a script runs, so there is no human in this wait.
+    /// How long a scripted host may take before the click gives up; only a wedged terminal hits it.
     private let timeout: TimeInterval
     private let permission: @Sendable (String) -> AutomationPermission
     private let requestConsent: @Sendable (String) -> Void
     private let execute: @Sendable (String) -> Bool
-    /// Schedules the deadline half of the race in ``run``.
-    ///
-    /// Injected only so a test can decide when the deadline falls. Asserting
-    /// that the click comes back early by timing it needs a wall-clock budget,
-    /// and a budget wide enough for a loaded machine is no longer evidence of
-    /// anything -- measured failing twice in ten suite runs on 2026-08-30
-    /// while builds ran alongside, at 2.7 s and 2.9 s against a 2 s budget,
-    /// with the deadline itself working correctly every time.
+    /// Schedules the deadline half of the race in ``run``. Injected so tests control the deadline:
+    /// a wall-clock budget failed 2 in 10 runs under load (measured 2026-08-30).
     private let scheduleDeadline: @Sendable (TimeInterval, @escaping @Sendable () -> Void) -> Void
-    /// The hosts that can be asked to name a pane, and how. The built-in list
-    /// in production; a test hands in its own to prove that a host is an entry
-    /// and nothing else.
+    /// The hosts that can be asked to name a pane; tests hand in their own.
     private let adapters: [TerminalHostAdapter]
-    /// Hosts with a consent request already out, so a second click while the
-    /// prompt is on screen does not stack another one behind it.
+    /// Hosts with a consent request already out, so a second click does not stack another prompt.
     private var asking: Set<String> = []
 
     init(
@@ -344,24 +257,16 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
 
     private func ask(_ bundleIdentifier: String) {
         guard asking.insert(bundleIdentifier).inserted else { return }
-        // Sent here rather than from inside the task below: the request is
-        // already fire-and-forget -- it goes out on a queue and blocks on the
-        // user there -- and deferring it to whenever a task happens to be
-        // scheduled only makes the moment it leaves unobservable.
         requestConsent(bundleIdentifier)
         let timeout = timeout
         Task { [weak self] in
-            // The hold exists to stop a click storm stacking a second prompt
-            // behind the first, and nothing else. Released on a timer rather
-            // than on the answer, because the answer arrives on the queue the
-            // request went out on and TCC will not prompt twice anyway.
+            // Holds back a click storm only; released on a timer because TCC will not prompt twice anyway.
             try? await Task.sleep(for: .seconds(timeout))
             self?.asking.remove(bundleIdentifier)
         }
     }
 
-    /// Races the script against the deadline, so a wedged terminal cannot hold
-    /// the one in-flight navigation open for good.
+    /// Races the script against the deadline so a wedged terminal cannot hold navigation open.
     private func run(_ source: String) async -> Bool {
         let execute = execute
         let scheduleDeadline = scheduleDeadline
@@ -381,8 +286,7 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
         }
     }
 
-    /// The script that names one tab by its terminal device, or nil for a host
-    /// that is not registered and so cannot be asked.
+    /// The script that names one tab by its terminal device, or nil for an unregistered host.
     nonisolated static func script(
         forHost bundleIdentifier: String,
         device: String,
@@ -397,12 +301,8 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
         }
     }
 
-    /// A device path as an AppleScript string.
-    ///
-    /// `devname_r` only ever produces `/dev/ttysNNN`, so nothing here needs
-    /// escaping today. It is escaped anyway: the value reaches this from the
-    /// kernel through two layers, and a script assembled by concatenation is
-    /// the wrong place to rely on a shape holding.
+    /// A device path as an AppleScript string. `devname_r` yields only `/dev/ttysNNN`, but the value
+    /// is escaped anyway because the script is assembled by concatenation.
     nonisolated static func appleScriptLiteral(_ value: String) -> String {
         let escaped = value
             .replacingOccurrences(of: "\\", with: "\\\\")
@@ -415,10 +315,7 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
         var failure: NSDictionary?
         let result = script.executeAndReturnError(&failure)
         if let failure {
-            // Includes a refusal that landed between the permission check and
-            // this call. It degrades like every other failure here: the caller
-            // raises the application instead, and the user is told that is what
-            // happened rather than being shown an error.
+            // Includes a refusal after the permission check; degrades like any failure (host raised).
             let code = failure[NSAppleScript.errorNumber] as? Int ?? 0
             log.error("terminal tab focus rejected: \(code)")
             return false
@@ -443,19 +340,15 @@ final class AppleEventsTerminalTabFocuser: TerminalTabFocusing {
         case OSStatus(errAEEventWouldRequireUserConsent):
             return .undecided
         default:
-            // `errAEEventNotPermitted` and everything else — a host that is not
-            // running, a target that cannot be addressed. All of them mean the
-            // tab cannot be named, and none of them are worth asking again.
+            // `errAEEventNotPermitted` and everything else: the tab cannot be named; do not ask again.
             return .refused
         }
     }
 }
 
-/// Whether this app may drive another application through Apple Events.
 enum AutomationPermission: Sendable, Equatable {
     case granted
-    /// The user has not been asked yet. Asking is what puts the system prompt
-    /// on screen.
+    /// Not asked yet; asking puts the system prompt on screen.
     case undecided
     /// Refused, or unanswerable. Both mean "do not ask again".
     case refused
@@ -477,46 +370,27 @@ private final class FirstAnswer: @unchecked Sendable {
 
 @MainActor
 protocol HostApplicationActivating: AnyObject {
-    /// Raises an application that is already running, taking the user to the
-    /// desktop its windows are on. `false` when there was nothing to raise.
+    /// Raises an already-running application, switching to the desktop its windows are on. `false`
+    /// when there was nothing to raise.
     func activate(_ application: HostApplication) async -> Bool
 }
 
-/// Whether an application has a window on a Space the user can see right now.
+/// Whether an application has a window on a Space the user can see right now; one that does is
+/// raised by activation alone.
 ///
-/// Raising a host asks this first, and asks the window server nothing else: an
-/// application that already has a window in front of the user is brought
-/// forward by activation alone, and one that does not needs the extra step in
-/// ``AppKitHostApplicationActivator``.
-///
-/// **This is a question about placement, not about identity.** It does not
-/// decide which window the click was about, does not read a window title and
-/// does not match a session to a window; the pid is one the process tree
-/// already answered, and so is the yes or no. The PRD's ban on guessing a
-/// navigation target from window geometry is about naming a target, and this
-/// names nothing.
+/// Placement only: it names no target, so it is outside the PRD's ban on guessing a navigation
+/// target from window geometry.
 nonisolated protocol ActiveSpaceOccupancyReporting: Sendable {
     func hasWindowOnActiveSpace(processIdentifier: Int32) -> Bool
 }
 
-/// Reads the answer out of the window server's on-screen window list.
-///
-/// `.optionOnScreenOnly` *is* the question: that list holds the windows on the
-/// Spaces showing right now, so an application whose windows all sit on the
-/// desktop the user left is simply absent from it. `.excludeDesktopElements`
-/// drops the wallpaper, as it does in ``OverlayConcealment``.
-///
-/// Only `kCGWindowOwnerPID`, `kCGWindowLayer` and `kCGWindowAlpha` are read.
-/// None of the three is redacted without Screen Recording permission —
-/// `kCGWindowName` is, and nothing here reads it.
+/// Reads the window server's on-screen list (`.optionOnScreenOnly`, `.excludeDesktopElements`).
+/// Only `kCGWindowOwnerPID`, `kCGWindowLayer` and `kCGWindowAlpha` are read; none is redacted
+/// without Screen Recording permission.
 struct WindowServerOccupancyReporter: ActiveSpaceOccupancyReporting {
     private let windows: @Sendable () -> [[String: Any]]?
 
-    /// - Parameter windows: The on-screen list. Injected for the same reason
-    ///   ``ProcessAncestryHostResolver`` injects its readers: the filtering
-    ///   below is the part with rules in it, and it should be tested against a
-    ///   list that is written down rather than against whatever is on screen
-    ///   while the tests run.
+    /// - Parameter windows: The on-screen list, injected so the filtering can be tested.
     nonisolated init(
         windows: @escaping @Sendable () -> [[String: Any]]? = {
             CGWindowListCopyWindowInfo(
@@ -531,10 +405,7 @@ struct WindowServerOccupancyReporter: ActiveSpaceOccupancyReporting {
     nonisolated func hasWindowOnActiveSpace(processIdentifier: Int32) -> Bool {
         let listed = windows()
 
-        // A list that cannot be read answers "not here", which sends the click
-        // down the route that works either way: being wrong in that direction
-        // costs one hide the user may see, and being wrong in the other
-        // direction is exactly the defect this exists to fix.
+        // An unreadable list answers "not here": the wrong answer that way costs a visible hide.
         return (listed ?? []).contains { entry in
             guard let owner = entry[kCGWindowOwnerPID as String] as? Int32,
                   owner == processIdentifier,
@@ -542,28 +413,18 @@ struct WindowServerOccupancyReporter: ActiveSpaceOccupancyReporting {
                   layer == 0 else {
                 return false
             }
-            // Layer 0 and a visible alpha are what "the user can see it" means
-            // here. A status item is layer 3 — Claude Desktop and Ghostty each
-            // keep one — and a fully transparent window is not something
-            // anybody is looking at. Windows that are closed, minimised or
-            // never ordered in are already absent from an on-screen list.
+            // Layer 0 with visible alpha. Status items (Claude Desktop, Ghostty) are layer 3.
             let alpha = entry[kCGWindowAlpha as String] as? Double ?? 0
             return alpha > 0
         }
     }
 }
 
-/// The part of `NSRunningApplication` that raising a host uses.
-///
-/// It is a protocol so that the sequence below can be tested against an
-/// application that is written down, rather than against whichever applications
-/// this machine happens to be running. `NSRunningApplication` satisfies it as
-/// it stands.
+/// The part of `NSRunningApplication` that raising a host uses; a protocol for tests.
 @MainActor
 protocol RaisableApplication: AnyObject {
     var processIdentifier: Int32 { get }
-    /// Whether the application is hidden — the state ``hide()`` produces and
-    /// coming forward clears.
+    /// Whether the application is hidden: set by ``hide()``, cleared by coming forward.
     var isHidden: Bool { get }
     @discardableResult func hide() -> Bool
     @discardableResult func unhide() -> Bool
@@ -574,30 +435,15 @@ extension NSRunningApplication: RaisableApplication {}
 
 /// This app's own place in the activation order.
 ///
-/// A raise needs it. `NSRunningApplication.activate(options:)` is a *request*,
-/// and the window server declines the one an accessory application makes for a
-/// host it has just hidden — while answering `true` either way. Measured
-/// 2026-08-30 inside the running app, host Ghostty windowed on a desktop that
-/// was not showing: `activate` answered `true`, the host came back from
-/// hidden, and 400 ms later it still had no window on any desktop in view.
-/// `NSWorkspace.openApplication` with `activates = true`, tried straight
-/// afterwards, left it there too. The identical two calls made by a throwaway
-/// process — from a shell and from `launchctl` alike — were honoured every
-/// time, which is what makes this about *who is asking* rather than about the
-/// calls.
-///
-/// It is a protocol so the sequence can be tested without a foreground to take.
+/// An accessory app's `activate(options:)` for a host it just hid is declined while answering
+/// `true` (measured 2026-08-30 with Ghostty on another desktop; `NSWorkspace.openApplication`
+/// failed too). The same calls from a throwaway process worked: it is about who asks.
 @MainActor
 protocol ForegroundClaiming: AnyObject {
-    /// Whether this app holds the foreground right now.
-    ///
-    /// Taking it is not instant, and the raise has to wait for it: an
-    /// activation sent while this app is still on its way to the foreground is
-    /// declined exactly like one sent from the background.
+    /// Whether this app holds the foreground. An activation sent before it arrives is declined.
     var isClaimed: Bool { get }
-    /// Takes the foreground, so the raise that follows is honoured.
     func claim()
-    /// Gives it back up, for a raise that never arrived.
+    /// Gives the foreground back, for a raise that never arrived.
     func relinquish()
 }
 
@@ -606,66 +452,32 @@ final class AppKitForeground: ForegroundClaiming {
     var isClaimed: Bool { NSRunningApplication.current.isActive }
 
     func claim() {
-        // `ignoringOtherApps:` rather than the cooperative `NSApp.activate()`,
-        // for the reason `SettingsWindowPresenter.reveal` gives: the
-        // cooperative call is itself a request this app has measured being
-        // refused. Taking the foreground is what an accessory application is
-        // entitled to do here — it answers a click the user has just made on
-        // this app's own surface, and it holds it only for as long as it takes
-        // the host to take it away.
+        // `ignoringOtherApps:`: the cooperative `NSApp.activate()` has been measured refused (see
+        // `SettingsWindowPresenter.reveal`).
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func relinquish() {
-        // Only reached by a click that failed. Without it the user is left
-        // looking at their own desktop with an application in the foreground
-        // that has no window to show them.
+        // Only after a failed click: otherwise a windowless app keeps the foreground.
         NSApp.deactivate()
     }
 }
 
 /// Raises a host, and changes desktop when the host is on another one.
 ///
-/// **Activation on its own never changes desktop, and that is why this is more
-/// than one line.** Measured 2026-08-22 against an application whose windows
-/// were all on another Space: `NSRunningApplication.activate()`,
-/// `activate(options: .activateAllWindows)`, an `activate` Apple Event and
-/// `NSWorkspace.openApplication` each handed the application the menu bar and
-/// left every window exactly where it was — with the Mission Control preference
-/// "When switching to an application, switch to a Space with open windows for
-/// the application" both unset and on. The user was left looking at their own
-/// desktop with somebody else's menu bar, which is the defect this fixes.
-///
-/// **Accessibility could not stand in for them, so the choice never arose.** An
-/// application's `AXWindows` does not list windows on other Spaces at all
-/// (measured: zero windows for Xcode with three open, and `AXMainWindow`
-/// answering `kAXErrorNoValue`), so there is nothing there to raise. The PRD's
-/// exclusion of Accessibility and GUI automation therefore costs this nothing.
-///
-/// **What does move the user is the application raising its own window**, and
-/// hiding it first is the public way to ask for that: coming back, it orders
-/// its own windows front and the window server follows the front window to its
-/// Space. Measured the same day across three hosts built on very different
-/// stacks — Xcode (AppKit), Ghostty (its own AppKit layer) and Claude Desktop
-/// (Electron) — all three landed the user on the window's desktop.
-///
-/// **What that measurement missed is who was asking.** It was taken from a
-/// throwaway process, and this app is not one: it is an accessory application
-/// whose panel is a `nonactivatingPanel`, so it is never in the foreground, and
-/// the window server declines the activation it sends for a host it has just
-/// hidden. The decline is invisible — `activate` answers `true` regardless, the
-/// host merely comes back from hidden, and the desktop stays where it was. That
-/// is why the raise now takes the foreground first (``ForegroundClaiming``) and
-/// then **checks**, rather than believing the answer it is given.
+/// - Activation alone never changes Space (measured 2026-08-22): `activate()`,
+///   `.activateAllWindows`, an `activate` Apple Event and `NSWorkspace.openApplication` all
+///   only moved the menu bar, whatever the Mission Control setting.
+/// - Accessibility cannot help: `AXWindows` omits windows on other Spaces.
+/// - Hiding then activating makes the app order its own windows front, and the window server
+///   follows to their Space (Xcode, Ghostty, Claude Desktop).
+/// - From this accessory app the window server declines that activation while `activate`
+///   answers `true`, so the raise takes the foreground first (``ForegroundClaiming``) and then
+///   checks the result.
 @MainActor
 final class AppKitHostApplicationActivator: HostApplicationActivating {
-    /// How many times each of the three steps is asked whether it took.
-    ///
-    /// At ``settle``'s default 50 ms that is a second and a half apiece. The
-    /// foreground and the hide answer in a few tens of milliseconds and a raise
-    /// that lands is measured answering inside 300–500 ms, all of them
-    /// returning on the first yes; the ceiling is only there to bound the ones
-    /// that never will.
+    /// How many times each of the three steps is asked whether it took (1.5 s each at ``settle``'s
+    /// 50 ms). A raise that lands answers in 300–500 ms; the ceiling bounds failures.
     static let questionsPerStep = 30
 
     private let occupancy: any ActiveSpaceOccupancyReporting
@@ -675,11 +487,9 @@ final class AppKitHostApplicationActivator: HostApplicationActivating {
 
     /// - Parameters:
     ///   - occupancy: Whether the host is already where the user is looking.
-    ///   - applications: The running applications a host may be raised through,
-    ///     nearest answer first.
+    ///   - applications: Running applications a host may be raised through, nearest first.
     ///   - foreground: This app's own place in the activation order.
-    ///   - settle: One pause between two questions, so a test can ask them
-    ///     without a clock.
+    ///   - settle: One pause between two questions, injectable for tests.
     init(
         occupancy: any ActiveSpaceOccupancyReporting = WindowServerOccupancyReporter(),
         applications: (@MainActor (HostApplication) -> [any RaisableApplication])? = nil,
@@ -699,12 +509,8 @@ final class AppKitHostApplicationActivator: HostApplicationActivating {
         return false
     }
 
-    /// The process the ancestry named, then anything else running the same
-    /// bundle.
-    ///
-    /// The ancestor is not always the application: iTerm2's shells hang off a
-    /// helper process, and the identifier is the only way back to the window
-    /// that can actually be raised.
+    /// The process the ancestry named, then anything else running the same bundle (iTerm2's shells
+    /// hang off a helper process).
     nonisolated static func systemApplications(
         for application: HostApplication
     ) -> [any RaisableApplication] {
@@ -719,46 +525,26 @@ final class AppKitHostApplicationActivator: HostApplicationActivating {
         return ([named].compactMap { $0 } + others)
     }
 
-    /// The foreground, then hide, then activate — and then the window server is
-    /// asked whether any of it worked.
-    ///
-    /// **Nothing here reads `activate`'s answer.** It reports that the request
-    /// went out, never that it was honoured, and this app's requests are
-    /// routinely not: measured 2026-08-30 inside the running app, a host
-    /// windowed on a desktop that was not showing answered `true` and stayed
-    /// exactly where it was. Taking that word for it is what made a click that
-    /// did nothing report itself as a raise.
-    ///
-    /// **The one question the window server does answer honestly** is the same
-    /// one that decided whether to hide: does this pid have a visible window on
-    /// a desktop showing right now. Asking it again afterwards is what
-    /// separates a click that moved the user from one that only moved the menu
-    /// bar.
+    /// Foreground, hide, activate, then ask the window server whether it worked. `activate`'s
+    /// answer is never read: it reported `true` for a raise that did not happen (measured
+    /// 2026-08-30).
     private func raise(_ running: any RaisableApplication) async -> Bool {
-        // A host with a window in front of the user has no desktop to change:
-        // activation alone brings it forward, and hiding it first would make
-        // its windows blink for no reason at all. That path is measured
-        // working from this app as it stands, and is left exactly as it was.
+        // Already on a visible Space: activation alone works, and hiding would blink its windows.
         guard !occupancy.hasWindowOnActiveSpace(
             processIdentifier: running.processIdentifier
         ) else {
             return running.activate(options: [])
         }
 
-        // Everything below is declined without this, and declined just the
-        // same if it is sent before the foreground has actually arrived — so
-        // each step here waits for its own effect to be observable before the
-        // next one is asked for. None of the three reports its own result.
+        // Each step waits for its effect to be observable; a step sent early is declined, and none
+        // reports its own result.
         foreground.claim()
         _ = await holds { [foreground] in foreground.isClaimed }
 
-        // An application the user hid themselves is left hidden: activation
-        // unhides it, and unhiding it is the same thing that carries the Space.
+        // An application the user hid is left hidden; unhiding it is what carries the Space.
         let hidden = !running.isHidden
         if hidden {
-            // The result is deliberately ignored. `hide()` reports whether the
-            // request was sent, and it answered false on every host measured
-            // while `isHidden` went true immediately afterwards.
+            // Result ignored: `hide()` answered false on every host measured while `isHidden` went true.
             running.hide()
             _ = await holds { running.isHidden }
         }
@@ -768,18 +554,13 @@ final class AppKitHostApplicationActivator: HostApplicationActivating {
             occupancy.hasWindowOnActiveSpace(processIdentifier: running.processIdentifier)
         }) { return true }
 
-        // A click that did not land must not also cost the user their window,
-        // or leave an application with nothing to show holding the foreground.
+        // A failed click must not cost the user their window or leave a windowless foreground.
         if hidden { running.unhide() }
         foreground.relinquish()
         return false
     }
 
-    /// Waits for something none of these calls reports: the foreground
-    /// arriving, the host going hidden, the desktop changing.
-    ///
-    /// Stops at the first yes, so a step that lands is not held up by the
-    /// ceiling; only a click that had already failed pays it in full.
+    /// Polls a condition none of these calls reports, stopping at the first yes.
     private func holds(_ condition: @MainActor () -> Bool) async -> Bool {
         for _ in 0..<Self.questionsPerStep {
             if condition() { return true }
@@ -806,20 +587,12 @@ enum ProcessHostNavigationError: LocalizedError, Equatable {
     }
 }
 
-/// Takes a process-hosted row — Claude Code's, Antigravity CLI's — back to
-/// whatever is showing it.
+/// Takes a process-hosted row (Claude Code, Antigravity CLI) back to whatever is showing it.
 ///
-/// **It raises a host; it does not reopen a session.** No supported interface
-/// focuses a Claude Code session that already exists — the official deep links
-/// only ever create a new one — so ADR 0004's exact-navigation gate is a Codex
-/// requirement and this is the declared degrade, not a fallback dressed up as
-/// success. The row draws no mark for the difference; ``NavigationOutcome`` is
-/// where it gets said.
-///
-/// Two hosts, and the process tree is what tells them apart. A desktop-hosted
-/// session gets Claude Desktop raised. A terminal session gets its tab
-/// selected where the terminal publishes enough to name it, and its application
-/// raised where it does not.
+/// Raises a host; it cannot reopen a session, since no supported interface focuses an existing
+/// Claude Code session. ADR 0004's exact-navigation gate is Codex-only; ``NavigationOutcome``
+/// reports the degrade. Desktop sessions raise Claude Desktop; terminal sessions select the tab
+/// where the terminal allows, else raise the application.
 @MainActor
 final class ProcessHostNavigator: AgentNavigating {
     static let desktopDisplayName = "Claude Desktop"
@@ -855,10 +628,7 @@ final class ProcessHostNavigator: AgentNavigating {
             throw ProcessHostNavigationError.sessionGone
         }
         guard let host = await hosts.host(ofProcess: pid) else {
-            // Either the process went away between the two questions, or it has
-            // no application above it at all — a session started by a launch
-            // agent or a script has nothing to raise. Neither is worth
-            // guessing about.
+            // The process went away, or nothing above it is an application (launch agent, script).
             throw ProcessHostNavigationError.hostUnknown
         }
 

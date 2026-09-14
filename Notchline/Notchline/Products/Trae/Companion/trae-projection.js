@@ -77,15 +77,11 @@
       requests.push(request);
     }
     if (new Set(requests.map(r => r.id)).size !== requests.length) throw Error('Duplicate requests');
-    // The root's streamed answer text, never its reasoning. Read after plan items so a
-    // started answer supersedes an earlier, now-stale, step thought or summary.
+    // The root's streamed answer, never its reasoning; read after plan items so it supersedes them.
     const proposal = message.agentTaskContent?.proposal;
     if (typeof proposal === 'string' && proposal.trim()) preview = text(proposal).slice(-4096);
-    // Nothing has streamed yet: show this Turn's own prompt rather than nothing. A
-    // mismatched or oversized read is silently skipped; this fallback is never load-bearing.
-    // Native text never sits in a plain string: it is typed blocks, in `query` for an
-    // ordinary chat message and, only for some agents (e.g. solo_agent), mirrored into
-    // `content` too -- read `query` first since it is the one populated on every agent seen.
+    // Nothing streamed yet: fall back to this Turn's prompt (best effort). Its typed blocks live in
+    // `query` on every agent seen, and only some (e.g. solo_agent) mirror them into `content`.
     if (preview === null && object(userMessage) && id(userMessage.messageId) &&
         userMessage.messageId === message.replyToMessageId && userMessage.sessionId === session.sessionId) {
       const blockText = blocks => Array.isArray(blocks) ? blocks

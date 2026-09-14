@@ -1,31 +1,17 @@
-// The Settings window, as redesigned for macOS 26. See `figma-design.md` §8.
-//
-// Three toolbar panes — Products, Display, Quota. It was one pane with no
-// source list while it held three groups, because a one-item sidebar announces
-// a navigation that does not exist; at fifteen rows doing three jobs it
-// measured 1,292 pt of content in a window capped at 860, so a third of it was
-// reachable only by scrolling, and every product added grew it twice.
-//
-// The shape of every group is the same: a small header, one rounded card, and
-// footnote text under it. The footnote replaced V1's blue callout — macOS
-// states a consequence in a footnote, and a tinted block inside a native window
-// only ever reads as a control nobody can click. Every caption is one line;
-// the rest of what a row has to say is its tooltip or, for a product, its ⓘ
-// popover. A failure a product reported is the one line allowed to wrap.
+// The Settings window for macOS 26 (`figma-design.md` §8): Products, Display and Quota panes.
+// Captions are one line; longer text is a tooltip or ⓘ popover. Only a reported failure wraps.
 import AppKit
 import SwiftUI
 
-/// The three panes, in toolbar order.
 enum SettingsPane: String, CaseIterable {
     case products
     case display
     case quota
 
-    /// Where the last pane used is remembered. Absent the first time, which
-    /// opens on Products: the pane somebody opens Settings to diagnose.
+    /// Absent the first time, which opens on Products.
     static let defaultsKey = "settingsPane"
 
-    /// The tab's label, which is also the window's title while it is selected.
+    /// Also the window's title while selected.
     var title: String {
         switch self {
         case .products: "Products"
@@ -43,17 +29,11 @@ enum SettingsPane: String, CaseIterable {
     }
 }
 
-/// **No store here.** This view draws the toolbar and the window's title, and
-/// neither reads the store — but observing it rebuilt the three toolbar
-/// symbols and re-titled the window on every publish. Each pane reads what it
-/// needs itself; see "Reading the store" below.
+/// No store here: observing it rebuilt the toolbar on every publish.
 struct AppSettingsView: View {
     @AppStorage(SettingsPane.defaultsKey) private var pane: SettingsPane = .products
 
     var body: some View {
-        // A `TabView` inside the `Settings` scene is the toolbar-pane window
-        // macOS draws for every utility's settings: the tabs sit in the
-        // toolbar and the selected tab names the window.
         TabView(selection: $pane) {
             Tab(SettingsPane.products.title, systemImage: SettingsPane.products.systemImage, value: .products) {
                 SettingsPaneLayout { ProductsSettingsPane() }
@@ -69,21 +49,13 @@ struct AppSettingsView: View {
     }
 }
 
-/// The one size every pane is drawn at.
 enum SettingsWindowLayout {
     static let width: CGFloat = 580
 
-    /// Everything under the toolbar: the pane's content and the closing row.
-    ///
-    /// **One height for every pane**, the tallest pane's — Display's three
-    /// cards. The window used to take each pane's own height, which moved the
-    /// version and `Quit` up and down the screen with every tab; they belong to
-    /// the window rather than to a pane, so they stay where they were. A test
-    /// holds every pane to this height.
+    /// One height for every pane (Display's), so the closing row never moves; a test holds it.
     static let paneHeight: CGFloat = 491
 
-    /// What a pane is drawn at on a screen too short for ``paneHeight``: the
-    /// shortest connected screen, less the title bar, toolbar and a margin.
+    /// For screens shorter than ``paneHeight``.
     @MainActor
     static var fittedPaneHeight: CGFloat {
         let shortest = NSScreen.screens.map(\.visibleFrame.height).min() ?? 940
@@ -91,18 +63,8 @@ enum SettingsWindowLayout {
     }
 }
 
-/// One pane: its content, scrolling if it must, and the closing row pinned
-/// under it.
-///
-/// **The closing row is outside the scroll view.** It is the same row in the
-/// same place under every pane, so a pane whose content runs long — a product
-/// row carrying a wrapped failure, a registry grown past what the card holds —
-/// scrolls its own content and never pushes the row off the window.
-///
-/// **The height is fixed, not measured.** The `Settings` scene sizes its window
-/// from a tab's fixed height and never from a flexible frame — measured, a
-/// `maxHeight` over the scroll view left all three panes in the first one's
-/// window — and a fixed height is what this window wants anyway.
+/// Content scrolls; the closing row stays pinned outside the scroll view. The `Settings`
+/// scene sizes its window only from a fixed tab height (a `maxHeight` did not work).
 struct SettingsPaneLayout<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
@@ -120,7 +82,6 @@ struct SettingsPaneLayout<Content: View>: View {
     }
 }
 
-/// A pane's groups at the window's margins, top-aligned.
 struct SettingsPaneContent<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
@@ -130,14 +91,12 @@ struct SettingsPaneContent<Content: View>: View {
         }
         .padding(.horizontal, 24)
         .padding(.top, 6)
-        // The `22` between groups, kept between the last group and the
-        // closing row that now sits outside this stack.
+        // The `22` between groups, kept before the closing row outside this stack.
         .padding(.bottom, 22)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
-/// The closing row at the window's margins.
 struct SettingsClosingFooter: View {
     var body: some View {
         SettingsClosingRow()
@@ -146,17 +105,7 @@ struct SettingsClosingFooter: View {
     }
 }
 
-/// The version and the action that quits the app, under every pane.
-///
-/// They belong to the window rather than to a settings group, so they sit in
-/// the same place whichever pane is in front.
-///
-/// The two sit at opposite ends of the row rather than side by side on the
-/// left: a version is a fact to read and `Quit` is the one action this window
-/// offers, and macOS puts a window's action in its bottom trailing corner —
-/// beside the version it read as a second caption someone had made pressable.
-/// Baselines align rather than tops, so the version sits on the same line as
-/// the button's label instead of riding above it.
+/// The version and `Quit` under every pane, at opposite ends, baselines aligned.
 struct SettingsClosingRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
@@ -164,12 +113,8 @@ struct SettingsClosingRow: View {
 
             Spacer(minLength: 16)
 
-            // Red is in the label's ink, not in the bezel. `.tint` on macOS's
-            // `.bordered` style does nothing at all — measured, the capsule
-            // came back the standard grey — and `.borderedProminent` draws its
-            // fill from the accent, which a window loses the moment it stops
-            // being key: the red would leave every time the user clicked
-            // something else. The ink holds in every state.
+            // Red ink, not bezel: `.tint` does nothing on `.bordered`, and `.borderedProminent` loses the
+            // accent when the window is not key.
             Button {
                 NSApp.terminate(nil)
             } label: {
@@ -185,32 +130,13 @@ struct SettingsClosingRow: View {
 
 // MARK: - Reading the store
 //
-// How a pane reads `MonitorStore` without redrawing for what it does not show.
-//
-// The store publishes for everything the overlay draws — a row's latest line,
-// the quota, the hover — and a publish re-evaluates every view observing it,
-// whatever changed. A view here that re-evaluates can re-lay out and re-measure
-// the whole window, and an open ⓘ popover is handed its content again.
-// Measured on a Release build at ten publishes a second, by differencing
-// cumulative CPU time, a publish cost this window 14–18 ms on any pane; it is
-// now 1–2 ms. Most of it was the app observing the store (see
-// `NotchlineApp.store`), the rest the panes.
-//
-// So a pane observes the store in one small view that reads what the pane
-// draws into an `Equatable` value, and hands that value to the view that draws
-// it behind `.equatable()`. A publish that leaves the value alone stops at the
-// comparison. The drawing view keeps the store as a plain reference, which
-// observes nothing, so its switches can write through it. Their bindings still
-// read the store itself; the value carries each switch's position only so that
-// a change to it redraws.
+// A pane observes `MonitorStore` in one small view that extracts an `Equatable` value and hands
+// it to the drawing view behind `.equatable()`, which holds the store only to write through.
+// A publish cost this window 14–18 ms before, 1–2 ms after (Release).
 
 // MARK: - Products
 
-/// Every product is a row in one card, not a group of its own, and the card
-/// needs no header: the pane's name is the header.
-///
-/// Rows come from ``ProductRegistry/builtIn``. Four products or ten, it is one
-/// card of one-line rows; what a product cannot do is behind its ⓘ.
+/// One headerless card of rows from ``ProductRegistry/builtIn``.
 struct ProductsSettingsPane: View {
     var body: some View {
         SettingsGroup {
@@ -223,17 +149,8 @@ struct ProductsSettingsPane: View {
     }
 }
 
-/// Asks every product for its state again, now.
-///
-/// A view of its own so that it alone takes the store from the environment,
-/// for the one action it needs: the pane around it draws nothing a publish can
-/// change, and first run's connection group uses the same button.
-///
-/// **The button itself is behind `.equatable()` too**, though it draws nothing
-/// from the store. A `Button` rebuilt with a fresh action closure updates the
-/// AppKit button under it, and that re-laid out the whole window: measured,
-/// `4.5 ms` of CPU per publish in a Debug build, most of what the Products
-/// pane still cost once nothing else in it redrew.
+/// Asks every product for its state again, now. Also behind `.equatable()`: a `Button` rebuilt
+/// with a fresh closure re-laid out the whole window, 4.5 ms per publish (Debug).
 struct RecheckButton: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -261,14 +178,7 @@ struct RecheckButton: View {
 
 // MARK: - Display
 
-/// Three cards: the screen itself, the collapsed component, the expanded
-/// panel. The group names do the explaining the captions' second sentences
-/// used to — `Collapsed` says where a preference shows before the row says
-/// what it does.
-///
-/// No footnote. Each row's own caption already names the consequence for the
-/// display that is actually selected; a standing sentence about cut-outs and
-/// pills only said the same thing in the abstract.
+/// Three cards: the screen, the collapsed component, the expanded panel.
 struct DisplaySettingsPane: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -278,9 +188,7 @@ struct DisplaySettingsPane: View {
     }
 }
 
-/// What the Display pane draws, read off the store in one place.
 struct DisplaySettings: Equatable {
-    /// A display as the picker offers it.
     struct Choice: Equatable, Identifiable {
         let id: String
         let title: String
@@ -320,18 +228,15 @@ struct DisplaySettings: Equatable {
         let geometry = display.geometry == .notched
             ? "Notch display"
             : "Display without a notch"
-        // The band the component is drawn at, named for what it is here: on a
-        // notched display that is the cut-out, which is a couple of points
-        // shorter than the menu bar around it.
+        // On a notched display the band is the cut-out, a couple of points shorter than the menu bar.
         let band = display.geometry == .notched ? "pt notch" : "pt menu bar"
         return "\(geometry) · \(Int(display.panelBandHeight.rounded())) \(band)"
     }
 }
 
-/// The Display pane's three cards, drawn from ``DisplaySettings``.
 struct DisplaySettingsGroups: View, Equatable {
     let settings: DisplaySettings
-    /// Written through by the controls, and never read to draw.
+    /// Written through by the controls, never read to draw.
     let store: MonitorStore
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -339,9 +244,7 @@ struct DisplaySettingsGroups: View, Equatable {
     }
 
     var body: some View {
-        // Their own stack, at the pane's `22`. Behind `.equatable()` the three
-        // cards reach the stack in ``SettingsPaneContent`` as one view, and
-        // it lost the space between them — measured, the cards closed up.
+        // Own stack at `22`: behind `.equatable()` the parent's spacing no longer applies (measured).
         VStack(alignment: .leading, spacing: 22) {
             SettingsGroup {
                 showOnRow
@@ -363,8 +266,6 @@ struct DisplaySettingsGroups: View, Equatable {
         }
     }
 
-    /// Which display the component appears on — the first card's subject, so
-    /// it stands first.
     private var showOnRow: some View {
         SettingsRow(
             title: "Show Notchline on",
@@ -390,20 +291,8 @@ struct DisplaySettingsGroups: View, Equatable {
         }
     }
 
-    /// Cover every word the component draws (`cover-the-words.md`).
-    ///
-    /// **Straight after the display picker.** It is the only row here somebody
-    /// opens this window in a hurry to find — everything under it is taste,
-    /// answered once and left — and the picker stays first because it is the
-    /// card's subject.
-    ///
-    /// **Never greyed, and it needs nothing of the display.** The panel is
-    /// covered on any screen, notched or not.
-    ///
-    /// **The caption names the gesture**, which is how macOS teaches one. A
-    /// secondary press on the component does this without the window, which is
-    /// the form that matters — opening Settings mid-call is itself a thing on
-    /// the shared screen, and that is why a pane deeper than before is enough.
+    /// Cover every word the component draws (`cover-the-words.md`). Never greyed; the caption
+    /// names the secondary-press gesture.
     private var privacyModeRow: some View {
         SettingsRow(
             title: "Privacy Mode",
@@ -421,11 +310,7 @@ struct DisplaySettingsGroups: View, Equatable {
         }
     }
 
-    /// Give the black surface an edge of its own.
-    ///
-    /// In the first card rather than under `Collapsed` or `Expanded`, because
-    /// it draws the same edge in both. Never greyed: any surface has an edge,
-    /// notched or not.
+    /// Give the black surface an edge of its own. Applies to both states; never greyed.
     private var outlineRow: some View {
         SettingsRow(
             title: "Outline the panel",
@@ -439,17 +324,8 @@ struct DisplaySettingsGroups: View, Equatable {
         }
     }
 
-    /// Give the cut-out back, and draw nothing beside it until something is
-    /// wanted.
-    ///
-    /// **Always drawn, and always settable — including where it cannot apply
-    /// yet.** A switch that appears only on a notched display is one nobody
-    /// finds, and a greyed one makes the person sitting at the wrong screen
-    /// come back later, on the right one, to say what they want. The store
-    /// keeps `hidesCompactWings` and asks `canHideCompactWings` separately, so
-    /// the setting waits for a screen that can honour it (§8.4.1). What the row
-    /// owes the user instead is the truth about *this* screen, which the
-    /// caption says in one line and the tooltip explains.
+    /// Give the cut-out back. Always settable, even where it cannot apply: `hidesCompactWings` is
+    /// kept apart from `canHideCompactWings` and waits for a screen that can honour it (§8.4.1).
     private var hideWingsRow: some View {
         SettingsRow(
             title: "Hide the wings",
@@ -471,10 +347,7 @@ struct DisplaySettingsGroups: View, Equatable {
         }
     }
 
-    /// Name the work between the pill's two ends.
-    ///
-    /// **Live on a notched display too, where it has nothing to do yet** — the
-    /// mirror of `Hide the wings`, and settable for the same reason.
+    /// Name the work between the pill's two ends. Settable anywhere, as `Hide the wings` is.
     private var nameWorkRow: some View {
         SettingsRow(
             title: "Name the work",
@@ -491,13 +364,7 @@ struct DisplaySettingsGroups: View, Equatable {
         }
     }
 
-    /// One block per product on the live list, or one list.
-    ///
-    /// On, each product's rows stand under a heading that names them once, and
-    /// every heading stays on screen however far the list is scrolled
-    /// (`expanded-panel-v2.md` §4.6). Off, the rows keep one order across
-    /// products and each names its product with its own badge. Either way the
-    /// Recent queue is one list, and either way the viewport shows four rows.
+    /// Grouped blocks or one list (`expanded-panel-v2.md` §4.6).
     private var groupByProductRow: some View {
         SettingsRow(
             title: "Group by product",
@@ -515,7 +382,6 @@ struct DisplaySettingsGroups: View, Equatable {
         }
     }
 
-    /// One of the store's own switches, read and written on the store.
     private func binding(_ keyPath: ReferenceWritableKeyPath<MonitorStore, Bool>) -> Binding<Bool> {
         Binding(
             get: { store[keyPath: keyPath] },
@@ -533,11 +399,6 @@ struct DisplaySettingsGroups: View, Equatable {
 
 // MARK: - Quota
 
-/// The quota table's choices, and the transcripts its readings leave.
-///
-/// The transcripts row used to sit in the Products card, where it was the one
-/// row about something other than connecting a product; it stands here beside
-/// the readings that leave it.
 struct QuotaSettingsPane: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -547,7 +408,6 @@ struct QuotaSettingsPane: View {
     }
 }
 
-/// What the Quota pane draws, read off the store in one place.
 struct QuotaSettings: Equatable {
     let productsHiddenFromQuotaTable: Set<AgentKind>
     let diskFootprints: [AgentKind: AgentDiskFootprintReport]
@@ -558,10 +418,9 @@ struct QuotaSettings: Equatable {
     }
 }
 
-/// The Quota pane's cards, drawn from ``QuotaSettings``.
 struct QuotaSettingsGroups: View, Equatable {
     let settings: QuotaSettings
-    /// Written through by the switches, and never read to draw.
+    /// Written through by the switches, never read to draw.
     let store: MonitorStore
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -573,10 +432,8 @@ struct QuotaSettingsGroups: View, Equatable {
         VStack(alignment: .leading, spacing: 22) {
             quotaTableGroup
 
-            // Only the products that leave anything have a key; the presence
-            // of the key is what decides whether the row is drawn (CC-020), so
-            // this is not a filter on the value, and a machine where nothing
-            // does has no group.
+            // Only products that leave anything have a key, and the key decides whether the row is
+            // drawn (CC-020); with none, no group.
             if !settings.diskFootprints.isEmpty {
                 SettingsGroup(header: "Quota readings") {
                     ForEach(Array(settings.diskFootprints.keys.sorted().enumerated()), id: \.element) { index, agent in
@@ -592,19 +449,7 @@ struct QuotaSettingsGroups: View, Equatable {
         }
     }
 
-    /// Which products get a block in the quota table (`quota-footer-v2.md` §13).
-    ///
-    /// **A card of switches, one per registered product**, in the order the
-    /// table draws them — not a pop-up of checkmarks. A menu closes on every
-    /// choice, so choosing two products out of four is four trips into it, and
-    /// its closed label can only summarise what a card simply shows.
-    ///
-    /// **Every product is listed, connected or not.** The choice is a standing
-    /// answer about what the table should hold, and the moment somebody wants
-    /// to leave a product out is not necessarily a moment it is open.
-    ///
-    /// The footnote says the one thing a switch cannot: today's total counts
-    /// every product whatever is on here. What a switch does is its tooltip.
+    /// Which products get a block (`quota-footer-v2.md` §13): a switch per product, connected or not.
     private var quotaTableGroup: some View {
         SettingsGroup(header: "Quota table") {
             ForEach(Array(ProductRegistry.builtIn.enumerated()), id: \.element.kind) { index, descriptor in
@@ -631,18 +476,9 @@ struct QuotaSettingsGroups: View, Equatable {
         }
     }
 
-    /// What reading the quota costs on disk, and a way to go and look.
-    ///
-    /// Shown rather than tidied away. Each reading is a real Claude Code
-    /// session and leaves a transcript behind; the folder they go to belongs to
-    /// Claude Code and can hold the user's own sessions as well, so this app
-    /// reports the size and opens the door rather than deleting anything on
-    /// somebody's behalf.
-    ///
-    /// The row is drawn from the first refresh, before there is a figure to put
-    /// in it: `Calculating…` while a reading is actually out, `Unavailable`
-    /// where none will ever start, and a button that is plainly not ready
-    /// rather than one that would reveal nowhere (CC-020).
+    /// Each quota reading is a Claude Code session leaving a transcript in a folder that may hold
+    /// the user's own sessions, so this reports and reveals, never deletes. `Calculating…`,
+    /// `Unavailable`, or a plainly not-ready button (CC-020).
     private func transcriptRow(_ report: AgentDiskFootprintReport, for agent: AgentKind) -> some View {
         SettingsRow(
             title: "Quota reading transcripts",
@@ -653,8 +489,7 @@ struct QuotaSettingsGroups: View, Equatable {
                 + "the size and opens the folder, and deletes nothing."
         ) {
             HStack(spacing: 10) {
-                // Beside the button rather than in the status slot: that slot
-                // draws a health dot, and a number of megabytes is not a health.
+                // Not in the status slot: that slot draws a health dot, and megabytes are not health.
                 Text(report.summary)
                     .font(.system(size: 11))
                     .foregroundStyle(MacOSWindowColor.secondaryText)
@@ -673,11 +508,8 @@ struct QuotaSettingsGroups: View, Equatable {
     }
 }
 
-/// Every caption and footnote a pane draws that does not come off a product's
-/// own state, held apart from the views so a test can hold each to one line.
-///
-/// A caption says what the control does on this screen in one line at `580`
-/// pt; anything longer is an explanation and belongs in the row's tooltip.
+/// Captions and footnotes not read off a product's state, so a test can hold each to one line
+/// at `580` pt.
 enum SettingsCaption {
     static let productsFootnote = "Switches edit only Notchline’s hooks, after a .notchline-backup copy."
     static let privacyMode = "Draws every name and line as a bar. Secondary-click Notchline to toggle."
@@ -685,11 +517,8 @@ enum SettingsCaption {
     static let groupByProduct = "One block per product, each headed by its badge."
     static let quotaTableFootnote = "Today’s total counts every connected product, whatever is on here."
 
-    /// What `Hide the wings` does on *this* display. The two ways a display
-    /// can fail to qualify are named apart: a laptop's built-in screen
-    /// reporting a notch it cannot place is a different situation from an
-    /// external monitor, and a user reading `Needs a notched display` on a
-    /// MacBook would reasonably conclude the app was broken.
+    /// A built-in screen that cannot place its notch is named apart from an external monitor, so a
+    /// MacBook never reads `Needs a notched display`.
     static func hideWings(canHide: Bool, geometry: DisplayGeometry) -> String {
         guard canHide else {
             guard geometry == .notched else {
@@ -700,7 +529,6 @@ enum SettingsCaption {
         return "Only the cut-out, until a turn needs you."
     }
 
-    /// What `Name the work` does on *this* display.
     static func nameWork(canName: Bool) -> String {
         guard canName else {
             return "Waits for a display without a notch."
@@ -712,7 +540,6 @@ enum SettingsCaption {
         "Kept in \(agent.displayName)’s project folder. Notchline never deletes them."
     }
 
-    /// Every caption a pane can draw, for the test that holds them to one line.
     static var all: [String] {
         [productsFootnote, privacyMode, outline, groupByProduct, quotaTableFootnote,
          nameWork(canName: true), nameWork(canName: false)]
@@ -723,22 +550,9 @@ enum SettingsCaption {
     }
 }
 
-/// The connections the app needs, as the rows that ask for them — one per
-/// registered product.
-///
-/// Shared by first run and Settings rather than drawn twice. Every row asks for
-/// managed setup in the same shape: one switch (ADR 0016). No-setup products
-/// show observation status alone. Everything a row says about its product is
-/// read off its ``ProductDescriptor``, so a new product is an element in the
-/// registry and nothing here.
-///
-/// **Status and the switch, one line each, then ⓘ.** What a product watches,
-/// what it will never show, its hooks file and its trust step are explanation
-/// rather than state, and moved into ``ProductInfoPopover``. Every product has
-/// one, so the column of ⓘ is straight down the card. A failure the product
-/// reported never moves there (CR-029): it is the one line in this window that
-/// exists to report something going wrong, and a click to find it is a failure
-/// nobody sees.
+/// One connection row per registered product, shared by first run and Settings, read off
+/// ``ProductDescriptor``. Managed setup is one switch (ADR 0016). A reported failure stays on
+/// the row, never only in the ⓘ popover (CR-029).
 struct ProductConnectionRows: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -754,17 +568,13 @@ struct ProductConnectionRows: View {
                 isBusy: store.isIntegrationBusy(for: descriptor.kind),
                 store: store
             )
-            // Per row rather than around the card: a publish about one product
-            // redraws that product's row, and an open ⓘ on another row is left
-            // alone.
+            // Per row, so a publish about one product leaves another row's open ⓘ alone.
             .equatable()
         }
     }
 
-    /// Read off that product's own answer, never the merged one. The Codex row
-    /// used to read `store.availability`, which is ready when *any* product is,
-    /// so a ready Claude Code made the Codex row say `Connected` on Claude
-    /// Code's evidence (`integration-settings-behaviour.md` §4).
+    /// Read off that product's own answer, never the merged `store.availability`
+    /// (`integration-settings-behaviour.md` §4).
     private func copy(for descriptor: ProductDescriptor) -> ProductSettingsCopy {
         ProductSettingsCopy(
             descriptor: descriptor,
@@ -775,15 +585,13 @@ struct ProductConnectionRows: View {
     }
 }
 
-/// One product's row, drawn from what ``ProductConnectionRows`` read for it.
 struct ProductConnectionRow: View, Equatable {
     let descriptor: ProductDescriptor
     let copy: ProductSettingsCopy
-    /// Where the switch sits. The switch reads the store itself; this is here
-    /// so that the row redraws when it moves.
+    /// The switch reads the store itself; this makes the row redraw when it moves.
     let isOn: Bool
     let isBusy: Bool
-    /// Written through by the switch, and never read to draw.
+    /// Written through by the switch, never read to draw.
     let store: MonitorStore
 
     static func == (lhs: Self, rhs: Self) -> Bool {
@@ -822,11 +630,7 @@ struct ProductConnectionRow: View, Equatable {
     }
 }
 
-/// What a product's ⓘ popover says, read off its descriptor.
-///
-/// A value for ``ProductSettingsCopy``'s reason: the popover is where a
-/// product's declared boundary now lives, and a value can be asserted by a
-/// test where a `body` cannot.
+/// What a product's ⓘ popover says; a value so a test can assert it.
 struct ProductInfoContent: Equatable {
     struct Paragraph: Equatable {
         let heading: String
@@ -842,10 +646,8 @@ struct ProductInfoContent: Equatable {
     let title: String
     /// `Watches` and `Not shown`: what the product's rows can and cannot say.
     let boundary: [Paragraph]
-    /// What setting the product up asks of the user beyond the switch — Codex's
-    /// trust step, Trae's reopened windows.
+    /// What setup asks beyond the switch: Codex's trust step, Trae's reopened windows.
     let setup: [Paragraph]
-    /// The file this product's switch writes.
     let hooksFile: HooksFile?
 
     init(descriptor: ProductDescriptor) {
@@ -860,8 +662,7 @@ struct ProductInfoContent: Equatable {
             setup = [Paragraph(heading: "Setup", text: "This product needs no setup.")]
             hooksFile = nil
         case let .managedHooks(description):
-            // The trust step is phrased to follow a semicolon in the installed
-            // message, so it gains a capital and a full stop to stand alone.
+            // The trust step is phrased to follow a semicolon; capitalise and end it to stand alone.
             setup = description.trustStep.map {
                 [Paragraph(heading: "After turning it on", text: $0.prefix(1).uppercased() + $0.dropFirst() + ".")]
             } ?? []
@@ -879,12 +680,7 @@ struct ProductInfoContent: Equatable {
     }
 }
 
-/// The ⓘ at the end of a product's row.
-///
-/// Drawn like ``ShowInFinderButton`` — a `14` pt glyph in a `22 × 22` target,
-/// with a ground only under the pointer — and for its reason: a bordered shape
-/// here would compete with the switch beside it. The ground also stays while
-/// the popover is open, so it is plain which row the popover belongs to.
+/// The ⓘ, drawn like ``ShowInFinderButton``; the ground stays while its popover is open.
 struct ProductInfoButton: View {
     let content: ProductInfoContent
 
@@ -917,7 +713,6 @@ struct ProductInfoButton: View {
     }
 }
 
-/// What a product's row used to say in three or four lines, on demand.
 struct ProductInfoPopover: View {
     let content: ProductInfoContent
 
@@ -949,8 +744,7 @@ struct ProductInfoPopover: View {
                         }
                         .buttonStyle(.bordered)
                         .buttonBorderShape(.capsule)
-                        // Same rule as the glyph it replaced: a button with
-                        // nowhere to go is greyed rather than silently inert.
+                        // A button with nowhere to go is greyed rather than silently inert.
                         .disabled(FinderRevealTarget.revealing(hooksFile.url) == nil)
                     }
                 }
@@ -979,34 +773,10 @@ struct ProductInfoPopover: View {
 }
 
 
-/// The one-glyph way into a folder a row is about.
-///
-/// **A glyph rather than the words.** It was one of three down the Products
-/// card — the file each product's hooks are registered in, and the folder the
-/// quota readings leave transcripts in — where a capsule reading `Reveal in
-/// Finder` on each was one sentence written out three times beside the
-/// switches. The product rows' copies moved into their ⓘ popovers, where a
-/// sentence has room and the capsule is back; the glyph stays on the
-/// transcripts row, which has no popover to put it in.
-///
-/// They also stay in the accessibility label — `.accessibilityLabel` on the
-/// glyph — so VoiceOver reads `Show in Finder` and not the name of an SF
-/// Symbol.
-///
-/// **No border until the pointer is on it.** A bordered capsule around a
-/// single glyph is a second shape competing with the switch beside it, on a
-/// row where the switch is the control. Bare, the glyph reads as what it is —
-/// a way through to somewhere — and the background that says it can be pressed
-/// arrives on hover, which is when the question is being asked. The `22 × 22`
-/// square is the click target rather than the drawing: the glyph is `12 × 12`
-/// measured, and a target the size of the drawing would be a thing you aim at.
-///
-/// **Last in the row**, on the trailing edge, as the product rows' ⓘ is.
+/// The one-glyph way into a folder a row is about. No border until hovered; the `22 × 22`
+/// square is the target, the glyph `12 × 12`.
 struct ShowInFinderButton: View {
-    /// Where a press goes, and `nil` when there is nowhere for it to go —
-    /// which is what greys the button out. Same rule the `Reveal in Finder`
-    /// capsule was held to: a button that reveals nothing is worse than one
-    /// that is plainly not ready (CC-020).
+    /// `nil` greys the button out (CC-020).
     let target: FinderRevealTarget?
 
     @State private var isHovering = false
@@ -1015,19 +785,12 @@ struct ShowInFinderButton: View {
         Button {
             target?.reveal()
         } label: {
-            // Drawn to a measured `12 × 12` rather than set in a 12-point
-            // font. A symbol at `.system(size: 12)` is sized to sit beside
-            // 12-point *text*, not to be 12 points: `folder` under that
-            // configuration measures `17 × 13`. `resizable` fits the glyph's
-            // own box to the frame instead, so the number here is the size on
-            // screen — measured off a screenshot at `12 × 9.5`, the second
-            // figure being the folder's own aspect inside a square box.
+            // A measured `12 × 12` via `resizable`, not a 12-point font: `.system(size: 12)` sizes `folder`
+            // to `17 × 13`.
             Image(systemName: "folder")
                 .resizable()
                 .scaledToFit()
                 .frame(width: 12, height: 12)
-                // The words the `Label` used to carry. VoiceOver still reads
-                // `Show in Finder` rather than the name of an SF Symbol.
                 .accessibilityLabel("Show in Finder")
                 .foregroundStyle(
                     target == nil
@@ -1039,42 +802,26 @@ struct ShowInFinderButton: View {
                     RoundedRectangle(cornerRadius: 5, style: .continuous)
                         .fill(isHovering ? MacOSWindowColor.hoverBackground : .clear)
                 )
-                // The whole square takes the click, not just the glyph's own
-                // strokes — a `folder` is mostly empty inside.
+                // The whole square takes the click; a `folder` is mostly empty inside.
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(target == nil)
-        // Nothing lights up under a button that cannot be pressed, so the
-        // hover state is refused rather than drawn and then ignored.
+        // No hover state under a button that cannot be pressed.
         .onHover { isHovering = $0 && target != nil }
         .help("Show in Finder")
     }
 }
 
-/// Where a ``ShowInFinderButton`` press goes.
-///
-/// A value rather than a closure per row, for the reason ``ProductSettingsCopy``
-/// is one: nothing in this window has a test that can press a button, but which
-/// folder a press would open is a plain answer a test can assert.
+/// Where a ``ShowInFinderButton`` press goes; a value so a test can assert it.
 nonisolated enum FinderRevealTarget: Equatable {
     /// Open the enclosing folder with this item selected.
     case select(URL)
-    /// Open this folder itself, because the item the button points at is not
-    /// in it yet.
+    /// Open this folder itself, because the item is not in it yet.
     case open(URL)
 
-    /// What revealing `url` should do, and `nil` when there is nothing on disk
-    /// to reveal.
-    ///
-    /// **The file may not be there, and that is the ordinary case rather than
-    /// an error.** Neither `~/.codex/hooks.json` nor `~/.claude/settings.json`
-    /// exists until somebody — this app or the user — has put something in it,
-    /// so a row whose switch has never been on points at a path with no file
-    /// at the end of it, and `activateFileViewerSelecting` on one of those does
-    /// nothing at all, silently. So the file is selected when it is there, the
-    /// folder that would hold it is opened when it is not, and only a product
-    /// with neither greys the button out.
+    /// Nil with nothing on disk. A missing file is ordinary and `activateFileViewerSelecting`
+    /// silently ignores it, so the folder that would hold it opens instead.
     static func revealing(_ url: URL, fileManager: FileManager = .default) -> Self? {
         if fileManager.fileExists(atPath: url.path) {
             return .select(url)
@@ -1099,52 +846,20 @@ nonisolated enum FinderRevealTarget: Equatable {
     }
 }
 
-/// What one product's row in Settings says about itself.
+/// What one product's row in Settings says; a value so a test can assert it (CR-029). The status
+/// never repeats the product name. Top to bottom:
 ///
-/// A value rather than four computed properties on the view, and for one
-/// reason: the line under the status is the only thing in this window that
-/// exists to report a failure, and CR-029 was exactly that line being derived
-/// correctly, carried down three layers, and then reaching no view at all. A
-/// value can be asserted by a test; a `body` cannot, and this window has no
-/// other test holding it.
-///
-/// The product name is the row's label, so the status line must not repeat it:
-/// `Codex Desktop / Codex Desktop connected` reads as a stutter.
-///
-/// **One rule for every product, reading the product's own availability.**
-/// There used to be a factory per product with different control flow, and the
-/// two disagreed in ways the behaviour document had to list as smells: the
-/// Codex one read the merged availability, and let a registration written but
-/// never trusted fall through to `Connected`. The rule now, top to bottom:
-///
-/// 1. A registration that does not match this build gets its own sentence,
-///    because it is the failure with no other symptom. An event left out
-///    simply never arrives; a handler in an older shape does arrive and
-///    misbehaves quietly — an `http` handler from before ADR 0013 posts every
-///    event to a port nothing listens on. Neither reports an error anywhere.
-///    The app can repair it and the switch already reads off in this state, so
-///    the sentence says to turn it on.
+/// 1. A registration not matching this build gets its own sentence: it fails silently (e.g. a
+///    pre-ADR 0013 `http` handler). The switch reads off, so it says to turn it on.
 /// 2. Off is off.
-/// 3. Written but never seen to fire, on a product with a trust step, says what
-///    the step is. Only Codex can be here: Claude Code has no trust step and
-///    never reports `reviewRequired`.
-/// 4. Registered, and then whatever the product's own boundary says about
-///    being able to watch. **`Connected` is a claim about being able to
-///    watch**, so it needs `.ready`; registered and `.disconnected` is one
-///    neutral headline for every way of being registered and blind — the
-///    helper and its socket, no command to run, a command that will not
-///    answer, an App Server that will not start — because each writes its own
-///    diagnostic, that sentence is drawn directly underneath, and a headline
-///    naming one of them would be wrong about the others.
+/// 3. Written but never seen to fire, with a trust step (Codex only): names the step.
+/// 4. Registered: `Connected` needs `.ready`; `.disconnected` is one neutral headline, with the
+///    boundary's own diagnostic underneath.
 struct ProductSettingsCopy: Equatable {
     /// The caption line the status dot starts.
     let status: String
-    /// The dot.
     let color: Color
-    /// What that product's own boundary had to say, when it went wrong. Shown
-    /// under the status line, and absent the rest of the time — a row that
-    /// keeps an empty line for a failure that is not happening reads as one
-    /// that is.
+    /// Shown under the status line only when present; an empty line reads as a failure.
     let diagnostic: String?
 
     init(
@@ -1221,16 +936,8 @@ struct ProductSettingsCopy: Equatable {
 
 // MARK: - Group chrome
 
-/// A header, one card, and a footnote — the macOS 26 grouped-row shape.
-///
-/// The header is optional. A pane's first card can go without one, because the
-/// pane's own name, in the toolbar and the title bar, already heads it.
-///
-/// The card is drawn here rather than taken from `Form`/`Section`, because §8
-/// pins the metrics (`12` radius, `14 × 11` rows, `22` between groups) and a
-/// grouped `Form` reaches none of them. The controls *inside* it are native, so
-/// the switch, the popup and the capsule buttons are the real Tahoe shapes
-/// rather than approximations of them.
+/// A header, one card, and a footnote. Drawn here, not with `Form`/`Section`, to reach §8's
+/// `12` radius, `14 × 11` rows and `22` gaps; the controls inside are native.
 struct SettingsGroup<Content: View, Footnote: View>: View {
     let header: String?
     @ViewBuilder let content: () -> Content
@@ -1276,10 +983,7 @@ struct SettingsGroup<Content: View, Footnote: View>: View {
     }
 }
 
-/// A group whose card says everything, with no consequence left to footnote.
-///
-/// `EmptyView` is dropped from the stack rather than laid out, so the group
-/// closes at the card and the `22` between groups is the only gap under it.
+/// A group with no footnote; `EmptyView` is dropped, so the `22` is the only gap under the card.
 extension SettingsGroup where Footnote == EmptyView {
     init(header: String? = nil, @ViewBuilder content: @escaping () -> Content) {
         self.init(header: header, content: content, footnote: { EmptyView() })
@@ -1291,19 +995,9 @@ struct SettingsRowStatus {
     let text: String
 }
 
-/// One row: a label column that fills the width, and a trailing control.
-///
-/// The status dot starts the caption line rather than standing left of the
-/// product name, so every primary label in the window shares one indent and
-/// there is a single column to read down.
-///
-/// **The status and the caption are one line each.** A caption says what the
-/// control does on this screen; anything longer is an explanation, and the
-/// row's `help` holds it — over the whole row, not only the control, since the
-/// words it continues are on the left. **The diagnostic is the exception and
-/// has no limit**: a failure the product reported is drawn in primary ink under
-/// a warning glyph and wraps if it must, because a truncated failure is a
-/// failure nobody reads (CR-029).
+/// One row: a filling label column and a trailing control. The status dot starts the caption
+/// line. Status and caption are one line each, longer text is the row's `help`; the diagnostic
+/// wraps without limit (CR-029).
 struct SettingsRow<Control: View>: View {
     let title: String
     var caption: String?
@@ -1351,11 +1045,9 @@ struct SettingsRow<Control: View>: View {
             control()
         }
         .padding(.horizontal, 14)
-        // A title alone sits in a shorter row, as the quota table's do: the
-        // `11` that clears a caption line leaves a bare title floating.
+        // A bare title sits in a shorter row (`9`), as the quota table's do.
         .padding(.vertical, caption == nil && status == nil && diagnostic == nil ? 9 : 11)
-        // The row's empty middle takes the pointer too, so the tooltip is
-        // there wherever the row is, not only over its words.
+        // The row's empty middle takes the pointer too, so the tooltip covers the whole row.
         .contentShape(Rectangle())
         .modifier(RowHelp(text: help))
     }
@@ -1369,7 +1061,7 @@ struct SettingsRow<Control: View>: View {
     }
 }
 
-/// A row's tooltip, or no tooltip at all rather than an empty one.
+/// A row's tooltip, or none rather than an empty one.
 private struct RowHelp: ViewModifier {
     let text: String?
 
@@ -1390,7 +1082,6 @@ struct SettingsSeparator: View {
     }
 }
 
-/// Footnote text, optionally with a control on its trailing side.
 struct SettingsFootnote<Accessory: View>: View {
     private let text: String
     private let accessory: () -> Accessory
@@ -1401,8 +1092,7 @@ struct SettingsFootnote<Accessory: View>: View {
     }
 
     var body: some View {
-        // Baselines rather than tops, so a one-line footnote reads on the
-        // line of its capsule's label instead of riding above it.
+        // Baselines, so a one-line footnote sits on its capsule label's line.
         HStack(alignment: .firstTextBaseline, spacing: 16) {
             Text(text)
                 .settingsFootnote(MacOSWindowColor.secondaryText)
@@ -1429,15 +1119,9 @@ extension Text {
 
 // MARK: - Colours
 
-/// `Color / macOS Window` from `figma-design.md` §3.2, as one two-mode value
-/// each rather than two hard-coded batches.
-///
-/// A `dynamicProvider` is the code form of a two-mode Figma collection: one
-/// declaration answers for both appearances, so light and dark cannot drift
-/// apart the way two separate palettes eventually do.
+/// `Color / macOS Window` (`figma-design.md` §3.2) as two-mode dynamic colours.
 enum MacOSWindowColor {
-    /// Also the window's own `backgroundColor`, so the transparent title bar
-    /// sits on the same value the content does.
+    /// Also the window's `backgroundColor`, so the transparent title bar matches the content.
     static let windowBackgroundColor = dynamicColor(light: 0xEC_EC_EE, dark: 0x1E_1E_20)
     static let windowBackground = Color(nsColor: windowBackgroundColor)
     static let groupBackground = dynamic(light: 0xFF_FF_FF, dark: 0x2C_2C_2E)
@@ -1449,11 +1133,7 @@ enum MacOSWindowColor {
         light: 0x00_00_00, lightAlpha: 0.09,
         dark: 0xFF_FF_FF, darkAlpha: 0.11
     )
-    /// What appears under a borderless glyph while the pointer is on it.
-    ///
-    /// Lighter than ``wellBackground``: that one is a recess something sits
-    /// in permanently, this one is a control saying it can be pressed and has
-    /// to stay quieter than the switch on the same row.
+    /// Under a hovered borderless glyph; lighter than ``wellBackground``, quieter than a switch.
     static let hoverBackground = dynamic(
         light: 0x00_00_00, lightAlpha: 0.07,
         dark: 0xFF_FF_FF, darkAlpha: 0.10
@@ -1476,19 +1156,14 @@ enum MacOSWindowColor {
         dark: 0xFF_FF_FF, darkAlpha: 0.38
     )
 
-    /// Status dots take the system colours, which already carry the exact two
-    /// values `Color / macOS Window` names — `status/green` is `systemGreen` in
-    /// both modes — and stay correct under an accessibility appearance.
+    /// System colours match `Color / macOS Window` and follow accessibility appearances.
     static let statusHealthy = Color(nsColor: .systemGreen)
     static let statusWarning = Color(nsColor: .systemOrange)
     static let statusPending = Color(nsColor: .systemBlue)
     static let statusBlocked = Color(nsColor: .systemPurple)
     static let statusIdle = Color(nsColor: .systemGray)
 
-    /// The ink of `Quit`, the one action in this window that ends something
-    /// rather than changing it. The system red for the status dots' reason:
-    /// it is the value macOS itself uses for exactly this, and it follows an
-    /// accessibility appearance where a literal red would not.
+    /// The ink of `Quit`, for the same reason.
     static let destructiveAction = Color(nsColor: .systemRed)
 
     private static func dynamic(
@@ -1526,20 +1201,11 @@ enum MacOSWindowColor {
     }
 }
 
-/// Names the window.
-///
-/// §8 draws the title bar in the window's own colour with no rule under it.
-/// That part is not implemented and is not worth what it costs: SwiftUI owns
-/// the title bar of a scene's window and re-applies its own configuration, so
-/// `titlebarAppearsTransparent`, `backgroundColor`, `titlebarSeparatorStyle`
-/// and `.fullSizeContentView` were all tried and all had no visible effect.
-/// What is left is drawing a `52pt` band and a centred title by hand under
-/// `.hiddenTitleBar` -- which would make the most conspicuous element in a
-/// window whose whole argument is "native controls, not approximations of
-/// them" the one piece that is an approximation. The band stays macOS's.
+/// Names the window. §8's custom title bar is not implemented: SwiftUI re-applies its own
+/// configuration, so `titlebarAppearsTransparent`, `backgroundColor`, `titlebarSeparatorStyle`
+/// and `.fullSizeContentView` had no visible effect.
 struct SettingsWindowChrome: NSViewRepresentable {
-    /// Which of the two windows this is. The same scene shows first run and
-    /// then Settings, so the band has to be told which one it is under.
+    /// The same scene shows first run and then Settings, so the title is passed in.
     var title = "Notchline Settings"
 
     func makeNSView(context: Context) -> NSView {
@@ -1555,86 +1221,41 @@ struct SettingsWindowChrome: NSViewRepresentable {
     private func apply(to window: NSWindow?) {
         guard let window else { return }
         window.title = title
-        // Only reaches the window's own edges, not the title bar, but it keeps
-        // a resize or a first paint from flashing the default grey.
+        // Reaches only the window's edges, but stops a resize or first paint flashing grey.
         window.backgroundColor = MacOSWindowColor.windowBackgroundColor
     }
 }
 
 // MARK: - Presentation
 
-/// Puts the Settings window in front of the user, centred on the display
-/// Notchline itself is on.
-///
-/// The `Settings` scene does neither on its own, and for this app both matter.
-/// Its only permanent surface is in the notch, so the request almost always
-/// arrives while some *other* app is active: SwiftUI orders the window front
-/// within this app and this app stays behind, which from the outside is a gear
-/// that was clicked and did nothing. And the window reopens on whichever screen
-/// it was last closed on — on a second display, that is behind the user rather
-/// than in front of them.
-///
-/// So: activate, and centre the window on the screen the component is on. That
-/// screen rather than the one holding the keyboard focus, because it is the
-/// screen this window is *about* — every control in it changes something the
-/// user can only see in the notch, and one of them chooses which display the
-/// notch is on, so the change and the thing it changes stay in one glance. It is
-/// also an answer that does not move while the window is being ordered, which
-/// the focused screen never was: read a moment too late and the focused window
-/// is Settings itself.
-///
-/// Every open, not only the opens that cross a screen boundary. Placing the
-/// window does discard a position the user dragged it to, which is a real cost
-/// and the one this deliberately pays: a window that is sometimes centred and
-/// sometimes wherever it was left is a window the user has to go and find.
-///
-/// And always while the window is off screen — that is what the two hooks are
-/// for. `SettingsWindowTracker` reports the window as the view enters it, which
-/// is before SwiftUI has ordered it anywhere, and the `isVisible` observation
-/// puts it back on the right display the moment it is *hidden*, so the frame it
-/// will next be shown at is already the right one. Placing it after it appears
-/// is what the user sees as a flash: the window arriving on the display it was
-/// last closed on and stepping across to this one a frame or two later.
+/// Activates the app (the `Settings` scene only orders the window front within it) and centres
+/// the window on Notchline's display. Placed while off screen, via `SettingsWindowTracker` and
+/// the `isVisible` observation, so it never visibly jumps.
 @MainActor
 enum SettingsWindowPresenter {
     private static weak var window: NSWindow?
     private static var visibility: NSKeyValueObservation?
 
-    /// Opens Settings frontmost, centred on Notchline's display.
     static func present(using openSettings: () -> Void) {
         openSettings()
         DispatchQueue.main.async { reveal() }
     }
 
-    /// Takes the window the `Settings` scene has just built, before it is on
-    /// screen.
-    ///
-    /// Also the hook for any *other* way this window opens. `⌘,` and the app
-    /// menu used to be one — they go through SwiftUI's own item, which this
-    /// app does not see — and are now gone entirely, because an `LSUIElement`
-    /// app has no menu bar to put that item in. Watching the window cross
-    /// between hidden and shown catches whatever is left, and is what places
-    /// the window anyway.
+    /// Takes the window the `Settings` scene has just built, before it is on screen; watching
+    /// hidden/shown also catches any other way it opens.
     static func track(_ window: NSWindow) {
         guard window !== Self.window else { return }
         Self.window = window
-        // A window left on another Space comes to this one rather than taking
-        // the user to it: what was asked for is Settings here, not a trip to
-        // wherever it was last closed.
+        // A window on another Space comes to this one.
         window.collectionBehavior.insert(.moveToActiveSpace)
         visibility = window.observe(\.isVisible, options: [.old, .new]) { window, change in
             guard change.oldValue != change.newValue else { return }
-            // KVO is delivered on the thread that ordered the window, which is
-            // the main one.
+            // KVO arrives on the thread that ordered the window: the main one.
             MainActor.assumeIsolated {
-                // Both edges, and the *hiding* one is the load-bearing half:
-                // it is the only moment the window can be moved with nobody
-                // watching. The showing edge is a second chance at a window
-                // that was somehow parked wrong, not the plan.
+                // Both edges; the hiding one is load-bearing, the only moment the window moves unseen.
                 place(window)
                 guard change.newValue == true else { return }
-                // Activation waits for the next turn rather than re-entering
-                // AppKit while it is still ordering this window.
+                // Activate on the next turn rather than re-entering AppKit while it orders this window.
                 DispatchQueue.main.async { reveal() }
             }
         }
@@ -1642,17 +1263,9 @@ enum SettingsWindowPresenter {
         DispatchQueue.main.async { reveal() }
     }
 
-    /// Centres the window on Notchline's display.
-    ///
-    /// Called only when the window cannot be seen — that is the whole design.
-    /// Moving a window that is already on screen is a window the user watches
-    /// jump, which is what this did when the move waited for the turn after
-    /// SwiftUI ordered the window front: it appeared on the display it was
-    /// last closed on, and stepped across to this one about `50 ms` later.
+    /// Called only while the window is unseen; a move after ordering front jumped ~`50 ms` later.
     private static func place(_ window: NSWindow) {
-        // `NSScreen.main` only as the answer of last resort: the chosen display
-        // has been unplugged since the store last looked, and a window with
-        // nowhere of its own to go still has to be somewhere.
+        // `NSScreen.main` only as a last resort, when the chosen display has been unplugged.
         guard let screen = MonitorStore.shared.selectedScreen ?? NSScreen.main
         else { return }
 
@@ -1664,22 +1277,9 @@ enum SettingsWindowPresenter {
         window.setFrameOrigin(origin)
     }
 
-    /// Brings the app and the window forward. The placing is `place`'s job and
-    /// has already happened by here; the call is repeated because `present`
-    /// reaches this on a window that was open all along.
-    ///
-    /// `ignoringOtherApps:` rather than the cooperative `NSApp.activate()`,
-    /// because the cooperative call is a **request** and this app has already
-    /// measured it being refused while returning as if it had not: at launch
-    /// for an accessory application (see ``AppDelegate``) and with a
-    /// full-screen application in the foreground (`tech-design.md` §14.2). A
-    /// refusal here *is* the defect this presenter exists to prevent — the
-    /// window is ordered to the front of this app's own list, this app stays
-    /// behind, and what the user sees is a gear that opened Settings somewhere
-    /// under the window they were already looking at. Ignoring other apps is
-    /// what the gear is entitled to do: it answers a click the user has just
-    /// made on this app's surface, which is the one moment an accessory
-    /// application taking the foreground is the thing that was asked for.
+    /// `ignoringOtherApps:`: the cooperative `NSApp.activate()` was measured refused while
+    /// returning normally, for an accessory app at launch (``AppDelegate``) and behind a
+    /// full-screen app (`tech-design.md` §14.2).
     private static func reveal() {
         guard let window else { return }
         place(window)
@@ -1688,19 +1288,14 @@ enum SettingsWindowPresenter {
     }
 }
 
-/// The arithmetic of putting the Settings window on a screen, kept apart from
-/// the window itself so it can be checked without one.
+/// The arithmetic of placing the Settings window, testable without a window.
 nonisolated enum SettingsWindowPlacement {
-    /// Centred across `visibleFrame`, with a third of the leftover height above
-    /// it — where macOS itself puts a window it is asked to centre, and higher
-    /// than the true middle because a window sitting on the optical centre of a
-    /// screen looks low.
+    /// Centred horizontally, with a third of the leftover height above, as macOS centres windows.
     static func origin(for size: NSSize, on visibleFrame: NSRect) -> NSPoint {
         let slack = max(0, visibleFrame.height - size.height)
         let x = visibleFrame.midX - size.width / 2
         let y = visibleFrame.maxY - size.height - slack / 3
-        // Clamped so a window wider or taller than the screen keeps its leading
-        // and top edges on it: that is where the title bar and the controls are.
+        // Clamped so an oversized window keeps its leading and top edges on screen.
         let rightmost = max(visibleFrame.maxX - size.width, visibleFrame.minX)
         return NSPoint(
             x: min(max(x, visibleFrame.minX), rightmost),
@@ -1709,12 +1304,8 @@ nonisolated enum SettingsWindowPlacement {
     }
 }
 
-/// Hands the Settings window to ``SettingsWindowPresenter`` as soon as the
-/// scene builds it.
-///
-/// Attached to the `Settings` scene rather than to ``AppSettingsView``, because
-/// that same view is what the first-run window shows once onboarding is done —
-/// and that window is not the one this is about.
+/// Hands the Settings window to ``SettingsWindowPresenter``. On the `Settings` scene, not
+/// ``AppSettingsView``, which the first-run window also shows.
 struct SettingsWindowTracker: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         WindowReportingView()
@@ -1722,12 +1313,8 @@ struct SettingsWindowTracker: NSViewRepresentable {
 
     func updateNSView(_ nsView: NSView, context: Context) {}
 
-    /// Reports its window the instant it has one.
-    ///
-    /// `makeNSView` is too early — the view is not in a window yet — and a hop
-    /// to the next turn is too late: SwiftUI orders the window on screen inside
-    /// that turn, so a frame set afterwards is a window the user watches jump.
-    /// `viewDidMoveToWindow` is the moment in between.
+    /// `viewDidMoveToWindow`: `makeNSView` is before the view has a window, and the next turn is
+    /// after SwiftUI orders it on screen.
     private final class WindowReportingView: NSView {
         override func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()

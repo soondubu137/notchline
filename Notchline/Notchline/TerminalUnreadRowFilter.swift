@@ -1,103 +1,50 @@
 import Foundation
 
-/// One row a refresh built, with the two instants the gate dates it against.
 nonisolated struct ReadGateCandidate: Sendable {
     let row: MonitoredSession
-    /// The Turn's own terminal instant, never a boundary a subagent moved
-    /// forward: reading is done to an answer, and the answer landed there
+    /// The Turn's own terminal instant, never a boundary a subagent moved forward
     /// (``HookTurnState/turnEndedAt``).
     let turnEndedAt: Date
-    /// When the *thread* stopped working, a subagent outliving the Turn
-    /// included. Only the settling window is measured from it.
+    /// When the thread stopped working, subagents included. Only the settling window uses it.
     let terminalBoundaryAt: Date
 }
 
-/// What a product's read evidence says about one row.
 nonisolated enum ReadGateVerdict: Sendable {
-    /// Nothing can ever say whether this row was read — no desktop record and
-    /// no terminal whose host could hold the front. Shown, and kept out of the
-    /// gate, so it books no re-check for a question with no possible answer
-    /// (CR-Fable-036). Such a row leaves on its Thread's next submission, when
-    /// the Thread goes away, or when the user removes it.
+    /// Nothing can ever say whether this row was read. Shown but kept out of the gate
+    /// (CR-Fable-036); it leaves on the next submission, when its Thread goes, or by removal.
     case cannotBeAsked
-    /// Judged by the gate against this reading. The gate asks the reading
-    /// whether the row's Thread is unread, whether it is authoritative, and
-    /// whether it reaches forward past the Turn's end.
+    /// Judged by this reading's unread set, authority and reach past the Turn's end.
     case judged(by: DesktopUnreadStateSnapshot)
 }
 
-/// What a product's evidence said about the rows of one refresh.
 nonisolated struct ReadEvidenceJudgement: Sendable {
     /// One verdict per row asked about, keyed by ``MonitoredSession/id``.
     let verdicts: [String: ReadGateVerdict]
-    /// What the readings behind them had to say about their own health.
+    /// The readings' own health.
     let diagnostic: String?
 }
 
-/// A product's evidence that a finished row has been read.
-///
-/// **The per-product half of read state**, and the only half: which rows are
-/// asked about, what is done with a verdict and when the gate looks again are
-/// ``TerminalUnreadRowFilter``'s. Codex's evidence is Desktop's unread set, read
-/// with its other Desktop state and handed to the filter directly; Claude
-/// Code's is the five routes of ``ClaudeCodeReadEvidence``; a CLI product's is
-/// its terminal (``TerminalReadEvidence``), which costs it one question —
-/// which process a Thread runs in.
+/// A product's evidence that a finished row was read; ``TerminalUnreadRowFilter`` owns the rest.
 protocol ReadEvidenceSource: Sendable {
-    /// Whether there is a screen the answer could be read on. The re-check a
-    /// row waiting on the user books is deferred while there is none, and this
-    /// stream's edge is what starts it again.
+    /// Whether there is a screen the answer could be read on. A waiting row's re-check is deferred
+    /// while there is none; this stream's edge restarts it.
     nonisolated var screen: any ScreenAvailabilityReporting { get }
-    /// A verdict for every candidate.
-    ///
-    /// Asked only when a finished row the user has not removed is listed, and
-    /// only about rows the user has not removed: the readings behind a verdict
-    /// are the expensive part, and no answer can change a list without such a
-    /// row (CR-Fable-041, CR-Fable-003).
-    ///
-    /// - Parameter now: The instant the verdicts' readings are a complete
-    ///   account up to, and the one the gate will judge them at.
+    /// Asked only when a finished, unremoved row is listed, and only about unremoved rows: the
+    /// readings are expensive (CR-Fable-041, CR-Fable-003). `now` is the instant judged at.
     func verdicts(for candidates: [ReadGateCandidate], now: Date) async -> ReadEvidenceJudgement
-    /// Nothing is waiting to be read: no finished row is listed, or nothing is
-    /// listed at all. Whatever the evidence keeps across refreshes about rows
-    /// it has judged goes.
+    /// No finished row is listed: drop whatever evidence is kept across refreshes.
     func forget() async
 }
 
-/// The terminal-unread membership gate applied to a refresh's rows: which
-/// finished rows stay listed until they have been read, and when to look at
-/// them again.
+/// The terminal-unread membership gate applied to a refresh's rows, shared by every Provider;
+/// only the verdict is per product (`tiered-support.md` §5.4).
 ///
-/// **Every Provider ran this loop, and each wrote it by hand.** Codex's
-/// service, Claude Code's and ``HookProductProvider`` each walked their rows,
-/// passed the dismissed ones through unjudged, kept rows nothing could answer
-/// for out of the gate, asked the gate about the rest, retained the gate to
-/// what was judged and sorted the result — three copies of rules whose every
-/// clause is a closed defect. What differs between products is only the
-/// verdict, which is the product's read evidence (`tiered-support.md` §5.4);
-/// this is the part that is not.
-///
-/// **The rules it holds**, and the defect each one closed:
-///
-/// - **A row the user has removed is judged by nobody.** It is still returned,
-///   because what a product lists is what it knows about, and a Provider that
-///   stopped listing a Turn would be telling the store the Turn had ended —
-///   the one thing that makes the store forget a removal (CR-Fable-004). It
-///   never enters the gate, whose entries book a re-check a second whether or
-///   not the row is on the notch (CR-Fable-003).
-/// - **Nothing is judged unless a finished row is listed.** A list of running
-///   rows would show every row and drop every entry, so the pass collapses to
-///   emptying the gate — and ``needsReadEvidence(_:dismissedRowIDs:)`` lets a
-///   product skip assembling evidence that could change none of it
-///   (CR-Fable-041).
-/// - **The gate is given the thread's status, not the row's.** A finished Turn
-///   with a subagent still in flight takes the running path, so the one row
-///   carrying the evidence that anything is still running cannot be erased a
-///   settling interval after an end the user has already read.
-/// - **The gate is retained to what was judged**, so an entry for a row that
-///   stopped being evaluated — a sub-agent thread, a dismissed row, a Thread
-///   that went away — cannot freeze mid-window and report a deadline no
-///   refresh can clear.
+/// - A removed row is returned but never judged: dropping it makes the store forget the
+///   removal (CR-Fable-004); gate entries book a re-check a second (CR-Fable-003).
+/// - Nothing is judged unless a finished row is listed (CR-Fable-041).
+/// - The gate gets the thread's status, so a finished Turn with a subagent in flight is not
+///   erased after its end was read.
+/// - The gate is retained to what was judged, so no stale entry reports an unclearable deadline.
 nonisolated struct TerminalUnreadRowFilter: Sendable {
     private var gate: TerminalUnreadMembershipGate
 
@@ -108,14 +55,8 @@ nonisolated struct TerminalUnreadRowFilter: Sendable {
         )
     }
 
-    /// Whether any row could be withheld by read evidence: a finished row the
-    /// user has not taken off the list.
-    ///
-    /// Asked of the row's own status rather than the thread's, which is the
-    /// wider of the two, so a product that skips its readings on `false`
-    /// never skips one the verdicts below would have used — a finished Turn
-    /// with a subagent running still records what its product can see about
-    /// it (Claude Code's on-screen membership is one such record).
+    /// Whether a finished, unremoved row is listed. Uses the row's status (wider than the
+    /// thread's), so skipping readings on `false` never skips one a verdict would use.
     static func needsReadEvidence(
         _ rows: [MonitoredSession],
         dismissedRowIDs: Set<String>
@@ -128,10 +69,8 @@ nonisolated struct TerminalUnreadRowFilter: Sendable {
 
     /// The rows to list, in row order.
     ///
-    /// - Parameter verdict: Asked only for rows that are not dismissed, and
-    ///   only when ``needsReadEvidence(_:dismissedRowIDs:)`` holds, so a
-    ///   product may compute its verdicts ahead of the call and look them up
-    ///   here.
+    /// - Parameter verdict: Asked only for undismissed rows and only when
+    ///   ``needsReadEvidence(_:dismissedRowIDs:)`` holds, so verdicts may be precomputed.
     mutating func rows(
         _ candidates: [ReadGateCandidate],
         dismissedRowIDs: Set<String>,
@@ -173,15 +112,12 @@ nonisolated struct TerminalUnreadRowFilter: Sendable {
         return shown.sorted(by: MonitorAggregation.rowOrder)
     }
 
-    /// Forgets every row. For a refresh that lists nothing, so nothing is
-    /// waiting to be read and no entry may go on booking a re-check.
+    /// Forgets every row, for a refresh that lists nothing, so no entry keeps booking a re-check.
     mutating func reset() {
         gate.reset()
     }
 
-    /// The settling window's end, or the re-check a row waiting on the user
-    /// books — see
-    /// ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``.
+    /// See ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``.
     func nextDeadline(now: Date, screenIsAvailable: Bool) -> Date? {
         gate.nextDeadline(now: now, screenIsAvailable: screenIsAvailable)
     }

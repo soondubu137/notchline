@@ -122,14 +122,8 @@ struct ApprovalPresentationTests {
         #expect(lines.joined() == source)
     }
 
-    /// And the bodies that are prose actually ask for that.
-    ///
-    /// §4.5 said so and the layout did not: a question, a plan and a document
-    /// all took `wrapped`'s default, so every line of a wrapped paragraph after
-    /// the first drew two spaces in from the one above it — a hanging indent
-    /// invented for shell arguments, applied to a sentence. Asserted through
-    /// ``RequestBodyLayout/laidOut(_:showing:expandedOptions:width:)`` rather
-    /// than against `wrapped` directly, because the call site is what was wrong.
+    /// §4.5: prose bodies take no hanging continuation indent. Asserted through
+    /// ``RequestBodyLayout/laidOut(_:showing:expandedOptions:width:)`` because the call site was wrong.
     @Test @MainActor
     func aProseBodyIsLaidOutWithoutTheCommandContinuationIndent() throws {
         let paragraph = "This is a long question about which database to use, "
@@ -156,11 +150,8 @@ struct ApprovalPresentationTests {
         }
     }
 
-    /// A command's continuation indent is untouched by that.
-    ///
-    /// §4.5's rule is machine text's and always was: on a shell command the
-    /// difference between a continuation and a new line is the difference
-    /// between one command and two.
+    /// §4.5's indent is for machine text: on a shell command a continuation versus a new line is
+    /// one command versus two.
     @Test @MainActor
     func aCommandBodyKeepsItsContinuationIndent() throws {
         let request = AgentRequest(
@@ -172,27 +163,13 @@ struct ApprovalPresentationTests {
         #expect(layout.lines.dropFirst().allSatisfy { $0.hasPrefix("  ") })
     }
 
-    /// Every line is as full as it can be, and none of them overflows.
-    ///
-    /// **The property the bisection has to keep.** The fitter used to measure
-    /// every prefix of a line in turn — one full text layout per character, on
-    /// a string a character longer each time — which made wrapping quadratic in
-    /// the length of a line and a realistic body `14 ms` to lay out. Width only
-    /// grows with length, so the first length that overflows can be bracketed
-    /// in `log n` measurements instead of `n`; what must not move is *where the
-    /// break lands*, and that is exactly this: the line fits, and one more
-    /// character of what follows would not have.
-    ///
-    /// Checked on an unbreakable token, where the break is at the character and
-    /// the assertion is exact, and on prose, where a break at a space is only
-    /// right if the word it moved down would not have fitted whole.
+    /// The property the bisection must keep: the line fits, and one more character would not.
+    /// Checked on an unbreakable token (exact) and on prose (the moved word would not have fitted).
     @Test @MainActor
     func aWrappedLineIsTheLongestOneThatFitsAndNeverOverflows() throws {
         let mono = PanelMetrics.machineTextFont
         let prose = PanelMetrics.proseFont
 
-        // A token with nowhere to break: every line but the last is exactly
-        // full, and one more glyph would put it over.
         for width in [37.0, 61.5, 140.0, 233.0] as [CGFloat] {
             let token = String(repeating: "abcdefghij", count: 12)
             let lines = AgentRequestReading.wrapped(
@@ -209,8 +186,6 @@ struct ApprovalPresentationTests {
             }
         }
 
-        // Prose, where the break moves back to the last space: the line fits,
-        // and the word that went down with it would not have.
         let paragraph = "Claude wants to run a command that will modify files "
             + "outside the current project directory, which is a change that "
             + "reaches past this checkout and is worth reading before granting."
@@ -231,14 +206,8 @@ struct ApprovalPresentationTests {
         }
     }
 
-    /// The slab always contains the viewport, at every offset a body can reach.
-    ///
-    /// **The one way §4.7 can be visibly wrong.** A window that lags the
-    /// viewport does not draw a line late; it draws nothing at all, and a
-    /// person scrolling a plan sees blank panel. It is arithmetic over two
-    /// numbers, so it is swept rather than sampled: every offset from the top
-    /// of the body to the end of its travel, on the two viewport heights an
-    /// open row can have and on bodies either side of the slab.
+    /// §4.7: a lagging window draws blank panel, not a late line. Swept over every offset, both
+    /// open-row viewport heights, and bodies either side of the slab.
     @Test @MainActor
     func theDrawnSlabAlwaysContainsTheViewport() throws {
         for lineCount in [1, 8, 60, 124, 125, 400, 4000] {
@@ -251,8 +220,7 @@ struct ApprovalPresentationTests {
                 for step in stride(from: 0.0, through: travel + 1, by: 3.0) {
                     let offset = min(step, travel)
                     guard let window = layout.drawnWindow(scrolledBy: offset) else {
-                        // Not windowed at all: every line is drawn, which is
-                        // the answer for anything shorter than the slab.
+                        // Not windowed: shorter than the slab, so every line is drawn.
                         #expect(layout.contentHeight <= layout.drawnHeight * 16)
                         continue
                     }
@@ -266,40 +234,25 @@ struct ApprovalPresentationTests {
         }
     }
 
-    /// Which of a run of stacked lines a window reaches, at its two edges.
-    ///
-    /// Inclusive both ways by construction, so a line the window only half
-    /// touches is drawn rather than clipped away — and clamped before the
-    /// integer conversion, because a run far from the window produces a
-    /// quotient that would otherwise trap rather than merely be wrong.
+    /// Inclusive both ways, so a half-touched line is drawn; clamped before integer conversion, so
+    /// a far-off run cannot trap.
     @Test @MainActor
     func aWindowReachesEveryLineItTouchesAndNoOthers() {
         let visible = RequestBodyLayout.visibleLines
-        // A run of ten 10pt lines from the top; a window over 25...45 touches
-        // lines 2, 3 and 4 (the third begins at 20 and the fifth at 40).
+        // Ten 10pt lines; 25...45 touches lines 2, 3 and 4.
         #expect(visible(10, 10, 0, 25...45) == 2..<5)
-        // Exactly on the boundaries takes the lines those boundaries open.
         #expect(visible(10, 10, 0, 20...40) == 2..<4)
-        // Shifted down the body by its own top.
         #expect(visible(10, 10, 100, 125...145) == 2..<5)
-        // Entirely above and entirely below are both empty, not negative.
         #expect(visible(10, 10, 1000, 0...50).isEmpty)
         #expect(visible(10, 10, 0, 5000...6000).isEmpty)
-        // A window past both ends is the whole run, and so is no window.
         #expect(visible(10, 10, 0, -500...5000) == 0..<10)
         #expect(visible(10, 10, 0, nil) == 0..<10)
-        // Degenerate inputs answer rather than trap.
         #expect(visible(0, 10, 0, 0...10).isEmpty)
         #expect(visible(10, 0, 0, 0...10) == 0..<10)
     }
 
-    /// A windowed body draws what the whole one drew, and stands as tall.
-    ///
-    /// **Rendered rather than reasoned about.** Both forms are hosted at the
-    /// body's full height and compared pixel for pixel inside the window: the
-    /// height is what the wheel's travel, the rail and §4.4's count are all
-    /// measured from, and the pixels are the promise that skipping the lines
-    /// nowhere near the viewport takes nothing off the screen.
+    /// Compared pixel for pixel at full height: the height drives the wheel's travel, the rail and
+    /// §4.4's count.
     @Test @MainActor
     func aWindowedBodyDrawsWhatTheWholeOneDrewAndStandsAsTall() throws {
         let text = (1...300)
@@ -326,7 +279,6 @@ struct ApprovalPresentationTests {
         for offset in [0.0, layout.drawnHeight * 9, layout.contentHeight - layout.drawnHeight] {
             let window = try #require(layout.drawnWindow(scrolledBy: offset))
             let windowed = try render(window)
-            // The viewport this offset shows, in the bitmap's own coordinates.
             let scale = CGFloat(whole.pixelsHigh) / layout.contentHeight
             let top = Int((offset * scale).rounded(.down))
             let bottom = min(

@@ -3,54 +3,25 @@ import Foundation
 
 /// Reads what Claude Code writes about a session in its own transcript.
 ///
-/// Two questions, and they are not the same kind of question. One is the title
-/// the product shows for the session, which is content and is read only when
-/// the user allows content. The other is whether the Turn a session is holding
-/// was **interrupted** -- the only place a user interrupt is recorded at all
-/// for a session the Claude Code desktop app hosts (CC-022), which reports no
-/// working status for the session-list route to read (see
-/// ``ClaudeCodeActivity``). That one is state, not content: it is read whatever
-/// the preview switch says, and no message text is decoded to answer it.
+/// - The title: content, read only when the user allows content.
+/// - Whether the held Turn was interrupted: state, read regardless of the preview switch and
+///   without decoding message text. For a Desktop-hosted session this is the only record of an
+///   interrupt (CC-022; see ``ClaudeCodeActivity``).
 ///
-/// **This is a private dependency.** The transcript is written by Claude Code
-/// for its own use and its record structure is not a published contract, so
-/// every rule below fails closed: an unreadable, unfamiliar or retitled file
-/// produces no title rather than a guess, and the row says `Untitled` — never
-/// the folder name, which the data-truth contract forbids standing in for one.
-///
-/// Registered in `docs/non-public-codex-integration-features.md`.
+/// Private dependency, registered in `docs/non-public-codex-integration-features.md`: every rule
+/// fails closed to no title, and the row says `Untitled`, never the folder name.
 actor ClaudeCodeTranscriptReader {
-    /// How much of a transcript's tail is examined, and the size of one read.
-    ///
-    /// Transcripts reach tens of megabytes; one on this machine is 16 MB. The
-    /// most recent title is the right one, so the tail is read first, and a
-    /// session renamed while it runs is answered by that read alone.
+    /// How much of a transcript's tail is examined, and the size of one read. Transcripts reach tens
+    /// of megabytes (16 MB here); the tail holds the most recent title.
     static let scannedBytes = 64 * 1024
 
-    /// How many records from the start of a transcript are examined.
-    ///
-    /// A session titled when it opened and never again is why the head is read
-    /// as well -- and **the budget is records because that is the part of an
-    /// opening that holds still.** Measured across the 480 titled transcripts
-    /// on this machine on 2026-09-11: the first title record is record 33 at
-    /// the latest (99th percentile 31), while the *byte* offset it sits at runs
-    /// from 0 to 371 KB. What stands in front of it is the opening Claude Code
-    /// writes before the conversation starts, and what makes that big is the
-    /// machine rather than the session -- the listings of skills, plugins,
-    /// agents and MCP servers the session was started with. Here that opening
-    /// reached 87 KB with one `skill_listing` record of 48 KB in it, which is
-    /// how the 64 KiB window this read used to share with the tail stopped
-    /// reaching the title: a live session drew `Untitled` while its own
-    /// transcript held the name in record 12, and 129 of those 480 transcripts
-    /// are past that window.
+    /// How many records from the start of a transcript are examined, for a session titled only when
+    /// it opened. Records, not bytes: over 480 transcripts (2026-09-11) the first title record is at
+    /// most record 33, but at byte offsets up to 371 KB behind skill, plugin and MCP listings.
     static let scannedHeadRecords = 128
 
-    /// The ceiling on the head read, whatever the record budget says.
-    ///
-    /// One record can be enormous, so a budget counted only in records is not a
-    /// bound at all. This is what keeps "read the head" from ever becoming
-    /// "read the whole file", and 1 MiB clears the widest opening seen here
-    /// about three times over.
+    /// The ceiling on the head read, since one record can be enormous; 1 MiB clears the widest
+    /// opening seen here about three times over.
     static let scannedHeadBytes = 1024 * 1024
 
     private struct CacheEntry {
@@ -59,48 +30,27 @@ actor ClaudeCodeTranscriptReader {
         let title: String?
     }
 
-    /// What one scan of a transcript's opening found, and how far it got.
-    ///
-    /// Kept apart from ``CacheEntry`` because it turns on a different fact. A
-    /// transcript is appended to, so the bytes this scan read are the same
-    /// bytes at every later refresh and its answer outlives the `(size,
-    /// mtime)` changes that retire the entry above -- which is what stops a
-    /// live session whose title is only in its opening from paying for that
-    /// opening once a second. Measured under `-O` against the transcripts here
-    /// on 2026-09-11: such a row costs 296 us and 64 KB a refresh with this,
-    /// and 893 us and 192 KB without -- against the 708 us and 128 KB the two
-    /// fixed windows cost while returning no title at all. Only a *shorter*
-    /// file can mean those bytes are gone, and that is a transcript replaced
-    /// rather than appended to.
+    /// What one scan of a transcript's opening found. Apart from ``CacheEntry``: appends leave the
+    /// opening unchanged, so only a shorter (replaced) file invalidates it (296 us vs 893 us a
+    /// refresh, `-O`, 2026-09-11).
     private struct HeadEntry {
         let title: String?
-        /// How far into the file the scan read.
         let scannedThrough: Int
-        /// Whether the scan stopped because the file ended rather than because
-        /// a budget did. An answer that ran out of file can be changed by the
-        /// next record appended -- a session is untitled for the moment before
-        /// it is named -- so only the other kind is final.
+        /// Whether the scan hit end of file rather than a budget; only a budget-stopped answer is final,
+        /// since the next appended record can name the session.
         let ranOutOfFile: Bool
     }
 
-    /// The last interruption in one transcript's tail, and the state the file
-    /// was in when it was read.
-    ///
-    /// Cached separately from the title rather than beside it, because the two
-    /// reads are asked for under different conditions: a title only when the
-    /// user allows content, an interruption on every refresh that has a Turn to
-    /// end. One entry holding both would make the cheaper question wait on the
-    /// switch that governs the other.
+    /// The last interruption in one transcript's tail, and the file state it was read at. Cached
+    /// apart from the title, which is read only when content is allowed.
     private struct InterruptionEntry {
         let size: Int
         let modifiedAt: Date
         let interruption: Interruption?
     }
 
-    /// A Turn the transcript records as having been interrupted.
     private struct Interruption {
-        /// The Turn it names, which is the hook's `prompt_id` -- see
-        /// ``interruption(forSession:workingDirectory:turnID:after:)``.
+        /// The hook's `prompt_id`; see ``interruption(forSession:workingDirectory:turnID:after:)``.
         let turnID: String
         let at: Date
     }
@@ -122,7 +72,6 @@ actor ClaudeCodeTranscriptReader {
         self.fileManager = fileManager
     }
 
-    /// The session's title, or nil when none can be read.
     func title(forSession sessionID: String, workingDirectory: URL) -> String? {
         guard let url = transcriptURL(
             forSession: sessionID,
@@ -131,8 +80,7 @@ actor ClaudeCodeTranscriptReader {
             return nil
         }
 
-        // A transcript is appended to constantly, so re-reading one that has
-        // not grown is pure waste on every refresh of every row.
+        // Skip re-reading a transcript that has not changed; this runs every refresh for every row.
         let (size, modifiedAt) = Self.revision(of: url)
         if let cached = cache[sessionID],
            cached.size == size, cached.modifiedAt == modifiedAt {
@@ -146,46 +94,14 @@ actor ClaudeCodeTranscriptReader {
 
     /// When the Turn this session is holding was interrupted, if it was.
     ///
-    /// **This is the only report an interrupt makes for a desktop-hosted
-    /// session.** No hook fires for one (ADR 0011), and the working status the
-    /// CLI publishes -- which is what ends an interrupted Turn everywhere else
-    /// -- is written by the terminal interface the desktop app does not run, so
-    /// those sessions never carry it (CC-022). What is left is that Claude Code
-    /// writes a `user` record at the moment it aborts, and that record names the
-    /// Turn it aborted.
+    /// A Desktop-hosted session's only interrupt report (no hook, ADR 0011; no status, CC-022) is a
+    /// `user` record with exactly one `text` block, no `promptSource`, no `isMeta`: over 7,438 `user`
+    /// records (2026-08-19) it matched 15 of 15 interrupts and nothing else; the block-shape clause
+    /// excludes slash-command records, some followed by more work. Its `promptId` is the hooks'
+    /// `prompt_id` (2.1.237), so it ends only that Turn.
     ///
-    /// **It reads no message text, and does not need to.** The rule is
-    /// structural: a `user` record whose message carries exactly one `text`
-    /// block, with no `promptSource` and no `isMeta`. Surveyed over every
-    /// transcript on this machine on 2026-08-19 -- 205 files, 7,438 `user`
-    /// records -- it matched 15 of 15 interrupt records and **nothing else at
-    /// all**. The rule the issue proposed was one clause weaker (it did not ask
-    /// about the shape of `content`) and that clause is the whole of it: the 202
-    /// records that separate the two are slash-command and
-    /// `<local-command-stdout>` records, which carry their content as a plain
-    /// string rather than as blocks. They are not harmless, either, which is why
-    /// this was measured rather than reasoned about: 23 of them are followed by
-    /// the model working on the same `promptId`, so a rule that matched them
-    /// would retire Turns that were still running -- the one direction this app
-    /// is not allowed to be wrong in.
-    ///
-    /// **It names the Turn, so it may only end that one.** The record's
-    /// `promptId` is the same value the hooks call `prompt_id`, which is the
-    /// reducer's Turn identity: measured on 2.1.237 with a hook listener of its
-    /// own, `UserPromptSubmit` and the interrupt record carried the same id.
-    /// That is a stronger footing than the session-status route has -- that one
-    /// names no Turn and can only speak about whichever one the reducer holds --
-    /// and it is what makes the remaining difference between an interrupt record
-    /// and a genuine prompt (`promptSource`) safe to lean on: a prompt opens a
-    /// Turn under a *new* id, so even a version that stopped writing
-    /// `promptSource` could not make one end the Turn it starts.
-    ///
-    /// - Parameter after: The Turn's last known moment. A record older than
-    ///   that describes an earlier Turn of the same session, or the same
-    ///   interrupt already applied.
-    /// - Returns: When the interrupt was written, or nil when there is none to
-    ///   report. Only the newest record in the tail is considered, which is the
-    ///   one an interrupt would be.
+    /// - Parameter after: The Turn's last known moment; older records are earlier or applied.
+    /// - Returns: When the interrupt was written, or nil. Only the newest tail record counts.
     func interruption(
         forSession sessionID: String,
         workingDirectory: URL,
@@ -199,8 +115,7 @@ actor ClaudeCodeTranscriptReader {
             return nil
         }
 
-        // A transcript that has not changed cannot have gained a record, and
-        // this is asked once per refresh for every Turn still going.
+        // An unchanged transcript cannot have gained a record; asked every refresh per running Turn.
         let (size, modifiedAt) = Self.revision(of: url)
         let interruption: Interruption?
         if let cached = interruptions[sessionID],
@@ -223,7 +138,6 @@ actor ClaudeCodeTranscriptReader {
         return interruption.at
     }
 
-    /// Drops what is remembered about sessions that no longer exist.
     func retain(sessionIDs: Set<String>) {
         cache = cache.filter { sessionIDs.contains($0.key) }
         heads = heads.filter { sessionIDs.contains($0.key) }
@@ -233,22 +147,15 @@ actor ClaudeCodeTranscriptReader {
 
     // MARK: - Locating
 
-    /// The file this session's records are written to, or nil when it cannot be
-    /// found.
-    ///
-    /// Not private, because the low-latency half of ending an interrupted Turn
-    /// is a watch on that file and the path rule lives here -- see
-    /// ``ClaudeCodeMonitorService``. Resolving is cached, so asking every
-    /// refresh costs a `fileExists` and no directory scan.
+    /// The file this session's records are written to, or nil when it cannot be found.
+    /// Not private: ``ClaudeCodeMonitorService`` watches it. Resolution is cached.
     func transcriptURL(forSession sessionID: String, workingDirectory: URL) -> URL? {
         if let known = resolvedPaths[sessionID],
            fileManager.fileExists(atPath: known.path) {
             return known
         }
 
-        // Claude Code names a project directory after the working directory
-        // with every separator replaced. Verified against this machine, but it
-        // is an observation, so it is only ever a first guess.
+        // Project directory = working directory with separators replaced. Observed, so only a first guess.
         let slug = workingDirectory.standardizedFileURL.path
             .replacingOccurrences(of: "/", with: "-")
         let guess = projectsDirectory
@@ -259,9 +166,7 @@ actor ClaudeCodeTranscriptReader {
             return guess
         }
 
-        // The fallback needs only the weaker fact that a transcript is named
-        // after its session, so a change to the directory rule alone does not
-        // cost the title.
+        // The fallback relies only on a transcript being named after its session.
         let directories = (try? fileManager.contentsOfDirectory(
             at: projectsDirectory,
             includingPropertiesForKeys: nil
@@ -278,19 +183,9 @@ actor ClaudeCodeTranscriptReader {
 
     // MARK: - Reading
 
-    /// The size and modification date the caches above are keyed by, from one
-    /// `stat`.
-    ///
-    /// `FileManager.attributesOfItem` answers the same two, and gets there by
-    /// listing the file's extended attributes and reading each one back,
-    /// resolving the owner and group through Directory Services, and bridging
-    /// a dictionary of around twenty values. That is roughly fifty times the
-    /// work of the call below, and it is bought once per listed row per
-    /// refresh -- once a second while a finished row waits to be read.
-    ///
-    /// A file that cannot be stat'ed answers `(0, .distantPast)`, which is what
-    /// the unreadable case answered before: no cache entry matches it, so the
-    /// reading below is attempted and fails on its own terms.
+    /// The size and modification date the caches are keyed by, from one `stat`: roughly fifty times
+    /// cheaper than `FileManager.attributesOfItem`, and asked per row per refresh. A file that cannot
+    /// be stat'ed answers `(0, .distantPast)`, which matches no cache entry.
     nonisolated private static func revision(of url: URL) -> (Int, Date) {
         var status = stat()
         let read = url.withUnsafeFileSystemRepresentation { path -> Int32 in
@@ -324,14 +219,8 @@ actor ClaudeCodeTranscriptReader {
         return headTitle(forSession: sessionID, in: handle, size: size)
     }
 
-    /// The title in this transcript's opening, scanned at most once a session.
-    ///
-    /// See ``HeadEntry`` for why an answer survives the file changing. A scan
-    /// that ran out of file is the one answer that is not final, and it is
-    /// redone rather than resumed: it can only happen to a transcript below the
-    /// ceiling with no title anywhere in it -- 3 of the 427 over 64 KiB here --
-    /// and resuming would buy an offset and a record count of state for those
-    /// three.
+    /// The title in this transcript's opening, scanned at most once a session (see ``HeadEntry``).
+    /// A scan that ran out of file is redone, not resumed: only 3 of 427 transcripts over 64 KiB.
     private func headTitle(
         forSession sessionID: String,
         in handle: FileHandle,
@@ -347,11 +236,8 @@ actor ClaudeCodeTranscriptReader {
         return scanned.title
     }
 
-    /// - Note: Pooled, like every `FileHandle` read in this app. The `Data` it
-    ///   hands back is autoreleased, and on a thread with no pool of its own
-    ///   nothing ever drains it -- 64 KB per title, per session, on every
-    ///   refresh, kept for the life of the process. `jsonLines` copies the part
-    ///   worth keeping, so draining the rest costs nothing.
+    /// - Note: Pooled: the `FileHandle` `Data` is autoreleased and would never drain on this thread
+    ///   (64 KB per title, per session, per refresh).
     private func tail(of handle: FileHandle, size: Int) -> [Data] {
         let offset = max(0, size - Self.scannedBytes)
         try? handle.seek(toOffset: UInt64(offset))
@@ -364,19 +250,11 @@ actor ClaudeCodeTranscriptReader {
         return lines
     }
 
-    /// Reads forward from the start until a title turns up or a budget runs
-    /// out.
+    /// Reads forward from the start until a title turns up or a budget runs out (records; see
+    /// ``scannedHeadRecords``).
     ///
-    /// Records, not bytes -- see ``scannedHeadRecords``. The file is still
-    /// taken in ``scannedBytes`` chunks, and each chunk is cut at its last
-    /// complete record: a transcript is being appended to, so its final line is
-    /// usually a fragment, and a fragment here would also be the start of the
-    /// next chunk. The record budget is therefore spent a chunk at a time --
-    /// one read always happens, which is exactly the window this used to be,
-    /// and the scan ends with the chunk that exhausts the count. Only the lines
-    /// that could name a title are kept, which is what makes holding a whole
-    /// scan's worth of them cost nothing: an opening's bulk is a handful of
-    /// enormous listing records and not one of them is retained.
+    /// Taken in ``scannedBytes`` chunks, each cut at its last complete record; at least one read
+    /// always happens. Only lines that could name a title are kept.
     ///
     /// - Note: Pooled, for the reason given on ``tail(of:size:)``.
     private func head(of handle: FileHandle) -> HeadEntry {
@@ -399,8 +277,7 @@ actor ClaudeCodeTranscriptReader {
             }
             read += chunk.count
             pending.append(chunk)
-            // A chunk that carries no record boundary at all is a record longer
-            // than one read; it is the byte ceiling that ends those, not this.
+            // No boundary in the chunk: a record longer than one read; the byte ceiling ends those.
             guard let newline = pending.lastIndex(of: UInt8(ascii: "\n")) else { continue }
             let complete = Data(pending[..<newline])
             pending = Data(pending[pending.index(after: newline)...])
@@ -433,20 +310,12 @@ actor ClaudeCodeTranscriptReader {
 
     nonisolated private static let titleMarker = Data(#"-title""#.utf8)
 
-    /// Whether a record could be one of the two this reader decodes.
-    ///
-    /// Both spell their type with `-title"`, and the writer is `JSON.stringify`
-    /// -- which escapes neither a hyphen nor a letter -- so a record without
-    /// those bytes cannot be a title however it is laid out. Asked before
-    /// decoding for the reason the token counter asks for `"usage"` first: a
-    /// transcript's opening carries single records of tens of kilobytes (48 KB
-    /// of `skill_listing` on this machine), and the tail is decoded once a
-    /// second per listed row.
+    /// Whether a record could be a title record: both type names contain `-title"`, which
+    /// `JSON.stringify` never escapes. Tested before decoding; openings hold records of tens of KB.
     nonisolated private static func mayName(aTitle line: Data) -> Bool {
         line.range(of: titleMarker) != nil
     }
 
-    /// The last title in these records, preferring one the user set.
     private func title(in lines: [Data]) -> String? {
         let decoder = JSONDecoder()
         var aiTitle: String?
@@ -455,8 +324,7 @@ actor ClaudeCodeTranscriptReader {
                   let record = try? decoder.decode(TitleRecord.self, from: line) else {
                 continue
             }
-            // A title the user typed outranks one the product generated,
-            // wherever each sits in the file.
+            // A user-typed title outranks a generated one wherever each sits.
             if record.type == "custom-title", let title = normalized(record.customTitle) {
                 return title
             }
@@ -470,23 +338,17 @@ actor ClaudeCodeTranscriptReader {
     private func readInterruption(at url: URL, size: Int) -> Interruption? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
-        // The tail only, and no second look at the head: an interrupt is the
-        // last thing written to the file it happened in. The title read looks
-        // at both ends because a title can be old; this cannot.
+        // The tail only: an interrupt is the last thing written to its file.
         return interruption(in: tail(of: handle, size: size))
     }
 
-    /// The fields the rule asks about. **There is no text field**, exactly as
-    /// ``AgentHookListener``'s decoder has none: the shape of the message is
-    /// state, its content is not, and nothing here should be able to hold the
-    /// latter by accident.
+    /// The fields the rule asks about. No text field, as in ``AgentHookListener``: message shape is
+    /// state, content is not.
     private struct InterruptionRecord: Decodable {
         let type: String?
-        /// The Turn, spelled as the transcript spells it. It is the hook's
-        /// `prompt_id`.
+        /// The hook's `prompt_id`.
         let promptID: String?
-        /// Present on every genuine prompt, absent on the record an interrupt
-        /// writes.
+        /// Present on every genuine prompt, absent on an interrupt record.
         let promptSource: String?
         let isMeta: Bool?
         let timestamp: String?
@@ -497,11 +359,8 @@ actor ClaudeCodeTranscriptReader {
             case promptID = "promptId"
         }
 
-        /// A message reduced to the *types* of its blocks.
         struct Message: Decodable {
-            /// Nil when `content` is not a list of blocks at all -- which is how
-            /// a slash-command record is written, and the clause that keeps this
-            /// rule off it.
+            /// Nil when `content` is not a block list, as in a slash-command record.
             let blockTypes: [String]?
 
             private struct Block: Decodable {
@@ -520,7 +379,6 @@ actor ClaudeCodeTranscriptReader {
         }
     }
 
-    /// The newest interrupt record in these lines, if one of them is.
     private func interruption(in lines: [Data]) -> Interruption? {
         let decoder = JSONDecoder()
         for line in lines.reversed() {
@@ -538,12 +396,8 @@ actor ClaudeCodeTranscriptReader {
         return nil
     }
 
-    /// A record's `timestamp`, which is RFC 3339 in UTC.
-    ///
-    /// Both forms are accepted. Every interrupt record seen carries fractional
-    /// seconds, and a formatter configured for them rejects a timestamp without
-    /// them outright -- so the plain form is tried as well rather than letting a
-    /// record that is otherwise an interrupt fall silently out of the scan.
+    /// A record's RFC 3339 UTC `timestamp`, with or without fractional seconds (a fractional
+    /// formatter rejects the plain form).
     private func instant(_ value: String?) -> Date? {
         guard let value else { return nil }
         let formatter = ISO8601DateFormatter()

@@ -1,26 +1,13 @@
 import Foundation
 import os
 
-/// Reports what this app's quota readings have left on Claude Code's disk.
+/// Reports what this app's quota readings have left on Claude Code's disk: one ~3.4 KB
+/// transcript per reading, never removed.
 ///
-/// Every reading is a real Claude Code session, so every reading writes a
-/// transcript — about 3.4 KB of it — into Claude Code's own project directory,
-/// and nothing removes them. One file per reading, for the life of the machine.
-///
-/// **It reports; it never deletes.** An earlier version of this cleared the
-/// folder at launch, and it did not survive being asked whether it was safe.
-/// Claude Code files a session under a directory named after its working
-/// directory, and that name flattens separators *and* spaces, so it is not
-/// one-to-one: measured on 2.1.234, `…/a b` and `…/a-b` are filed in the *same*
-/// directory. A folder holding this app's transcripts can therefore hold
-/// somebody's real work as well, and while each file can be made to prove
-/// whose it is, none of that is worth the residue of risk in deleting a user's
-/// session history unasked. So the size goes in Settings with a button to the
-/// folder, and the decision stays with the person whose files they are.
-///
-/// The folder is still found rather than derived, for the same reason it always
-/// was: the naming rule is not published, and a wrong guess would point the
-/// user at somebody else's transcripts.
+/// Reports, never deletes: project folder names flatten separators and spaces (`…/a b` and
+/// `…/a-b` share one on 2.1.234), so a folder can hold the user's real work. Settings shows the
+/// size with a button to the folder. The folder is found, not derived: the naming rule is
+/// unpublished.
 actor ClaudeCodeUsageTranscripts {
     private static let log = Logger(
         subsystem: "com.yinfenglu.Notchline",
@@ -35,9 +22,7 @@ actor ClaudeCodeUsageTranscripts {
     private var measured: AgentDiskFootprint?
     private var measuredAt: Date?
 
-    /// - Parameter freshness: How long a measurement stands. The folder grows
-    ///   by a file every reading, so a figure taken at launch would be wrong by
-    ///   the time anyone opened Settings on a machine left running.
+    /// - Parameter freshness: How long a measurement stands; the folder grows by a file per reading.
     init(
         projectsDirectory: URL? = nil,
         fileManager: FileManager = .default,
@@ -54,9 +39,8 @@ actor ClaudeCodeUsageTranscripts {
 
     /// Learns which folder the readings go to, from one that just happened.
     ///
-    /// - Parameter sessionID: The session the reading reported. It is somebody
-    ///   else's output about to become a path, so anything that is not plainly
-    ///   a UUID is refused rather than resolved.
+    /// - Parameter sessionID: The reported session; refused unless it is plainly a UUID, since it
+    ///   becomes a path.
     func noteReading(_ sessionID: String) {
         guard directory == nil, UUID(uuidString: sessionID) != nil else { return }
         let transcript = "\(sessionID).jsonl"
@@ -65,8 +49,7 @@ actor ClaudeCodeUsageTranscripts {
         }
     }
 
-    /// The transcripts and what they weigh, or nil until a reading has said
-    /// where they go.
+    /// The transcripts and what they weigh, or nil until a reading has said where they go.
     func footprint() -> AgentDiskFootprint? {
         guard let directory else { return nil }
         if let measured, let measuredAt,

@@ -76,33 +76,19 @@ struct NotchOverlayView: View {
                 VStack(spacing: 0) {
                     OverlayHeader()
                         .frame(height: store.compactHeight)
-                        // **`Privacy Mode`'s gesture** (`cover-the-words.md`
-                        // §5). The band is the one region every state draws,
-                        // and collapsed it is the whole surface -- so this is
-                        // "anywhere that is not a row", and it never stands
-                        // over a row's own secondary click.
-                        //
-                        // The *primary* press that opens a covered panel is
-                        // not here and cannot be: `acceptsFirstMouse` is
-                        // consulted for a primary press and not a secondary
-                        // one, so AppKit hit-tests before the event is the
-                        // app's current event and this catcher answers `nil`.
-                        // It is taken by the window, in
-                        // ``OverlayPanel/sendEvent(_:)``.
+                        // `Privacy Mode`'s gesture (`cover-the-words.md` §5): anywhere
+                        // that is not a row. The primary press that opens a covered panel
+                        // is taken by the window in ``OverlayPanel/sendEvent(_:)``, since
+                        // `acceptsFirstMouse` hit-tests a primary press before this runs.
                         .overlay {
                             SecondaryClickCatcher { store.togglePrivacyMode() }
                         }
 
                     if (store.isExpanded || bodyPresentation.isMounted),
                        !store.expandsToPillOnly {
-                        // One body or the other, never both: the About panel
-                        // is a mode this surface is in rather than a sheet
-                        // over the list, and its height is the panel's
-                        // (``MonitorStore/expandedContentHeight``). Swapped
-                        // without a cross-fade — the window is resizing under
-                        // it, and two bodies drawn at once during that resize
-                        // is a full overlay render per frame for a change the
-                        // user asked for and can see (`AGENTS.md` §7).
+                        // One body or the other, swapped without a cross-fade: two bodies
+                        // during the window resize is a full overlay render per frame
+                        // (`AGENTS.md` §7). Height is ``MonitorStore/expandedContentHeight``.
                         Group {
                             if store.isShowingAbout {
                                 AboutPanelContent()
@@ -119,13 +105,8 @@ struct NotchOverlayView: View {
                         .accessibilityHidden(!store.isExpanded)
                     }
                 }
-                // The window is one shoulder wider than the panel on each side,
-                // because that is where `PanelContour` draws the curve back up
-                // to the menu bar. Content is laid out in the body inside them,
-                // so its padding is measured from the black edge and not from
-                // an invisible window bound — and so is the region that answers
-                // to the pointer, which leaves the shoulders passing clicks
-                // through to the menu bar items they overhang.
+                // The window is one shoulder wider each side for `PanelContour`'s curve. Content and hit
+                // region sit inside, so shoulders pass clicks through to the menu bar.
                 .frame(
                     width: max(0, proxy.size.width - store.surfaceShoulderRadius * 2),
                     height: proxy.size.height,
@@ -157,30 +138,16 @@ struct NotchOverlayView: View {
     }
 
     private var panelAccessibilityLabel: String {
-        // **Today's spend, not a share.** It used to end `72% usage remaining`,
-        // read off `windows.first` — which is one window selected over the
-        // others, on a surface where no share is drawn at all until somebody
-        // opens the table (`quota-footer-v2.md` §4). Speaking one here handed a
-        // screen-reader user a figure nobody else could see, and picked which
-        // window it was. What the footer draws at rest is this.
+        // Today's spend, not a share: no share is drawn at rest (`quota-footer-v2.md` §4).
         let usage = store.footerToday.spokenText.lowercased()
-        // Spoken, not the "12:34" the notch draws: VoiceOver reads that as a
-        // time of day. The label names it as the longest of the running turns,
-        // because a bare duration beside a summary status is unattributable.
+        // Spoken, not "12:34", which VoiceOver reads as a time of day.
         let elapsed = store.spokenLongestElapsedText.map { ", longest running for \($0)" }
             ?? ""
-        // The counts column, which draws two figures and names neither: there
-        // is no product left for a collapsed numeral to belong to, so what is
-        // spoken is what the numerals mean rather than whose they are.
+        // The counts column names neither figure, so the meaning is spoken.
         let counts = store.spokenCollapsedCountsText ?? "nothing running"
-        // The breathing dot, which VoiceOver cannot see move. It is the one
-        // thing on this surface said by motion alone, so it has to be said here
-        // too -- §10's rule about colour, applied to the channel that replaced
-        // the column's own breath.
+        // The breathing dot is motion-only, so it is said here too (§10).
         let finished = store.spokenBuriedCompletionText.map { ", \($0)" } ?? ""
-        // **The status name stops being drawn and does not stop being said.**
-        // Neither collapsed form has a word on it any more; this is where that
-        // word went (`compact-view-v2.md` §7, §10).
+        // The status name is no longer drawn but is still spoken (`compact-view-v2.md` §7, §10).
         return "Notchline, \(counts), status "
             + "\(store.statusDisplayName)\(elapsed)\(finished), \(usage)"
     }
@@ -189,8 +156,7 @@ struct NotchOverlayView: View {
 private struct PanelSurface: View {
     let shoulderRadius: CGFloat
     let bottomRadius: CGFloat
-    /// See ``MonitorStore/drawsSurfaceOutline``. Static, and it has to stay
-    /// that way: §7 of `AGENTS.md` bans anything on this surface that ticks.
+    /// See ``MonitorStore/drawsSurfaceOutline``. Static: `AGENTS.md` §7 bans anything that ticks.
     let drawsOutline: Bool
 
     var body: some View {
@@ -201,18 +167,9 @@ private struct PanelSurface: View {
 
         contour
             .fill(.black)
-            // Everything but the top line, which is not this panel's edge but
-            // the screen's: the surface hangs from the very top of the display,
-            // so a rule drawn there reads as a line across the menu bar rather
-            // than as the boundary of the thing under it. The stroke therefore
-            // comes off an open path, from the top-right corner round to the
-            // top-left one, and ends flush with the top on both sides.
-            //
-            // Stroked at twice the width and clipped back to the closed shape,
-            // so the line lands wholly *inside* it. A centred stroke would lose
-            // its outer half along the bottom, which lies on the panel's own
-            // bounds and is clipped to them — leaving that edge half the
-            // thickness of the two sides.
+            // Every edge but the top, which is the screen's: an open path from top-right to top-left.
+            // Stroked at double width and clipped to the closed shape so the line lies wholly inside;
+            // a centred stroke would lose half along the bottom bounds.
             .overlay {
                 if drawsOutline {
                     PanelContour(
@@ -233,45 +190,21 @@ private struct PanelSurface: View {
 
 /// The cut-out's outline, stretched to whatever rect the panel occupies.
 ///
-/// Two radii, not one, because the notch has two: a small concave fillet where
-/// its sides meet the top of the display, and lower corners twice as round.
-///
-/// The upper fillets are true circular arcs — a quarter circle each, hence the
-/// `0.5523` handle — which is what the hardware edge is up there and what makes
-/// the panel read as the same object as the cut-out it grows out of rather than
-/// as a rounded rectangle pinned beneath it.
-///
-/// **The lower corners are not.** They are continuous corners: the curve begins
-/// ``PanelMetrics/smoothCornerReach(radius:)`` back along each straight edge
-/// and eases curvature up from zero before it reaches the arc, so the vertical
-/// side does not stop being straight at a findable point. That constant carries
-/// the reasoning; the shape of it is three segments per corner — ease in,
-/// circular arc, ease out — and at a smoothing of `0` it collapses back into
-/// the single quarter-circle cubic that used to be written here.
+/// Two radii like the notch: upper fillets are true quarter circles (`0.5523` handle); lower
+/// corners are continuous corners (``PanelMetrics/smoothCornerReach(radius:)``): ease in,
+/// circular arc, ease out. At smoothing `0` they reduce to a quarter-circle cubic.
 struct PanelContour: Shape {
     let shoulderRadius: CGFloat
     let bottomRadius: CGFloat
-    /// Whether the path spans the top of its rect, which is the one edge the
-    /// panel does not own.
-    ///
-    /// `true` for the black body and for anything clipping to it — the shape
-    /// has to be closed to be filled. `false` produces the same outline as an
-    /// open path running from the top-right corner round to the top-left one,
-    /// which is what the optional edge is stroked from: that top line lies on
-    /// the screen's own edge, and a line drawn along it is not this panel's
-    /// boundary but a rule across the top of the display.
+    /// Whether the path spans the top edge. `true` for filling and clipping; `false` gives the
+    /// open path from top-right to top-left that the outline is stroked from.
     var spansTopEdge = true
-    /// Exposed so the reduction to a circular corner can be asserted rather
-    /// than argued; nothing in the product passes anything but the default.
+    /// Exposed so the reduction to a circular corner can be asserted; the product uses the default.
     var bottomSmoothing = PanelMetrics.notchLowerCornerSmoothing
 
     func path(in rect: CGRect) -> Path {
-        // Each side of the shape spends one shoulder plus one lower corner, so
-        // that sum is what has to fit — down the side, and twice across the
-        // width. It is the corner's *reach* that is spent, not its radius: a
-        // smoothed corner starts further back along both edges than a circular
-        // one of the same radius. Clamping the pair together keeps their
-        // ratio, which is the part of the shape that carries the resemblance.
+        // Each side spends one shoulder plus one lower corner's *reach* (not radius). Clamping the
+        // pair together keeps their ratio.
         let smoothing = min(max(0, bottomSmoothing), 1)
         let requestedShoulder = max(0, shoulderRadius)
         let requestedBottom = max(0, bottomRadius)
@@ -300,10 +233,7 @@ struct PanelContour: Shape {
                 y: rect.minY + shoulder - shoulderControl
             )
         )
-        // Down the trailing side and round the bottom-right corner, then
-        // along the bottom and round the bottom-left one. Each call draws its
-        // own straight run in, so the corner decides where the straight edge
-        // ends rather than the two having to agree separately.
+        // Each call draws its own straight run in, so the corner decides where the edge ends.
         path.addSmoothCorner(
             vertex: CGPoint(x: rect.maxX - shoulder, y: rect.maxY),
             entering: CGVector(dx: 0, dy: 1),
@@ -335,32 +265,12 @@ struct PanelContour: Shape {
 }
 
 private extension Path {
-    /// Runs the straight edge into `vertex` and turns the corner there with a
-    /// continuous curve, leaving the current point on the outgoing edge.
+    /// Runs the straight edge into `vertex` and turns the corner there with a continuous curve,
+    /// leaving the current point on the outgoing edge.
     ///
-    /// `entering` and `leaving` are unit vectors: the direction the path is
-    /// already travelling, and the direction it travels after the turn. They
-    /// are perpendicular here — every corner this shape has is a right angle —
-    /// and the whole corner is written in the frame they make, which is what
-    /// lets one construction serve corners facing four different ways.
-    ///
-    /// Three segments, in the order they are drawn:
-    ///
-    /// 1. **Ease in.** A cubic whose two control points both lie *on* the
-    ///    incoming edge. Collinear control points mean zero curvature at the
-    ///    start, so the curve leaves the straight run the way the straight run
-    ///    arrives — no step, and nothing for the eye to find.
-    /// 2. **The arc.** A true circular arc of `radius`, but spanning only
-    ///    `90° × (1 - smoothing)` instead of the whole quarter turn, drawn as
-    ///    the single cubic that fits an arc of that angle (`4/3 · tan(θ/4)`).
-    /// 3. **Ease out.** The mirror of the first, landing on the outgoing edge
-    ///    with its curvature back at zero.
-    ///
-    /// The three together consume exactly `(1 + smoothing) · radius` along each
-    /// edge, which is why the caller sizes the straight runs from
-    /// ``PanelMetrics/smoothCornerReach(radius:)`` and not from the radius.
-    /// At `smoothing == 0` the first and third segments have zero length and
-    /// the second is the plain quarter-circle cubic.
+    /// Built in the frame of the perpendicular unit vectors `entering` and `leaving`: an ease-in
+    /// cubic on the incoming edge, an arc of `90° × (1 - smoothing)`, and the mirrored ease-out,
+    /// consuming ``PanelMetrics/smoothCornerReach(radius:)`` along each edge.
     mutating func addSmoothCorner(
         vertex: CGPoint,
         entering: CGVector,
@@ -368,9 +278,7 @@ private extension Path {
         radius: CGFloat,
         smoothing: CGFloat
     ) {
-        // Everything below is written as a step of `along` (the incoming
-        // direction) and a step of `across` (the outgoing one) from a point,
-        // so the arithmetic reads the same whichever way the corner faces.
+        // Written as steps `along` (incoming) and `across` (outgoing), so any orientation reads alike.
         func step(
             from origin: CGPoint,
             along: CGFloat,
@@ -390,25 +298,18 @@ private extension Path {
         }
 
         let reach = r * (1 + s)
-        // The circular arc keeps only what smoothing has not taken from it,
-        // and the easing segments turn the rest: `psi` each, so the three
-        // sweeps still add up to the right angle.
+        // The arc keeps what smoothing leaves; each easing segment turns `psi`.
         let arc = (.pi / 2) * (1 - s)
         let psi = (.pi / 4) * s
-        // The arc's endpoints, as a step along and a step across from where it
-        // starts: it is a chord at 45° to both edges, so the two are equal.
+        // The arc's chord is at 45° to both edges, so the along and across steps are equal.
         let chord = sin(arc / 2) * r * (2 as CGFloat).squareRoot()
-        // Where the easing segment hands over to the arc, measured from the
-        // point it started at on the straight edge.
+        // Where the easing segment hands over to the arc, from its start on the edge.
         let approach = r * tan(psi / 2) * cos(psi)
         let drop = approach * tan(psi)
-        // What is left of the reach after the arc and the handover, spread
-        // over the easing segment's two control points. `2:1` is the ratio
-        // that keeps the segment's own curvature rising evenly.
+        // The rest of the reach, split `2:1` over the control points so curvature rises evenly.
         let spread = (reach - chord - approach - drop) / 3
         let lead = 2 * spread
-        // A cubic fits an arc of `theta` with handles of `4/3 · tan(theta/4)`
-        // radii; at a right angle that is the familiar `0.5523`.
+        // A cubic fits an arc of `theta` with `4/3 · tan(theta/4)` radii handles.
         let handle = (4.0 / 3.0) * tan(arc / 4) * r
 
         let start = step(from: vertex, along: -reach, across: 0)
@@ -425,9 +326,7 @@ private extension Path {
             control1: step(from: start, along: lead, across: 0),
             control2: step(from: start, along: lead + spread, across: 0)
         )
-        // The arc's tangents run at `psi` to each edge — the angle the easing
-        // segments turned through — so its handles are laid on those, not on
-        // the edges themselves.
+        // The arc's tangents run at `psi` to each edge, so its handles lie on those.
         addCurve(
             to: arcEnd,
             control1: step(
@@ -454,22 +353,12 @@ private struct OverlayHeader: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            // **One leading group, and it is the whole of the band's leading
-            // side.** The mark stands at `12` and the totals at `32.6` whether
-            // the panel is open or shut, so expanding neither replaces nor adds
-            // anything here: the figure the eye was on when it hovered does not
-            // move, change colour or go away. The columns that used to fade in
-            // beside it — one per working agent, in that agent's own inks —
-            // went with the product hues that were the only thing on them
-            // saying whose a number was (`colour-v2.md` §3).
+            // One leading group: the mark at `12` and the totals at `32.6` stay put whether open or shut
+            // (`colour-v2.md` §3).
             CompactLeadingGroup()
 
-            // **The pill's middle, and only the pill's.** The notched bar has
-            // no middle to give: the cut-out is where one would stand, and the
-            // only way to give it one is a wing — `102` pt of black beside the
-            // hardware for the whole of every turn, which is the reservation
-            // both wings spent V1 and V2 getting rid of. That is permanent
-            // rather than deferred (`compact-view-v2.md` §5.2).
+            // Only the pill has a middle; the notched bar would need a `102` pt wing
+            // (`compact-view-v2.md` §5.2).
             if store.drawsCompactMiddle {
                 RotatingProjectName(
                     names: store.compactProjectNames,
@@ -486,31 +375,10 @@ private struct OverlayHeader: View {
                 CompactTrailingSlot()
             }
 
-            // The gear lives up here now rather than in the footer, for one and
-            // two products alike. The footer became three quota rules and had no
-            // room left; the top bar's trailing side is empty whenever the panel
-            // is open, because the compact timer only draws while collapsed.
-            //
-            // The mark stands to its left and opens the About panel. Both are
-            // controls on the app rather than on the work, so they are one
-            // group at the trailing edge, flush against each other
-            // (``PanelMetrics/expandedTrailingSideWidth``).
-            // **The peek, and only where there is something to lift**
-            // (`cover-the-words.md` §7). It stands flush to the left of the
-            // pair and grows into the slack between them and the counts, so
-            // the two controls a user has already learnt the position of do
-            // not move -- which is also why it is not a third member of that
-            // group: ``PanelMetrics/expandedTrailingSideWidth`` is two boxes
-            // wide and feeds ``PanelMetrics/restingExpandedWidth``, so a third
-            // would move the panel's own edge. Drawn only with rows on the
-            // list, which is the one form narrow enough for that width to
-            // bind.
-            //
-            // **Mounted on the room rather than on the mode**
-            // (``MonitorStore/keepsPeekRoom``), so switching `Privacy Mode`
-            // changes what is drawn in a box that is already there and the
-            // bars can draw themselves on and retract. The slack it stands in
-            // is what makes that free: an empty box moves nothing.
+            // The gear and About mark are one trailing group
+            // (``PanelMetrics/expandedTrailingSideWidth``). The peek (`cover-the-words.md` §7) stands
+            // outside it so ``PanelMetrics/restingExpandedWidth`` does not grow, mounted on
+            // ``MonitorStore/keepsPeekRoom`` so toggling `Privacy Mode` moves nothing.
             if store.keepsPeekRoom {
                 PeekButton()
             }
@@ -533,20 +401,14 @@ private struct OverlayHeader: View {
 
 /// The collapsed surface's leading wing: one aggregate mark, and the counts.
 ///
-/// **Nothing here is per product.** The mark draws the most urgent status any
-/// product is holding, in the ink the user has chosen rather than in one that
-/// says whose it is; the numerals count every row and every subagent on the
-/// list. So the wing moves when the *work* changes and never because something
-/// was installed — which is the whole of `compact-view-v2.md` §1, and worth
-/// `167` pt at five products against V1's per-product bar.
+/// Nothing here is per product (`compact-view-v2.md` §1): the mark draws the most urgent status
+/// in the user's ink and the numerals count every row and subagent.
 private struct CompactLeadingGroup: View {
     @EnvironmentObject private var store: MonitorStore
 
     var body: some View {
-        // Absent rather than empty on a notched bar with nothing to say: the
-        // cut-out is already a shape on the screen, and a grey mark beside it
-        // carries no information. Both other forms keep the mark, because a
-        // control that vanishes from the menu bar takes its position with it.
+        // Absent on a notched bar with nothing to say; the other forms keep the mark so the control
+        // keeps its position.
         if store.drawsCompactMarks {
             HStack(spacing: 0) {
                 NotchStatusMatrix(
@@ -560,10 +422,7 @@ private struct CompactLeadingGroup: View {
                         ? store.aggregateSubagentCount
                         : nil,
                     matrixSize: PanelMetrics.statusMatrixSize,
-                    // The pill is centred and fixed in width and the band is
-                    // sized from a baseline, so both hold the room open; the
-                    // notched bar is pinned to the cut-out and hugs what it
-                    // draws, because its leading edge is free to travel.
+                    // The pill and band hold room for two digits; the notched bar hugs what it draws.
                     reservesTwoDigits: store.geometry == .noNotch || store.isExpanded
                 )
             }
@@ -571,14 +430,8 @@ private struct CompactLeadingGroup: View {
         }
     }
 
-    /// The mark arriving into a wing that opened for it, or leaving before it
-    /// shuts — the same fade, and the same reasoning, as everything else that
-    /// stands in a slot on this surface.
-    ///
-    /// It earns its keep with `Hide the wings` on, where the whole group comes
-    /// out from behind the cut-out on its own account: at full ink from the
-    /// first frame it would be drawn *over* the cut-out for as long as the
-    /// panel's edge took to clear it.
+    /// Fades in and out so that, with `Hide the wings` on, the mark is not drawn over the cut-out
+    /// while the panel edge clears it.
     private static let wingFade = AnyTransition.asymmetric(
         insertion: .opacity.animation(PanelMotion.fade(isArriving: true)),
         removal: .opacity.animation(PanelMotion.fade(isArriving: false))
@@ -587,36 +440,15 @@ private struct CompactLeadingGroup: View {
 
 /// The collapsed surface's trailing wing: the elapsed reading.
 ///
-/// Present while a turn is timed, absent otherwise so a notched display shows
-/// no empty second cut-out. The expanded view times each row individually
-/// instead.
-///
-/// **The subagent badges have left it.** They were one tinted tile per product
-/// saying how many were in flight, and that count is now the leading wing's
-/// second numeral — aggregate, untinted, and inside the room the mark already
-/// had (`compact-view-v2.md` §3).
+/// Absent when no turn is timed, so a notched display shows no empty second cut-out. Subagent
+/// counts live in the leading wing (`compact-view-v2.md` §3).
 struct CompactTrailingSlot: View {
     @EnvironmentObject private var store: MonitorStore
 
-    /// The box the panel edge opens, held rather than computed so the write
-    /// that changes it can say which way the wing is going.
+    /// The box the panel edge opens, held so the write that changes it knows which way it goes.
     ///
-    /// **It is the panel's own trailing slot, drawn.** Every collapsed width is
-    /// composed from exactly this number
-    /// (`PanelMetrics.drawnTrailingReadingWidth`), so framing the reading to it
-    /// and drawing the glyphs from its leading edge makes the box and the
-    /// panel's edge two halves of one movement: both travel on the same curve,
-    /// and their difference — which is everything ahead of the reading — does
-    /// not change while they do. A digit therefore arrives at the far end with
-    /// the edge opening ahead of it, rather than the whole figure sliding
-    /// sideways to stay flush with an edge that moved first. On the notched bar
-    /// that leaves the reading standing ``PanelMetrics/expandedNotchClearance``
-    /// past the cut-out at every length it can draw; on the pill, which is
-    /// centred, the panel takes half the width on each edge and the reading
-    /// rides with it.
-    ///
-    /// Optional only until the first application, which places the box rather
-    /// than animating to it.
+    /// Framed to `PanelMetrics.drawnTrailingReadingWidth`, which composes every collapsed width, so
+    /// box and edge move on one curve. Nil until the first application, which places it.
     @State private var boxWidth: CGFloat?
 
     var body: some View {
@@ -631,30 +463,9 @@ struct CompactTrailingSlot: View {
                     )
                     .transition(Self.markFade)
             }
-            // The reading is drawn the one way, whatever the aggregate is:
-            // running's bare figure, neutral rather than tinted — it is the
-            // longest unfinished turn anywhere and belongs to no one product,
-            // so a hue would claim an owner it has not got. The waiting flip
-            // that used to put it on white lived here alone; the expanded rows
-            // keep their own three silhouettes (``ReadingGround``), where a
-            // row's ground is read against the rows beside it and says which of
-            // them wants the person. Up here there is nothing to read it
-            // against — one reading for every turn at once — and the white slab
-            // was the brightest thing on the bar for a state the matrix beside
-            // it already announces.
-            //
-            // The ground stays a `.clear` ``ReadingGround`` rather than no
-            // ground at all: it carries the padding both trailing widths bill
-            // for, so the composed bar width is unchanged.
-            //
-            // **Including when it has stopped**, which is the one thing the
-            // digits cannot say alone: the turn ends and the figure freezes at
-            // the length it reached. ~~and the ground it was already standing
-            // on fills.~~ **The ground is gone and the dot above says it**
-            // (``CompactTrailingReading/drawsFinishedDot``): that was two marks
-            // for one fact, a grey tile for a finished turn this wing could
-            // draw and a dot for one it could not. One meaning, one mark, and
-            // the wing was already drawing it.
+            // Always running's bare figure, neutral: it belongs to no one product. The `.clear`
+            // ``ReadingGround`` keeps the billed padding; a finished turn freezes the figure and draws
+            // the dot (``CompactTrailingReading/drawsFinishedDot``).
             if let span = store.compactReadingSpan {
                 ReadingGround(fill: .clear) {
                     ElapsedReadout(
@@ -669,15 +480,10 @@ struct CompactTrailingSlot: View {
             }
         }
         .frame(width: boxWidth, alignment: .leading)
-        // The transaction the two transitions above run in. They each carry
-        // their own curve, so what this supplies is only the fact that the
-        // change is animated at all -- and it is keyed on *what is present*
-        // rather than on the width, because a reading merely gaining a digit
-        // inserts and removes nothing and must not be faded.
+        // Keyed on what is present, not the width: gaining a digit must not fade.
         .animation(PanelMotion.animation, value: presence)
         .onChange(of: targetWidth, initial: true) { previous, width in
-            // The first application is the slot being built rather than a
-            // reading arriving: take the width rather than animating to it.
+            // The first application builds the slot: take the width, don't animate.
             guard boxWidth != nil, previous != width else {
                 boxWidth = width
                 return
@@ -688,71 +494,33 @@ struct CompactTrailingSlot: View {
         }
     }
 
-    /// The width this slot has to be, on either form: exactly its contents,
-    /// zero when it has none.
     private var targetWidth: CGFloat {
         store.compactDrawnTrailingReadingWidth
     }
 
-    /// Whether the wing draws the finished-turn dot, asked of the one value the
-    /// width is composed from so the drawing and the billing cannot disagree.
+    /// Read from the value the width is composed from, so drawing and billing agree.
     private var drawsFinishedDot: Bool {
         store.compactTrailingReading.drawsFinishedDot
     }
 
-    /// What the slot is currently drawing, as against how wide it is.
     private var presence: [Bool] {
         [store.compactReadingSpan == nil, drawsFinishedDot]
     }
 
-    /// Fading rather than appearing, because the wing they stand in is a width
-    /// that opens for them: a reading arriving at full ink would be drawn over
-    /// the cut-out for as long as the panel edge took to clear it.
+    /// Fades so a reading is not drawn over the cut-out while the panel edge clears it.
     private static let markFade = AnyTransition.asymmetric(
         insertion: .opacity.animation(PanelMotion.fade(isArriving: true)),
         removal: .opacity.animation(PanelMotion.fade(isArriving: false))
     )
 }
 
-/// Hold to read your own list, and let go to put it back
-/// (`cover-the-words.md` §7).
+/// Hold to read your own list, and let go to put it back (`cover-the-words.md` §7).
 ///
-/// **The reveal-password idiom, and it is chosen for what it cannot do.**
-/// `Privacy Mode` is a mode somebody turns on before a call and forgets; a
-/// second switch that also lifted the covers would be a second thing to
-/// forget, and the state it left behind would be indistinguishable from the
-/// mode being off. A control that is only true while it is held cannot be left
-/// on, and ``MonitorStore/isPeeking`` is cleared by the panel closing as well.
-///
-/// **A press, not a click.** `DragGesture(minimumDistance: 0)` is what reads
-/// the press and the release apart; a `Button` fires on the release and would
-/// give one frame of uncovered text at the moment the pointer let go, which is
-/// the opposite of what this control is for. It is not a `Button` for the
-/// accessibility tree either: a held press has no keyboard equivalent, so
-/// activation latches instead (``MonitorStore/togglePeek()``) and the label
-/// says which way the next one goes.
-///
-/// **The glyph is the covers, not a picture of looking.** An eye stood here
-/// first and is the wrong register for this surface: everything else the band
-/// draws is a geometric mark in the app's own vocabulary — a `5 × 5` matrix, a
-/// brand mark, a gear — and a pictograph among them reads as borrowed. Three
-/// stacked pills, short then medium then long, are the row this control lifts,
-/// drawn at glyph size in the bar's own corner: the button *is* what it acts
-/// on. Unequal widths and fully rounded ends are also what keep it from
-/// reading as a hamburger, which is three equal bars with square ends.
-///
-/// It does not change under the press. This surface says a control is on by
-/// being brighter and taking no ground (``AboutButton``), and a glyph that
-/// swapped for another mid-press would be a second thing moving under a finger
-/// already holding something down.
-///
-/// **It arrives as a drawing, not as a layout.** The box stands in the band for
-/// as long as a peek could be offered (``MonitorStore/keepsPeekRoom``) and the
-/// mode decides only whether the three bars are drawn in it, so turning
-/// `Privacy Mode` on and off animates a glyph rather than inserting and
-/// removing a control. Everything else about the box is switched off while it
-/// is empty: no press reaches the store, no hover fill is drawn, and
-/// accessibility does not see it.
+/// - A hold cannot be left on; ``MonitorStore/isPeeking`` also clears when the panel closes.
+/// - `DragGesture(minimumDistance: 0)`, not a `Button`, which fires on release and would flash
+///   uncovered text. Accessibility activation latches (``MonitorStore/togglePeek()``).
+/// - The box stays while ``MonitorStore/keepsPeekRoom``; the mode only draws the bars. Empty,
+///   it takes no press, draws no hover fill, and is hidden from accessibility.
 private struct PeekButton: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -762,7 +530,6 @@ private struct PeekButton: View {
         PanelMetrics.settingsButtonSize(compactHeight: store.compactHeight)
     }
 
-    /// Whether there is anything in the box — the covers being on.
     private var isDrawn: Bool { store.hasCoveredRows }
 
     var body: some View {
@@ -771,11 +538,7 @@ private struct PeekButton: View {
             isDrawn: isDrawn
         )
             .frame(width: size, height: size)
-            // The tile answers to the pointer **and** to whether the control is
-            // there: a fill under an empty box is a button nobody can see, and
-            // one that stayed lit while the bars retracted would outlive the
-            // control it belongs to. Both changes are animated, and the glyph's
-            // own stagger overrides this transaction for the bars.
+            // The fill needs hover and a drawn control, so it never outlives the bars.
             .background(
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(Color.white.opacity(isHovered && isDrawn ? 0.12 : 0))
@@ -783,18 +546,13 @@ private struct PeekButton: View {
             .animation(.easeOut(duration: 0.12), value: isHovered)
             .animation(PanelMotion.fade(isArriving: isDrawn), value: isDrawn)
             .contentShape(Rectangle())
-            // Tracked while the box is empty as well, so a mode switched on
-            // under a resting pointer finds the control already lit rather than
-            // waiting for the mouse to be jiggled.
+            // Tracked while empty too, so a mode switched on under a resting pointer is already lit.
             .onHover { isHovered = $0 }
             .gesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { _ in store.beginPeek() }
                     .onEnded { _ in store.endPeek() },
-                // An empty box takes no press. The store guards
-                // ``MonitorStore/beginPeek()`` anyway, but a gesture claiming
-                // this square would still be swallowing presses meant for the
-                // band underneath it.
+                // An empty box takes no press, so presses reach the band underneath.
                 including: isDrawn ? .all : .none
             )
             .accessibilityElement()
@@ -815,27 +573,18 @@ private struct PeekButton: View {
 
 /// Three pills in the covers' own proportions, at glyph size.
 ///
-/// The lengths are ``PanelMetrics/coverBarProjectLength`` and its two
-/// neighbours, held apart enough to be read at `13` pt rather than scaled
-/// literally: `64 : 160 : 224` puts the first at a fifth of the third, which
-/// at this size is a dot beside a line. What survives the rounding is the
-/// order and the character — short, medium, long — which is the row's own
-/// signature.
+/// Based on ``PanelMetrics/coverBarProjectLength`` and neighbours but spread apart: literal
+/// `64 : 160 : 224` reads as a dot beside a line at `13` pt.
 private struct PeekGlyph: View {
     let ink: Color
-    /// Whether the covers are on, which is the whole of this glyph's arrival:
-    /// `false` is an empty box rather than an absent one — see ``PeekButton``.
+    /// Whether the covers are on; `false` is an empty box, not an absent one (``PeekButton``).
     let isDrawn: Bool
 
     private static let widths: [CGFloat] = [0.46, 0.77, 1]
     private static let barHeight: CGFloat = 1.8
     private static let gap: CGFloat = 2.7
 
-    /// How far apart the three bars are dealt, going on and coming off.
-    ///
-    /// Small enough that what is read is one sweep down the glyph rather than
-    /// three separate events — the stagger is meant to be felt and not counted
-    /// — and shorter coming off, like every duration on this surface.
+    /// Delay between bars, going on and coming off; read as one sweep, shorter coming off.
     private static let stagger: TimeInterval = 0.05
     private static let unstagger: TimeInterval = 0.035
 
@@ -849,10 +598,8 @@ private struct PeekGlyph: View {
                 )
                 .fill(ink)
                 .frame(width: span * fraction, height: Self.barHeight)
-                // **Each bar keeps its width and grows out of the leading
-                // edge** — ``FoldSeamRule``'s transform, for its reason: the
-                // frame is the layout and the scale is the drawing, so nothing
-                // beside the glyph is re-laid out on any frame of this.
+                // Scaled from the leading edge, not resized, so nothing beside the glyph re-lays out
+                // (as ``FoldSeamRule``).
                 .scaleEffect(x: isDrawn ? 1 : 0, anchor: .leading)
                 .opacity(isDrawn ? 1 : 0)
                 .animation(Self.draw(isDrawn: isDrawn, index: index), value: isDrawn)
@@ -861,22 +608,9 @@ private struct PeekGlyph: View {
         .frame(width: span, alignment: .leading)
     }
 
-    /// One bar going on or coming off: **the band's own fade, dealt out a bar
-    /// at a time.**
-    ///
-    /// The curve and both durations are ``PanelMotion/fade(isArriving:)`` — the
-    /// same arrival every other mark in this band makes, and the same rule that
-    /// leaving is quicker than arriving — so the only thing this control adds
-    /// to the surface's vocabulary is the order.
-    ///
-    /// **And the order is the covers.** The glyph is the row it lifts, so it
-    /// goes on the way the covers go on: short, medium, long, top to bottom.
-    /// Coming off it reverses, which is what puts the long bar — the run of
-    /// preview text, the most of a row a stranger could read — out of the way
-    /// first the instant the mode ends. Nothing waits for it: the covers on the
-    /// rows themselves are up on the same frame the switch is thrown, and this
-    /// is a control retiring after the fact rather than an animation the
-    /// uncovering is held behind.
+    /// One bar going on or coming off: ``PanelMotion/fade(isArriving:)`` dealt a bar at a time,
+    /// short to long on, reversed off so the long bar goes first. The rows uncover immediately;
+    /// nothing waits for this.
     private static func draw(isDrawn: Bool, index: Int) -> Animation {
         let order = Double(isDrawn ? index : widths.count - 1 - index)
         return PanelMotion.fade(isArriving: isDrawn)
@@ -886,21 +620,9 @@ private struct PeekGlyph: View {
 
 /// The mark, which puts the app itself on the panel in place of the work.
 ///
-/// **It is the brand package's menu bar template, not a fresh drawing of the
-/// mark.** That file is the one the package draws for small sizes, and it is
-/// black at the level ramp's own alphas — so a template tint reproduces
-/// `1.00 / 0.80 / 0.60 / 0.40 / 0.20` in whatever ink the control is currently
-/// in. The app already carries the same five columns as a live status matrix;
-/// two drawings of one mark would be free to disagree, and one asset with one
-/// tint cannot.
-///
-/// It draws at ``PanelMetrics/bandControlGlyphSize``, which is the gear's own
-/// glyph size rather than the template's native `16`: this mark is a solid
-/// mass where `gearshape` is an outline, so matching the box would put a much
-/// heavier figure beside it — and at `16.6` it would be the status matrix on
-/// the other end of the same band, drawn a second time. The catalogue
-/// therefore carries that template resampled to `13`, so both scales are drawn
-/// `1 : 1` rather than through a resample that softens a `0.84` pt gap.
+/// The brand package's menu bar template, tinted so its alpha ramp follows the control's ink.
+/// Drawn at ``PanelMetrics/bandControlGlyphSize`` (the gear's), not the native `16`, from a
+/// `13` resample in the catalogue so the `0.84` pt gap stays sharp.
 private struct AboutButton: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -921,12 +643,7 @@ private struct AboutButton: View {
                     height: PanelMetrics.bandControlGlyphSize
                 )
                 .frame(width: size, height: size)
-                // **The fill answers to the pointer and the ink answers to
-                // both.** A control that is *on* is bright and takes no
-                // ground: the panel underneath it is already the state it
-                // announces, so a permanent tile would be the same fact drawn
-                // twice — and a tile that stayed lit after the pointer left
-                // would be the only unhovered fill on this surface.
+                // Fill answers to hover; ink answers to hover and on-state. An on control takes no ground.
                 .background(
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
                         .fill(Color.white.opacity(isHovered ? 0.12 : 0))
@@ -962,10 +679,8 @@ private struct SettingsButton: View {
 
     var body: some View {
         Button {
-            // Not `openSettings()` on its own: the click arrives while another
-            // app is active, so the window it orders comes up behind that app,
-            // and on the display it was last closed on rather than on the one
-            // this gear is drawn on. See ``SettingsWindowPresenter``.
+            // Not `openSettings()` alone: the window would come up behind the active app and on the
+            // display it last closed on. See ``SettingsWindowPresenter``.
             SettingsWindowPresenter.present { openSettings() }
         } label: {
             Image(systemName: "gearshape")
@@ -989,19 +704,11 @@ private struct SettingsButton: View {
     }
 }
 
-/// The panel below the band: the live list, the queue, the footer — and the
-/// rule that closes the band off from them.
+/// The panel below the band: the live list, the queue, the footer, and the band's closing rule.
 ///
-/// **That rule is drawn only while the list does not lead with a block
-/// heading.** A heading brings the same hairline, on the same two `x` values,
-/// and drawn together the two stood `24` apart with nothing said between them:
-/// one boundary drawn twice (`panel-v2.md` §3.4). The heading's is the one
-/// that keeps its name, so it takes the job — and, with its slack off
-/// (``PanelMetrics/leadingProductGroupHeaderHeight``), very nearly the
-/// position: `8` lower, which is the chip's own half.
-///
-/// With nothing live, or with one product connected and a flat list, no
-/// heading is drawn and the panel draws its own rule exactly as it always has.
+/// The rule is drawn only while the list does not lead with a block heading, which brings its
+/// own hairline `8` lower (`panel-v2.md` §3.4,
+/// ``PanelMetrics/leadingProductGroupHeaderHeight``).
 private struct ExpandedPanelContent: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -1023,36 +730,16 @@ private struct ExpandedPanelContent: View {
     }
 }
 
-/// The panel with the app on it instead of the work: the lockup, the version,
-/// the licence notice, and one control.
+/// The panel with the app on it instead of the work: lockup, version, licence, one control.
 ///
-/// **It replaces the body rather than covering it** — no rows, no queue, no
-/// footer — which is what lets its height be a constant
-/// (``PanelMetrics/aboutPanelHeight``) on a surface where every other height
-/// answers to what is running. A turn starting behind an open About panel
-/// moves nothing on screen.
-///
-/// **Centred, where the rest of this panel is a left margin.** Everything else
-/// here is a list: rows, a queue and a footer that share one leading edge so
-/// the eye can run down it. This is not a list of anything — it is the app
-/// giving its name, its version and its terms — and the centred column is what
-/// says so before a word is read.
-///
-/// Internal rather than private for the reason ``ActiveSessionList`` and
-/// ``OpenRow`` are: the height it draws at against the height the panel was
-/// sized to is the thing that can go wrong, and that is only checkable by
-/// laying the body out rather than by asking the metric it was composed from.
+/// Replaces the body, so its height is a constant (``PanelMetrics/aboutPanelHeight``).
+/// Internal so its laid-out height can be tested against the metric.
 struct AboutPanelContent: View {
     var body: some View {
         VStack(spacing: 0) {
-            // The dark-ground file, which is the one the package draws for
-            // this: on a dark ground the ramp is *blended* opaque ink
-            // (`#DEE8E0` down to `#424743`) rather than the thinned `#1B1F1C`
-            // the transparent file carries, and the thinned treatment on black
-            // is invisible by the second column. Its own ground is `#000000`,
-            // which is the black `PanelSurface` fills — the image has no edge
-            // on this panel because there is nothing for an edge to be
-            // between.
+            // The dark-ground file: its ramp is blended opaque ink (`#DEE8E0` to `#424743`); the
+            // transparent file's thinned `#1B1F1C` is invisible on black. Its ground is `#000000`,
+            // matching `PanelSurface`.
             Image("NotchlineLockup")
                 .resizable()
                 .interpolation(.high)
@@ -1090,9 +777,7 @@ struct AboutPanelContent: View {
         .padding(.horizontal, PanelMetrics.expandedHorizontalPadding)
         .frame(height: PanelMetrics.aboutPanelHeight, alignment: .top)
         .overlay(alignment: .top) {
-            // The rule that closes the band off, which the list draws too
-            // (``ExpandedPanelContent``). Unconditional here: this body has no
-            // block heading to bring one of its own.
+            // Unconditional here: this body has no block heading (``ExpandedPanelContent``).
             Rectangle()
                 .fill(NotchPalette.hairline)
                 .frame(height: 1)
@@ -1101,20 +786,14 @@ struct AboutPanelContent: View {
     }
 }
 
-/// The About panel's update control.
-///
-/// **It does nothing, and that is the whole of it for now**: no update
-/// mechanism is wired in, so the button is the place one will land rather than
-/// a path to one. It is drawn live rather than disabled because disabled says
-/// *not available here*, which is a different claim from *not built yet*.
+/// The About panel's update control. No update mechanism is wired in yet; drawn live rather
+/// than disabled, since disabled says *not available here*.
 private struct AboutUpdateControl: View {
     @State private var isHovered = false
 
     var body: some View {
         Button {
-            // Deliberately empty until an update mechanism exists. No sheet,
-            // no alert, no "coming soon" — the panel promises nothing it
-            // cannot do.
+            // Deliberately empty until an update mechanism exists.
         } label: {
             Text("Check for Updates")
                 .font(Font(PanelMetrics.requestControlFont))
@@ -1170,23 +849,12 @@ private struct AboutRepositoryLink: View {
     }
 }
 
-/// How much width to hand a scrolling list's `ScrollView` beyond the row
-/// block's own, so its content still lands on the panel's margin once
-/// `ScrollView` reserves room for a scroller.
+/// Extra width for a scrolling list's `ScrollView`, so content still lands on the panel's
+/// margin.
 ///
-/// **`ScrollView` shrinks the width it hands its content the instant that
-/// content is actually taller than the viewport**, to leave room for a
-/// scroller — matching System Settings' "Show scroll bars" set to `Always` —
-/// even though `.scrollIndicators(.hidden)` means nothing is ever drawn into
-/// that room. A list that fits needs no scroller and is handed the full width
-/// already; one that scrolls is not, which is why the row block's right edge
-/// sits on the panel's own margin collapsed and steps in the moment the list
-/// crosses its own cap.
-///
-/// Gated on `isScrolling` because the reservation itself is: adding it
-/// unconditionally would hand a list that already fits more width than the
-/// panel's margin allows, pushing its own trailing content past the crop
-/// below and cutting it off instead of leaving it be.
+/// `ScrollView` shrinks its content's width for a scroller once content is taller than the
+/// viewport (with "Show scroll bars" `Always`), even under `.scrollIndicators(.hidden)`. Gated on
+/// `isScrolling`: a list that fits already gets the full width and would be pushed past the crop.
 private func legacyScrollerGutter(isScrolling: Bool) -> CGFloat {
     guard isScrolling, NSScroller.preferredScrollerStyle == .legacy else {
         return 0
@@ -1194,32 +862,22 @@ private func legacyScrollerGutter(isScrolling: Bool) -> CGFloat {
     return NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)
 }
 
-/// The live session list: at least one row's worth of viewport — the apology
-/// when nothing is running — normally at most three, and its own scroller past
-/// that. An open question taller than three rows enlarges it enough to keep
-/// its own answer footer visible (§4.1).
-///
-/// **No longer shares a viewport, a cap or a scroller with the Recent
-/// queue** — each folds and scrolls entirely on its own now
-/// (``RecentSessionSection``).
-///
-/// Internal rather than private for the same reason ``RecentSessionSection``
-/// and ``OpenRow`` are: the height it draws at is the thing that went wrong
-/// against the height the panel was sized to, and that is only checkable by
-/// laying out the list itself rather than the metric behind it.
+/// The live session list: at least one row's viewport, normally at most three, scrolling past
+/// that; an open question taller than three rows enlarges it to keep its answer footer visible
+/// (§4.1). Scrolls independently of ``RecentSessionSection``. Internal so its laid-out height
+/// can be tested against the panel's.
 struct ActiveSessionList: View {
     @EnvironmentObject private var store: MonitorStore
     @Environment(\.overlayBodyWidth) private var overlayBodyWidth
 
     @State private var scrollOffset: CGFloat = 0
 
-    /// The full lane the list stands in, rail included: what the rail is
-    /// aligned inside and what the row block gives part of back.
+    /// The full lane, rail included.
     private var laneWidth: CGFloat {
         PanelMetrics.sessionViewportWidth(panelWidth: overlayBodyWidth ?? store.currentPanelSize.width)
     }
 
-    /// And what is left for the rows once the rail has taken its lane.
+    /// The rows' width once the rail has taken its lane.
     private var viewportWidth: CGFloat {
         PanelMetrics.sessionViewportWidth(
             panelWidth: overlayBodyWidth ?? store.currentPanelSize.width,
@@ -1229,36 +887,23 @@ struct ActiveSessionList: View {
 
     private var contentHeight: CGFloat { store.sessionListContentHeight }
 
-    /// What the list is actually given, taken from the store so that it is the
-    /// arithmetic the panel was sized by rather than a second reading of it.
+    /// Taken from the store, the same arithmetic the panel was sized by.
     ///
-    /// **Not the bare ``PanelMetrics/sessionViewportCap``.** An open question's
-    /// body may take `300`, which puts its row at `400` — past the `240` three
-    /// closed rows are billed at — and `answer-in-notch.md` §4.1 says the live
-    /// viewport grows to fit that row. The window already did: it is sized from
-    /// the metric, which caps at `max(cap, openRowHeight)`. Drawing the list
-    /// from the constant instead left the two disagreeing by the whole of the
-    /// question's extra height — the last option clipped under the footer, and
-    /// a strip of panel below it painting nothing.
+    /// Not the bare ``PanelMetrics/sessionViewportCap``: an open question's row can reach `400`,
+    /// past the `240` cap, and the window is sized from `max(cap, openRowHeight)`
+    /// (`answer-in-notch.md` §4.1). Using the constant clipped the last option under the footer.
     private var viewportHeight: CGFloat { store.sessionViewportHeight }
 
-    /// Compared against what the viewport is rather than against the cap, for
-    /// the same reason: a lone open question is as tall as the room it was
-    /// given, and a rail that says otherwise is offering travel that is not
-    /// there.
+    /// Against the viewport, not the cap: a lone open question fills its room and has no travel.
     private var isScrolling: Bool { contentHeight > viewportHeight }
 
-    /// Whether the two badge lines are drawn over the list.
-    ///
-    /// Grouped and closed: an open row un-pins everything (§4.3 rule 06), and
-    /// the flat list has no headings to pin.
+    /// Whether the two badge lines are drawn: grouped and closed (an open row un-pins everything,
+    /// §4.3 rule 06).
     private var showsTrails: Bool {
         store.openRowID == nil && store.groupsSessionsByProduct && !store.sessions.isEmpty
     }
 
-    /// Where every heading stands for the current offset — the one reading
-    /// the overlay draws from, taken from the same heights the panel was
-    /// sized by.
+    /// Where every heading stands for the current offset, from the heights the panel was sized by.
     private var trailLayout: ProductTrailLayout {
         let groups = store.sessionGroups
         return ProductTrailLayout.laidOut(
@@ -1273,38 +918,16 @@ struct ActiveSessionList: View {
     var body: some View {
         ScrollViewReader { list in
             ScrollView(.vertical) {
-                // **The headings are not in the flow; their room is.** Every
-                // heading is drawn by ``ProductTrails`` over the list, at a
-                // position that is a function of the offset — in the flow, on
-                // the top strip, or on the foot line — and the flow keeps a
-                // blank slot the height of each one so the rows stand exactly
-                // where a heading in the flow would have put them. That is
-                // what lets a row give up its badge: it is never orphaned
-                // from its name, because its name is on screen at every
-                // offset (`expanded-panel-v2.md` §4.6).
-                //
-                // **Except while a row is open, and that is not a taste.**
-                // Opening a row scrolls it to the top of the viewport, and a
-                // pinned header would then sit over its first `32` — which is
-                // the caption line, and the caption line's trailing end is
-                // ``OpenRowChevron``, the control that closes it. A heading
-                // that swallows the way out of the row it heads is not a
-                // heading. Nothing is lost by letting it scroll: an open row
-                // is the subject and everything else is at `45%`, so the list
-                // is not being scanned, which is the one job pinning has. The
-                // open row keeps its own chip for the same reason (§head), and
-                // the headings go back into the flow as the bars they are.
+                // Headings are drawn by ``ProductTrails`` over the list; the flow keeps a blank slot of each
+                // one's height (`expanded-panel-v2.md` §4.6). While a row is open they go back into the flow:
+                // a pinned header would cover the open row's ``OpenRowChevron``.
                 LazyVStack(spacing: 0) {
-                    // The apology is one of the list's own lines, so it
-                    // scrolls with what is under it rather than pinning a
-                    // sentence over rows somebody is reading.
+                    // The apology scrolls with the list rather than pinning.
                     if store.sessions.isEmpty {
                         emptyListLabel
                     }
 
-                    // With `Group by product` off there is nothing to head:
-                    // the list is the flat one, rows in one order across
-                    // products, each naming its product with its own chip.
+                    // `Group by product` off: the flat list, each row with its own chip.
                     let groups = store.sessionGroups
                     if groups.isEmpty {
                         rows(store.sessions)
@@ -1336,11 +959,8 @@ struct ActiveSessionList: View {
                 guard let opened = store.openRowID else { return }
                 list.scrollTo(opened, anchor: .top)
             }
-            // The extra width above is `ScrollView`'s own, not the row
-            // block's — see ``legacyScrollerGutter``. It never belongs on
-            // screen, which is what pins the visible region back to the
-            // panel's own margin regardless of whether this pass actually
-            // needed the room.
+            // The extra width is `ScrollView`'s (``legacyScrollerGutter``); clipping pins the visible
+            // region to the panel's margin.
             .frame(width: viewportWidth, alignment: .leading)
             .clipped()
             .overlay(alignment: .topLeading) {
@@ -1351,9 +971,7 @@ struct ActiveSessionList: View {
                         width: viewportWidth,
                         height: viewportHeight
                     ) { agent in
-                        // A badge is a control: its block to the top. The
-                        // slot carries the block's identity, and its top is
-                        // where the chip stands docked, so `.top` is exact.
+                        // A badge scrolls its block to the top; the slot's top is where the chip docks.
                         withAnimation(PanelMotion.slot(isOpening: true)) {
                             list.scrollTo(ProductHeadingSlotID(agent: agent), anchor: .top)
                         }
@@ -1361,8 +979,7 @@ struct ActiveSessionList: View {
                 }
             }
         }
-        // The rail stands in the lane the rows just gave up, and stops on the
-        // panel's inset rather than in it — see ``PanelMetrics/scrollRailLane``.
+        // The rail stops on the panel's inset; see ``PanelMetrics/scrollRailLane``.
         .frame(width: laneWidth, alignment: .leading)
         .overlay(alignment: .trailing) {
             ScrollRail(
@@ -1374,22 +991,14 @@ struct ActiveSessionList: View {
         }
     }
 
-    /// What the chip line of a heading's slot is scrolled to by.
-    ///
-    /// Its own type rather than the block's `AgentKind`, because that value
-    /// already identifies the whole `ForEach` item the slot is the first part
-    /// of, and a scroll target has to name the line and not the item.
+    /// The scroll target for a heading's chip line. Its own type: the block's `AgentKind` already
+    /// identifies the `ForEach` item, and a scroll target must name the line, not the item.
     private struct ProductHeadingSlotID: Hashable {
         let agent: AgentKind
     }
 
-    /// A heading's room in the flow, or the heading itself.
-    ///
-    /// Closed, the heading is drawn by the overlay and the flow keeps its
-    /// slot: the slack and then the chip's own line, the latter carrying the
-    /// block's identity so that a click on a trail badge can scroll the chip's
-    /// line to the top — which is exactly where a docked chip stands. Open,
-    /// the bar itself stands here, because the overlay is not drawn.
+    /// A heading's slot in the flow. Closed, the overlay draws the heading and the slot keeps the
+    /// slack plus the chip's line, which carries the block's scroll identity. Open, the bar stands here.
     @ViewBuilder
     private func headingSlot(
         for group: MonitorAggregation.SessionGroup,
@@ -1398,12 +1007,9 @@ struct ActiveSessionList: View {
         if store.openRowID != nil {
             ProductGroupHeader(group: group, isLeading: isLeading)
         } else {
-            // **Two siblings of the lazy stack, not one stack of two, under an
-            // identity of their own.** The identity has to sit on the chip's
-            // own line and be nothing else's: wrapped in a `VStack`, or given
-            // the block's `id` — which is already the `ForEach` item's —
-            // `scrollTo(_:anchor: .top)` lands on the item's top, which is the
-            // slack's, and the chip arrives `16` short of docked.
+            // Two siblings with their own identity on the chip's line: wrapped in a `VStack` or
+            // given the `ForEach` item's `id`, `scrollTo(_:anchor: .top)` lands on the slack and
+            // the chip is `16` short.
             if !isLeading {
                 Color.clear.frame(height: PanelMetrics.productGroupHeaderSlack)
             }
@@ -1413,32 +1019,21 @@ struct ActiveSessionList: View {
         }
     }
 
-    /// The rows themselves, drawn the same way whether they stand in a block
-    /// or in the flat list.
     @ViewBuilder
     private func rows(_ sessions: [MonitoredSession]) -> some View {
         ForEach(sessions) { session in
             if store.openRowID == session.id {
-                // **No `.id()` on either branch.** `ForEach` already gives
-                // each row the identity `scrollTo` needs, and tagging both
-                // branches with the same one made SwiftUI treat the closed row
-                // and the open row as the same view: the panel resized for a
-                // row that went on drawing itself shut.
+                // No `.id()` on either branch: the same id on both made SwiftUI treat closed and open as one
+                // view, and the panel resized for a row that stayed shut.
                 OpenRow(session: session)
             } else {
-                // **One row is open at a time, and it is the subject** (§8.2):
-                // everything else on the list drops to `45%` for as long as it
-                // is, which is the same value an answer in flight takes and
-                // the same statement — this is not the thing you are looking
-                // at.
+                // One open row is the subject (§8.2); every other row drops to `45%`.
                 SessionRow(session: session)
                     .opacity(store.openRowID == nil ? 1 : 0.45)
             }
         }
     }
 
-    /// The one line an empty live list draws, at the height it has always
-    /// been drawn at — `48`.
     private var emptyListLabel: some View {
         Text(store.emptyListMessage)
             .font(.system(size: 13, weight: .light))
@@ -1448,16 +1043,9 @@ struct ActiveSessionList: View {
     }
 }
 
-/// The Recent queue: nothing while it is empty, its seam alone while folded,
-/// and its own five-row viewport — scrolling on its own past that — while
-/// open.
-/// The Recent queue: the seam, and the retired rows behind it while it is
-/// open.
+/// The Recent queue: the seam, and the retired rows behind it while open.
 ///
-/// Internal rather than private so the first-run window can draw one on its own
-/// (`OnboardingAnatomy.swift`). It is self-contained — the seam is its own
-/// control and the queue its own viewport and scroller — so a specimen of it is
-/// the section the panel draws, not a picture of one.
+/// Internal so the first-run window can draw one on its own (`OnboardingAnatomy.swift`).
 struct RecentSessionSection: View {
     @EnvironmentObject private var store: MonitorStore
     @Environment(\.overlayBodyWidth) private var overlayBodyWidth
@@ -1527,18 +1115,8 @@ struct RecentSessionSection: View {
 
 /// The quota footer: one number, a control, and the table behind it.
 ///
-/// **At rest it is `22`, and that is the only closed height it has**
-/// (`quota-footer-v2.md` §2). It used to be a `496 × 3` rule per quota window
-/// with a caption under each — four numbers drawn every time the panel opened,
-/// on nearly all of which not one of them needed anything, spending between a
-/// fifth and a third of the panel's height saying so. The rule went first: it
-/// drew as a length exactly what its own caption printed as a figure two points
-/// to its right (§1.1). What is left is today's spend and the disclosure.
-///
-/// **Nothing here is drawn differently for being low.** There is no threshold,
-/// no window speaks, and no share reaches this line at any value (§4). The one
-/// thing that can change the footer's height is somebody opening the table —
-/// or choosing, in Settings, which products it holds (§13).
+/// Closed height is always `22` (`quota-footer-v2.md` §2). No low-value threshold (§4); only
+/// opening the table or the Settings product choice (§13) changes its height.
 private struct ExpandedPanelFooter: View {
     @EnvironmentObject private var store: MonitorStore
     @Environment(\.overlayBodyWidth) private var overlayBodyWidth
@@ -1568,13 +1146,8 @@ private struct ExpandedPanelFooter: View {
         .frame(height: store.expandedFooterHeight, alignment: .top)
     }
 
-    /// The spend line with nothing behind it: every connected product has been
-    /// taken out of the table, so the line is today's total and nothing else.
-    ///
-    /// **Not a button**, and not a disabled one either. A line that takes a
-    /// click and does nothing is a control that is broken; this is a reading,
-    /// and it is drawn in exactly the place the spend line's reading is, so
-    /// the total does not move when the last product leaves the table.
+    /// The spend line when every product is out of the table: not a button, and drawn where the
+    /// spend line is so the total does not move.
     private var totalLine: some View {
         FooterSpendLineContent(isExpanded: false, isHovered: false, showsControl: false)
             .frame(width: PanelMetrics.sessionViewportWidth(panelWidth: overlayBodyWidth ?? store.currentPanelSize.width))
@@ -1584,16 +1157,8 @@ private struct ExpandedPanelFooter: View {
             .accessibilityLabel("Today, \(store.footerToday.spokenText)")
     }
 
-    /// The footer's first line, always drawn, carrying the reading and the
-    /// disclosure.
-    ///
-    /// **The same bar the Recent seam is** — the same `32` pt height, the
-    /// same width, and the same hit target: the whole line toggles the
-    /// table now, not the `16` pt chevron alone. A number that resizes the
-    /// panel is still a trap for anyone reaching in to read it, but that
-    /// trap was already set the moment the line sat beside a control that
-    /// did the same thing on a click anywhere near it — matching the seam
-    /// makes the one affordance honest instead of splitting it in two.
+    /// The footer's first line: the reading and the disclosure. Same `32` pt bar and hit target as
+    /// the Recent seam; the whole line toggles the table.
     private var spendLine: some View {
         Button {
             store.toggleQuotaTable()
@@ -1606,13 +1171,7 @@ private struct ExpandedPanelFooter: View {
         .buttonStyle(SessionRowButtonStyle())
         .frame(width: PanelMetrics.sessionViewportWidth(panelWidth: overlayBodyWidth ?? store.currentPanelSize.width))
         .frame(height: PanelMetrics.recentSeamHeight)
-        // **Centred on the panel, open or shut.** The line is as wide as the
-        // seam is and the seam is centred in the panel's own width; left to
-        // itself the footer's stack was only as wide as its widest child, so
-        // the line sat on the panel's leading edge while the table was folded
-        // and jumped to centre the moment the table — which does fill the
-        // width — appeared under it. Claiming the width here means the stack
-        // is the panel's width in both states, and the line does not move.
+        // Claims the panel width so the line stays centred whether or not the table is shown.
         .frame(maxWidth: .infinity)
         .onHover { isHovered = $0 }
         .accessibilityElement(children: .ignore)
@@ -1621,11 +1180,8 @@ private struct ExpandedPanelFooter: View {
         .accessibilityAddTraits(.isButton)
     }
 
-    /// Two levels, because the windows belong to products.
-    ///
-    /// Outside, the product and its own spend today. Inside, each of its
-    /// windows on a line. **Indentation and the leader carry the level between
-    /// them** — no box, rule or divider is drawn (§5).
+    /// Two levels: the product and its spend today, then each window on a line. Indent carries the
+    /// level; no box, rule or divider (§5).
     private var table: some View {
         VStack(alignment: .leading, spacing: PanelMetrics.footerCaptionHeight) {
             ForEach(store.footerRules) { rule in
@@ -1635,8 +1191,7 @@ private struct ExpandedPanelFooter: View {
     }
 }
 
-/// The spend line's own drawing: the same shape the Recent seam draws,
-/// carrying a reading and a chevron instead of a count and a label.
+/// The spend line's drawing: the Recent seam's shape with a reading and a chevron.
 private struct FooterSpendLineContent: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -1649,7 +1204,6 @@ private struct FooterSpendLineContent: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.black)
 
-            // The seam's own layout, spacing included: label, rule, control.
             HStack(spacing: 8) {
                 FooterReading(store.footerToday)
 
@@ -1670,7 +1224,6 @@ private struct FooterSpendLineContent: View {
     }
 }
 
-/// One product's group: its badge and spend, then a line per window.
 private struct FooterProductGroup: View {
     let rule: FooterRule
 
@@ -1678,10 +1231,7 @@ private struct FooterProductGroup: View {
         VStack(alignment: .leading, spacing: PanelMetrics.footerCaptionSpacing) {
             outerRow
 
-            // By position, not by content. Nothing on this table sorts, so a
-            // window's index *is* its identity: two windows a product happened
-            // to publish with the same label, share and timer would collide
-            // under any identity derived from what they say.
+            // Identity by index: windows with the same label, share and timer would collide otherwise.
             ForEach(rule.windows.indices, id: \.self) { index in
                 FooterWindowRow(window: rule.windows[index])
             }
@@ -1689,18 +1239,7 @@ private struct FooterProductGroup: View {
         .accessibilityElement(children: .contain)
     }
 
-    /// The product, and what it has spent today.
-    ///
-    /// **Nothing is drawn between them.** A leader used to join the two across
-    /// `450` pt of black — `1` pt of white at `10%`, against the `15%` the
-    /// panel's own hairlines use — on the argument that having a leader is
-    /// itself part of what says which level a line is on. Five per cent of
-    /// white on a `1` pt line does not read as a step at that distance; it
-    /// reads as the panel's rule drawn twice, once badly. The level is already
-    /// said three times over — by the indent below it, by the `14` pt of air
-    /// above it, and by this being the one line on the footer set in Medium —
-    /// and the pair is joined by being the only two things on the line, at the
-    /// same brightness. That is what a heading line is.
+    /// The product and its spend today, with nothing drawn between them.
     private var outerRow: some View {
         HStack(spacing: 0) {
             FooterCaption(
@@ -1719,41 +1258,16 @@ private struct FooterProductGroup: View {
     }
 }
 
-/// One window's line: the name, the share, and the countdown.
-///
-/// **Two anchors, not three columns**, and they are the two the heading line
-/// above already has: a cluster on the left margin and a figure on the
-/// trailing edge. The window's name is at `24` — one step in from the panel's
-/// own `12` — the share is right-aligned at `184` where it sits beside the
-/// name it belongs to, and the countdown is right-aligned at the same edge the
-/// product's spend is.
-///
-/// The share used to end at `300`, which was measured when the panel was `520`
-/// wide. At `610` it anchored to nothing: the row read as `5 h`, a gap of
-/// `216`, `96% left`, a gap of `284`, `4h` — `74` points of reading on a `574`
-/// point line, with the one column that mattered stopped in the middle of it.
-///
-/// **The share's figure is the row's one bright thing.** Every part of this row
-/// used to be `#7C7C80`, so `96%` was drawn at exactly the value of the word
-/// `left` beside it. Brightness now separates a figure from the words around
-/// it, at every level of the table and at every value — see ``ShareReading``
-/// for why that is not the value threshold §4 removed. The countdown stays
-/// grey throughout: it qualifies the share rather than answering anything.
+/// One window's line: name at `24`, share right-aligned at `184`, countdown right-aligned at
+/// the spend's edge. The share's figure is the one bright thing; see ``ShareReading``.
 private struct FooterWindowRow: View {
     let window: FooterWindow
 
     var body: some View {
         HStack(spacing: 0) {
-            // The name and the share are one box with the slack between them,
-            // so a longer window name eats the gutter rather than colliding
-            // with the figure. What is between them is whitespace either way,
-            // and giving it a boundary of its own would be a column nothing
-            // is in.
+            // Name and share are one box, so a long name eats the gutter rather than hitting the figure.
             HStack(spacing: 0) {
-                // Capped at its own column and truncated past it, so the
-                // column is a fact rather than a hope: a window named for
-                // whatever model the account is capped on can be any width,
-                // and the figure beside it is the thing nobody may lose.
+                // Capped and truncated: a model-named window can be any width; the figure must stay.
                 FooterCaption(window.label)
                     .frame(
                         maxWidth: PanelMetrics.footerWindowColumnWidth,
@@ -1767,8 +1281,6 @@ private struct FooterWindowRow: View {
                     - PanelMetrics.footerWindowIndent
             )
 
-            // The countdown, right-aligned on the footer's own trailing edge,
-            // which is where the spend above it is right-aligned too.
             Spacer(minLength: PanelMetrics.footerColumnGutter)
             FooterCaption(window.timer)
         }
@@ -1778,25 +1290,16 @@ private struct FooterWindowRow: View {
         .accessibilityLabel(spokenLine)
     }
 
-    /// What the line says out loud, with the absolute reset the column trades
-    /// away for a duration (§7).
+    /// Spoken line, including the absolute reset the column drops (§7).
     private var spokenLine: String {
         let head = window.label.isEmpty ? "" : "\(window.label), "
         return "\(head)\(window.share.text), \(window.spokenTimer)"
     }
 }
 
-/// The disclosure that opens the quota table.
+/// The quota table's disclosure: one glyph rotated 180°, pointing down while shut.
 ///
-/// One glyph, turned 180° between the two states rather than swapped for a
-/// second drawing. It points down while the table is shut because the panel
-/// hangs from the notch and can only grow downward — the chevron points the way
-/// the panel will move, which is also the "show more" every list uses.
-///
-/// **A drawing, not its own control.** The spend line it rides is the hit
-/// target and the hover source now, the way the Recent seam's own chevron
-/// already was — this glyph just answers to both, brightening and turning
-/// exactly as that line's `isHovered` and `isExpanded` say.
+/// A drawing only; the spend line is the hit target and hover source.
 private struct QuotaFoldChevron: View {
     let isExpanded: Bool
     let isHovered: Bool
@@ -1814,10 +1317,7 @@ private struct QuotaFoldChevron: View {
     }
 }
 
-/// The footer's 11pt caption, which every line down here uses.
-///
-/// It hugs its text rather than filling: this footer is a table, and every
-/// column's edge is placed by the line that holds it.
+/// The footer's 11pt caption. Hugs its text; each column's edge is placed by its line.
 private struct FooterCaption: View {
     let text: String
     let ink: Color
@@ -1843,19 +1343,9 @@ private struct FooterCaption: View {
     }
 }
 
-/// Any reading on this footer, in the two brightnesses every one of them is
-/// drawn in.
+/// A footer reading: figure in `#C7C7CC`, unit in `#7C7C80`. The footer's whole ink rule.
 ///
-/// The figure in `#C7C7CC` and its unit in `#7C7C80` — one reading, with the
-/// part that is a number set apart from the part that is a word. **This is the
-/// footer's whole ink rule**, and the resting spend line was the only place
-/// that used to obey it: `251M today` on the resting line, `51M today` on a
-/// product's outer row, and `96% left` on a window's, which is the one that
-/// changed. They are the same shape of reading at three scopes.
-///
-/// A `--` takes the figure's ink like any other figure. A reading that could
-/// not be made is not a quieter reading (`quota-footer-v2.md` §8.3), and the
-/// unit beside it was never the part that failed.
+/// A `--` takes the figure's ink (`quota-footer-v2.md` §8.3).
 private struct FooterReading: View {
     private let figure: String
     private let unit: String
@@ -1881,8 +1371,7 @@ private struct FooterReading: View {
             .accessibilityLabel(spokenText)
     }
 
-    /// One string, two runs — rather than two `Text`s side by side, so the
-    /// figure and its unit are still typeset as one line.
+    /// One string with two runs, so figure and unit are typeset as one line.
     private var runs: AttributedString {
         var figure = AttributedString(self.figure)
         figure.foregroundColor = NotchPalette.reading
@@ -1910,18 +1399,13 @@ private struct SessionRow: View {
         .buttonStyle(SessionRowButtonStyle())
         .frame(maxWidth: .infinity)
         .frame(height: PanelMetrics.sessionRowHeight)
-        // Every row, and it used to be finished ones only -- see
-        // ``MonitorStore/dismiss(_:)`` for what that cost. The catcher claims
-        // nothing but a secondary press, so the primary click's behaviour is
-        // identical either way.
+        // On every row; the catcher claims only a secondary press. See ``MonitorStore/dismiss(_:)``.
         .overlay {
             SecondaryClickCatcher { store.dismiss(session) }
         }
         .onHover { isHovered = $0 }
         .accessibilityLabel(accessibilityText)
-        // A secondary click is not something a keyboard or VoiceOver can
-        // produce, so the same intent is offered as an action rather than left
-        // reachable only by mouse.
+        // Secondary click has no keyboard or VoiceOver form, so offer it as an action.
         .accessibilityActions {
             Button("Remove this row") { store.dismiss(session) }
         }
@@ -1929,38 +1413,20 @@ private struct SessionRow: View {
 
     private var accessibilityText: String {
         let preview = ", current content: \(store.previewLine(for: session))"
-        // Spoken form, not the drawn "12:34" — VoiceOver reads that as a clock
-        // time. The row draws the elapsed value, so the label must carry it too.
+        // Spoken form: VoiceOver reads a drawn "12:34" as a clock time.
         let elapsed = store.spokenElapsedText(for: session).map { ", running for \($0)" }
             ?? ""
-        // The drawn form is one bare badge in the slot the timer had, with a
-        // ground that flips rather than a second figure; spoken, it has to say
-        // what it counts and, when the ground has flipped, that it is waiting.
+        // Drawn as one badge whose ground flips; spoken, it must say what it counts and that it waits.
         let subagents = session.spokenSubagentSummary.map { ", \($0)" } ?? ""
-        // A finished row draws how long its turn took, and a ground cannot be
-        // heard any more than a flip can. Said as a length rather than as a
-        // reading, and in the past tense, because that is what it is.
+        // A finished row's duration, spoken as a length in the past tense.
         let took = store.spokenFinishedElapsedText(for: session)
             .map { ", took \($0)" } ?? ""
-        // Brightness cannot be read out on its own, so a blocked subagent
-        // still needs a word even while the row is timed and its own mark is
-        // the bright clock rather than a badge -- a running row draws its
-        // timer bright and would otherwise say nothing about why.
+        // A timed row draws no badge, so a blocked subagent still needs a word.
         let blocked = session.status.keepsTiming && session.subagentsAwaitingApproval
             ? ", a subagent is waiting for approval"
             : ""
-        // **Named whether or not a chip is drawn**, and that is not the
-        // drawing's rule. A chip is dropped when the block's header has
-        // already said it; a reader arriving row by row is never inside a
-        // block, has no surface to compare this line against, and the product
-        // is the first thing that says where clicking would go -- which is the
-        // argument ``RetiredRow`` already makes one rule down.
-        // **The tree describes the drawing** (`cover-the-words.md` §9). A
-        // covered run is spoken as covered rather than read out: the label is
-        // what this row *is*, and a reader told the title while a bar is
-        // drawn has been told something nobody on the screen can see. What is
-        // not covered is unchanged -- the product, the status, the elapsed and
-        // the subagent counts are none of them content.
+        // Product is named even where no chip is drawn: a row-by-row reader has no block header.
+        // A covered run is spoken as covered, not read out (`cover-the-words.md` §9).
         guard !store.coversWords(of: session) else {
             return "\(session.agent.displayName), covered, "
                 + "\(session.status.displayName)\(elapsed)\(took)\(subagents)\(blocked)"
@@ -1970,47 +1436,21 @@ private struct SessionRow: View {
     }
 }
 
-/// A row whose request is open, read rather than answered.
+/// A row with its request open: the caption and title, the body, and the answers.
 ///
-/// **The reading form** (`answer-in-notch.md` §11), which is what ships before a
-/// product offers a way in. The head does not move: the caption and the title
-/// are where they were on the closed row, so opening grows the row downward and
-/// nothing the eye was already on shifts. Where the mark was, the quota block's
-/// own chevron stands — pointing up, because the thing it folds is open.
-///
-/// **No white ground is drawn anywhere on it.** The affirmative ground is the
-/// return key made visible, and drawing it where there is nothing for a return
-/// key to do is a promise made quietly — which is why a greyed-out `Approve` is
-/// worse than none at all (§11 rule 03). One control stands where three will,
-/// and it is the click that has always worked, moved to a place a reader
-/// arrives at *after* reading.
-/// A row with its request open: the caption and title, the body, and the
-/// answers.
-///
-/// Internal for the same reason ``RecentSessionSection`` is: the first-run
-/// window draws one on its own black rather than repeating the header and
-/// footer around it three times (`OnboardingAnatomy.swift`). Everything it
-/// draws follows from the store's `openRowID`, so a specimen opens a row and
-/// composes exactly what the notch would.
+/// Internal like ``RecentSessionSection``, so the first-run window can draw one on its own
+/// (`OnboardingAnatomy.swift`). Everything follows from the store's `openRowID`.
 struct OpenRow: View {
     @EnvironmentObject private var store: MonitorStore
     let session: MonitoredSession
 
     @State private var isHovered = false
-    /// The destination control's own hover, which is not the row's: the row is
-    /// permanently at the hover weight and never answers a pointer of its own.
+    /// The destination control's own hover; the row itself never answers the pointer.
     @State private var isDestinationHovered = false
 
     var body: some View {
         ZStack {
-            // Permanently at the hover weight, never at rest -- an open row
-            // reads as a live session's own row would the instant the
-            // pointer arrived, because it is always the one thing on this
-            // surface being looked at. (Adjacent, not done here: this is a
-            // committed, sunken state rather than a transient one under the
-            // pointer, and the pressed weight -- see
-            // ``NotchPalette/RowEmphasis`` -- would say that more precisely
-            // than reusing hover's.)
+            // Permanently at the hover weight: an open row is always the thing being looked at.
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.black)
                 .overlay(
@@ -2021,11 +1461,8 @@ struct OpenRow: View {
                             )
                         )
                 )
-                // Standing off its own frame, like every washed row's does --
-                // see ``PanelMetrics/sessionRowGroundInset``. It matters most
-                // here: an open row is washed permanently, so a ground flush
-                // against the chip above it would not be a moment's collision
-                // but the state the row sits in.
+                // Inset from its frame (``PanelMetrics/sessionRowGroundInset``): an open row is washed
+                // permanently, so a flush ground would sit against the chip above.
                 .padding(.vertical, PanelMetrics.sessionRowGroundInset)
 
             VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
@@ -2036,10 +1473,7 @@ struct OpenRow: View {
                 answerRow
             }
             .padding(.horizontal, PanelMetrics.sessionRowPadding)
-            // The closed row centres its three lines in its own height, so
-            // this has to be exactly what that leaves: the head does not move
-            // when a row opens, and a literal here drifted from it the moment
-            // the row's air changed.
+            // Must match the closed row's centring so the head does not move when a row opens.
             .padding(.vertical, PanelMetrics.sessionRowVerticalPadding)
         }
         .frame(maxWidth: .infinity)
@@ -2083,24 +1517,13 @@ struct OpenRow: View {
         .help(label)
     }
 
-    /// The caption and the title, unmoved, with the chevron where the mark was.
     private var head: some View {
         VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
             HStack(spacing: 8) {
-                // **The open row keeps its chip, where a closed one gives it
-                // up.** Opening un-pins the headings (``ActiveSessionList``),
-                // and an open row is scrolled to the top of the viewport — so
-                // the block's own header is usually the thing that has just
-                // scrolled off. This is also the one row where the product is
-                // not decoration: it decides what the answer footer can do,
-                // Codex reserving the field Claude Code accepts
-                // (`answer-in-notch.md` §14.2). The duplication costs one
-                // state, where a list that fits draws the header directly
-                // above it; the alternative costs the answering row its
-                // attribution in every state that scrolls.
-                // **Never covered**, and that is the whole of
-                // `cover-the-words.md` §7: opening a row is a deliberate
-                // press, and the cover silences what is drawn unasked.
+                // The open row keeps its chip: opening un-pins headings (``ActiveSessionList``), so
+                // the header has usually scrolled off, and the product decides what the answer
+                // footer can do (`answer-in-notch.md` §14.2).
+                // Never covered (`cover-the-words.md` §7).
                 SessionRowCaption(
                     session: session,
                     showsAttribution: true,
@@ -2108,9 +1531,7 @@ struct OpenRow: View {
                     isCovered: false
                 )
                 Spacer(minLength: 8)
-                // The header and the position in the set, on the caption line's
-                // trailing side — which carries nothing at all on a closed row,
-                // so this costs the badge and the Project nothing (§5.2).
+                // Header and set position on the caption line's trailing side, empty on a closed row (§5.2).
                 if let position = store.openRowBody?.position {
                     Text(setCaption(position))
                         .font(.system(size: 11, weight: .regular).monospacedDigit())
@@ -2128,22 +1549,15 @@ struct OpenRow: View {
                 color: NotchPalette.sessionTitleDrawingColor,
                 lineHeight: PanelMetrics.sessionRowTitleHeight
             )
-            // **The row's text is still the Thread** (§3, §6.6). Opening a row
-            // takes nothing away from it: the two targets are the two answers to
-            // *what do I want with this row*, and an open row still has both.
-            // The chevron sits inside this and keeps its own click, because a
-            // descendant's gesture takes precedence over an ancestor's.
+            // The row's text still opens the Thread (§3, §6.6). The chevron keeps its own click: a
+            // descendant's gesture wins over an ancestor's.
             .contentShape(Rectangle())
             .onTapGesture { store.open(session) }
         }
     }
 
-    /// `Scope · 2/3`, or the count alone where the product sends no header.
-    ///
-    /// Codex sends none, so that side carries the chevron and the count and
-    /// nothing else — and **every** question draws the count, `1/1` included,
-    /// because a count that appears only sometimes is a count nobody learns to
-    /// read (§5.2).
+    /// `Scope · 2/3`, or the count alone when there is no header (Codex). Always drawn, `1/1`
+    /// included (§5.2).
     private func setCaption(_ position: RequestBodyLayout.Position) -> String {
         guard let header = store.openRowBody?.header, !header.isEmpty else {
             return position.drawn
@@ -2161,15 +1575,8 @@ struct OpenRow: View {
         }
     }
 
-    /// The three answers, or §11 rule 04's one control where three would stand.
-    ///
-    /// **Which of the two is drawn is a fact about this request** rather than
-    /// about its product or its status: a row whose connection is still held
-    /// can be answered here, and one whose cannot says where to answer it
-    /// instead (§11 rule 06). No white ground is drawn anywhere on the second —
-    /// the affirmative ground is the return key made visible, and drawing it
-    /// where there is nothing for the return key to do is a promise made
-    /// quietly, which is why a greyed-out `Approve` is worse than none at all.
+    /// The three answers, or §11 rule 04's single control when the connection is not held
+    /// (§11 rule 06). The single control never takes the white ground.
     @ViewBuilder
     private var answerRow: some View {
         if let shape = store.openAnswerRow {
@@ -2179,15 +1586,9 @@ struct OpenRow: View {
         }
     }
 
-    /// §11 rule 04: one control where three will stand.
-    ///
-    /// **It is on the quiet answers' ladder and never reaches the bright
-    /// ground.** It used to draw on ``NotchPalette/recessedGround``, which
-    /// marks machine text (§4.2) and is not what this is — and on an open row
-    /// that is `#242424` against the row's own `#242524`, so the tile it drew
-    /// had no boundary at all. The ground it must not take is the other half:
-    /// the bright ground is the return key made visible, and `⏎` has nothing
-    /// to do here.
+    /// §11 rule 04: one control where three will stand. On the quiet answers' ladder, never the
+    /// bright ground (`⏎` has nothing to do); not ``NotchPalette/recessedGround``, which marks
+    /// machine text (§4.2).
     private var readingControl: some View {
         HStack(spacing: 8) {
             Button {
@@ -2247,12 +1648,8 @@ struct OpenRow: View {
     }
 }
 
-/// The quota block's own control, unchanged, standing where the mark was.
-///
-/// `16 × 16`, a `9 × 4.5` glyph at `1.4` stroke with round caps, pointing up
-/// because the thing it folds is open (`expanded-panel-v2.md` §2.2). Deliberately
-/// the same object rather than one that looks like it: this surface has one
-/// chevron and it means one thing.
+/// The quota block's chevron, pointing up because what it folds is open
+/// (`expanded-panel-v2.md` §2.2).
 private struct OpenRowChevron: View {
     @State private var isHovered = false
 
@@ -2265,12 +1662,8 @@ private struct OpenRowChevron: View {
                 width: PanelMetrics.quotaFoldControlSize,
                 height: PanelMetrics.quotaFoldControlSize
             )
-            // The row's own wash, not a white one: a chevron inside a row that
-            // washes in the app's ink cannot answer the same pointer in a
-            // different colour. It rests at nothing rather than at
-            // ``NotchPalette/RowEmphasis/controlRestFillOpacity``, because a
-            // permanent 16-point tile in the corner of the head would read as
-            // a mark rather than as a target.
+            // The row's own wash, not white; rests at nothing rather than
+            // ``NotchPalette/RowEmphasis/controlRestFillOpacity`` so it does not read as a mark.
             .background(
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .fill(
@@ -2289,16 +1682,10 @@ private struct OpenRowChevron: View {
     }
 }
 
-/// The three objects at the foot of an open row: the field, the refusal and
-/// the affirmative (`answer-in-notch.md` §7).
+/// The field, the refusal and the affirmative (`answer-in-notch.md` §7).
 ///
-/// **The white ground is the return key made visible.** Whichever of the two
-/// controls holds it is what `⏎` will do, and exactly one force moves it —
-/// typing, onto the answer that carries text, because a note cannot travel with
-/// a yes (§6). Neither control moves as the ground crosses between them: both
-/// are their own text plus `12` a side, whether they are holding it or not.
-///
-/// A form with one answer omits the refusal and the field takes the space.
+/// The white ground marks what `⏎` does; only typing moves it, onto the text answer (§6).
+/// Controls are text plus `12` a side either way. A one-answer form omits the refusal.
 private struct AnswerRow: View {
     @EnvironmentObject private var store: MonitorStore
     let session: MonitoredSession
@@ -2311,12 +1698,9 @@ private struct AnswerRow: View {
                     identity: "\(session.id)#\(store.answerDraftGeneration)",
                     placeholder: placeholder,
                     initialText: store.answerDraft,
-                    // §8 state 01: an answer in flight stops taking keys as well as
-                    // clicks. The caret goes with it, so nothing is typed into a
-                    // row that has already been answered.
+                    // §8 state 01: in flight, stop taking keys and drop the caret.
                     takesKeys: !store.isAnswerInFlight,
-                    // §5.4, with the priority the other way round: a ticked option
-                    // is the answer, so text it has overruled draws as overruled.
+                    // §5.4 reversed: a ticked option overrules typed text.
                     superseded: store.questionHasASelection,
                     onEdit: { store.answerDraftChanged(to: $0) },
                     onReturn: { store.takeAnswer(store.answerGround) },
@@ -2325,21 +1709,15 @@ private struct AnswerRow: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: PanelMetrics.answerRowHeight)
             } else {
-                // A request that takes no words draws no field, and the
-                // controls keep the trailing edge §7 gives them.
                 Spacer(minLength: 0)
             }
 
-            // The question before this one, in the slot a set's absent refusal
-            // already leaves free (§5.7, §7). It never holds the ground — it
-            // sends nothing, and the brightest object on the row is still the
-            // only thing `⏎` does.
+            // Previous question, in the slot a set's absent refusal leaves (§5.7, §7). Never holds ground.
             if store.canGoBackAQuestion {
                 AnswerControl(
                     label: "Back",
                     holdsGround: false,
-                    // A step is not an answer, so it is not held by the
-                    // arrival that holds one (§6.3).
+                    // A step is not an answer, so no arrival hold (§6.3).
                     waitsForArrival: false,
                     spoken: "Back to the previous question"
                 ) {
@@ -2367,39 +1745,24 @@ private struct AnswerRow: View {
             .disabled(!store.canSubmitCurrentAnswer)
         }
         .frame(height: PanelMetrics.answerRowHeight)
-        // §8 state 01: in flight, the field and both controls drop to `45%` and
-        // stop taking anything. **Nothing resizes** — no spinner, no progress,
-        // no new mark: the wait is a few hundred milliseconds, and anything
-        // drawn to fill it would outlive the thing it described.
+        // §8 state 01: in flight, drop to `45%` and stop taking input. Nothing resizes, no spinner.
         .opacity(store.isAnswerInFlight ? 0.45 : 1)
         .allowsHitTesting(!store.isAnswerInFlight)
         .padding(.top, 10 - PanelMetrics.sessionRowLineSpacing)
     }
 }
 
-/// One answer: the ground when it holds it, its own text when it does not.
-///
-/// §6.6, in three clauses. **A click takes the answer it lands on**, whether or
-/// not the ground is there — there is no select-then-confirm here, because the
-/// confirm would be a second control saying what the first already said.
-/// **Hover moves nothing**: an answer deepens its own fill under the pointer,
-/// and the ground stays where the typing left it, because the ground
-/// is a statement about `⏎` and a pointer crossing an answer is not an act.
-/// And the width is the same either way, so nothing moves as the ground
-/// crosses.
+/// One answer: the ground when it holds it, its own text when not (§6.6). A click takes the
+/// answer it lands on; hover never moves the ground; width is the same either way.
 private struct AnswerControl: View {
     @EnvironmentObject private var store: MonitorStore
 
     let label: String
     let holdsGround: Bool
-    /// Whether this control waits out §6.3's arrival before it takes a click.
-    ///
-    /// True of every control that answers, because the arrival is what stops
-    /// the click that answered one thing from answering the next. False of one
-    /// that only changes which question is drawn: it sends nothing, so there is
-    /// nothing for a stray click on it to spend.
+    /// Whether this control waits out §6.3's arrival before taking a click. False for controls that
+    /// send nothing.
     var waitsForArrival: Bool = true
-    /// What a reader hears where the drawn word is shorter than the act (§13.3).
+    /// Spoken label where the drawn word is shorter than the act (§13.3).
     var spoken: String?
     let action: () -> Void
 
@@ -2425,45 +1788,27 @@ private struct AnswerControl: View {
                 )
                 .fill(ground)
             )
-            // An overlay rather than a background, and only while a click
-            // would be taken: the tracking area is geometric and answers to
-            // AppKit, so `allowsHitTesting(false)` on the row in flight does
-            // not reach it -- a hand over a control that refuses the click
-            // would promise exactly what ``ground`` is careful not to.
+            // Only while a click would be taken: the AppKit tracking area ignores
+            // `allowsHitTesting(false)`, so a refusing control would still show the hand.
             .overlay { if isTarget { PointingHandCursor() } }
             .contentShape(Rectangle())
             .onHover { isHovered = $0 }
             .onTapGesture(perform: action)
             .accessibilityElement()
             .accessibilityLabel(spoken ?? label)
-            // §13.3: what the ground says in ink, spoken. It is the one piece
-            // of state on this row that is drawn only as brightness, so a
-            // reader who cannot see it would otherwise not know what `⏎` does.
+            // §13.3: the ground is drawn only as brightness, so speak what `⏎` does.
             .accessibilityValue(holdsGround ? "Return takes this" : "")
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { action() }
     }
 
-    /// ``NotchPalette/brightGround`` while it is what `⏎` does; the list's own
-    /// deepened theme fill under the pointer; the quiet button wash otherwise.
+    /// ``NotchPalette/brightGround`` while it is what `⏎` does; the deepened theme fill under the
+    /// pointer; the quiet button wash otherwise.
     ///
-    /// **The same ink as the mark that opened this row, and it has to be**: the
-    /// ground the pointer pressed on the caption line grows and travels down
-    /// here (§3.1), and a ground that changed colour on the way would be two
-    /// objects rather than one moving.
-    ///
-    /// A ground that has not finished arriving is drawn but is not yet a target
-    /// (§6.3) — it is dimmed rather than hidden, because the eye is already
-    /// following it down the row and something that appears late reads as a
-    /// second object. It does not answer the pointer either, for the same
-    /// reason: nothing here is a thing a click can take yet.
-    ///
-    /// Quiet answers have a stronger theme wash than the open row beneath
-    /// them. Hover deepens it while retaining a visible tile boundary; see
-    /// ``NotchPalette/RowEmphasis/controlRestFillOpacity``.
-    ///
-    /// Filled and quiet buttons both deepen their existing theme colour on
-    /// hover. The ground stays on the answer chosen by the person's typing.
+    /// - Same ink as the mark that opened the row: the ground travels down here (§3.1).
+    /// - A ground still arriving (§6.3) is dimmed, not hidden, and ignores the pointer.
+    /// - Quiet answers wash stronger than the open row; see
+    ///   ``NotchPalette/RowEmphasis/controlRestFillOpacity``.
     private var ground: Color {
         guard !holdsGround else {
             guard store.isAffirmativeArmed else {
@@ -2479,53 +1824,28 @@ private struct AnswerControl: View {
         )
     }
 
-    /// Whether a click here would be taken, which is what the pointing hand
-    /// promises. ``MonitorStore/takeAnswer(_:)`` refuses on both counts, so
-    /// this is that guard read back rather than a second rule — and a control
-    /// that does not answer is refused on only one of them.
+    /// Whether a click would be taken, i.e. what the pointing hand promises. Mirrors
+    /// ``MonitorStore/takeAnswer(_:)``'s guard.
     private var isTarget: Bool {
         (store.isAffirmativeArmed || !waitsForArrival) && !store.isAnswerInFlight
     }
 }
 
-/// The field, which is an AppKit text view and has to be.
+/// The answer field, hosted in AppKit.
 ///
-/// **The caret is the one thing on this surface that ticks, and it must not be
-/// ours** (§13.2). A blinking caret drawn from SwiftUI is precisely the
-/// continuously running animation the overlay forbids (`AGENTS.md` §7): it
-/// would invalidate the whole panel — `PanelContour` and every text measurement
-/// — twice a second for as long as a row is open. Hosted here, the text system
-/// draws it into its own layer, which is the same division that already sends
-/// persistent motion to Core Animation.
-///
-/// **The text never reaches `@Published` either**, for the same reason: a
-/// keystroke is not a layout change. What the store publishes is where the
-/// ground is, which changes at most once per row.
-///
-/// **It is an ordinary focusable field, and it did not used to be** (§6.6,
-/// corrected 2026-09-07). It took the caret the moment the row opened and never
-/// gave it back, which made every rule around it a rule about the *string* it
-/// held rather than about where the caret was: `1` selected an option instead
-/// of typing a `1`, `←` walked the question set instead of moving through what
-/// had just been typed, and a caret blinked over a row nobody was writing in.
-/// It now takes the caret on a click and loses it on a click anywhere else
-/// (``OverlayPanel/sendEvent(_:)``), and the keys the panel answers to are the
-/// ones that arrive while it holds nothing (``PanelKey``).
+/// - The caret must not be a SwiftUI animation (§13.2, `AGENTS.md` §7): it would invalidate the
+///   whole panel twice a second. The text system draws it in its own layer.
+/// - Text never reaches `@Published`; the store publishes only where the ground is.
+/// - An ordinary focusable field (§6.6, corrected 2026-09-07): a click gives the caret, a click
+///   elsewhere takes it (``OverlayPanel/sendEvent(_:)``); panel keys arrive only while nothing
+///   holds it (``PanelKey``).
 private struct AnswerField: NSViewRepresentable {
-    /// Which row this field belongs to, and which text the store has put in
-    /// it — the only two things that refill it.
-    ///
-    /// §10: what was typed stays with its row for as long as that row lives, so
-    /// the text view is refilled when the row changes and left alone otherwise
-    /// — refilling it on every pass would put the caret back to the start under
-    /// somebody's hands. The second half of the identity is
-    /// ``MonitorStore/answerDraftGeneration``, which moves when the store itself
-    /// replaces the text: an answer that landed, or the next question of a set.
+    /// Row plus ``MonitorStore/answerDraftGeneration``: the only things that refill the text view.
+    /// Refilling on every pass would reset the caret under the person typing (§10).
     let identity: String
     let placeholder: String
     let initialText: String
     let takesKeys: Bool
-    /// Whether a ticked option has taken the answer this text would have been.
     let superseded: Bool
     let onEdit: (String) -> Void
     let onReturn: () -> Void
@@ -2549,9 +1869,7 @@ private struct AnswerField: NSViewRepresentable {
         view.placeholder = placeholder
         view.isEditable = takesKeys
         view.isSuperseded = superseded
-        // §8 state 01: a row that has been answered stops taking keys, and the
-        // caret has to leave with them rather than sit in a field that will
-        // refuse everything typed into it.
+        // §8 state 01: an answered row stops taking keys, so the caret leaves too.
         if !takesKeys, view.window?.firstResponder === view {
             view.window?.makeFirstResponder(nil)
         }
@@ -2587,22 +1905,10 @@ private struct AnswerField: NSViewRepresentable {
             onEdit(view.string)
         }
 
-        /// The two keys the field answers to itself; every other key is the
-        /// text system's while the field holds the caret (§9.2).
+        /// The two keys the field handles itself; every other key is the text system's (§9.2).
         ///
-        /// `⌘⏎`, `Space` and `⇥` are deliberately unbound: a second way to
-        /// approve would make the white ground advisory rather than definitive,
-        /// and the whole safety of this surface rests on the ground being the
-        /// literal truth about `⏎`.
-        ///
-        /// **The digits and the arrows are no longer taken from here** (§9.2,
-        /// corrected 2026-09-07). They were, on the condition that the field was
-        /// empty — a rule about a string standing in for a rule about focus,
-        /// and one that broke where it mattered most: a person who had clicked
-        /// into the field to write an answer could not type `1`, and could not
-        /// move the caret back through what they had written. A field with the
-        /// caret in it now keeps every key it would keep anywhere else, and the
-        /// panel answers those two only when nothing holds the caret at all
+        /// `⌘⏎`, `Space` and `⇥` are deliberately unbound: a second way to approve would make the white
+        /// ground advisory. Digits and arrows go to the panel only when nothing holds the caret
         /// (``PanelKey``).
         func textView(
             _ view: NSTextView,
@@ -2613,11 +1919,8 @@ private struct AnswerField: NSViewRepresentable {
                 onReturn()
                 return true
             case #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)):
-                // `⌥⏎`, which AppKit binds here as well. `⇧⏎` does **not**
-                // arrive as this and is handled in ``AnswerFieldView/keyDown``
-                // — measured on Release, it arrived as `insertNewline:` and
-                // sent the answer, because the standard binding only separates
-                // the two inside a field editor and this is a plain text view.
+                // `⌥⏎`. `⇧⏎` arrives as `insertNewline:` in a plain text view (measured, Release), so it is
+                // handled in ``AnswerFieldView/keyDown``.
                 view.insertText("\n", replacementRange: view.selectedRange())
                 return true
             case #selector(NSResponder.cancelOperation(_:)):
@@ -2630,31 +1933,14 @@ private struct AnswerField: NSViewRepresentable {
     }
 }
 
-/// The text view itself: one line of `13` pt, drawing its own ground.
+/// The text view: one line of `13` pt, drawing its own ground.
 ///
-/// **A field that has to be clicked into, and it did not use to be** (§6.6,
-/// corrected 2026-09-07). It took the caret the moment the row opened, which
-/// made the row's one blinking object a promise about a field nobody had asked
-/// for, and made every key on this surface conditional on what the field
-/// happened to be holding. What it costs is one click on the two forms that
-/// carry a refusal — §6.4's cheap direction is now a click and a sentence — and
-/// what it buys is a keyboard whose rules are about focus rather than about a
-/// string, which is the only kind a person can learn once.
-///
-/// **So the ground says what the caret used to.** §7 gave the field no ground
-/// of its own on the reasoning that the caret and the placeholder were enough to
-/// say it was a field; with the caret gone at rest, the ground answers the
-/// pointer and marks the focus, and is still nothing at all when neither is
-/// true.
+/// Clicked into, not focused on open (§6.6, corrected 2026-09-07). With no caret at rest, the
+/// ground marks hover and focus, and is nothing when neither holds.
 final class AnswerFieldView: NSTextView {
     var placeholder: String = ""
 
-    /// Whether a ticked option has taken the answer this text would have been.
-    ///
-    /// §5.4 with its priority reversed: the losing side is the one that draws
-    /// as losing, and it used to be the option markers. Text that has been
-    /// overruled is dimmed rather than removed — it is still what the field
-    /// holds, and untick the option and it is the answer again.
+    /// Whether a ticked option has taken the answer. Overruled text is dimmed, not removed (§5.4).
     var isSuperseded = false {
         didSet {
             guard isSuperseded != oldValue else { return }
@@ -2673,17 +1959,9 @@ final class AnswerFieldView: NSTextView {
         didSet { if isHovered != oldValue { needsDisplay = true } }
     }
 
-    /// `⇧⏎` puts a new line in the field, and only `⏎` sends (§9.2).
+    /// `⇧⏎` inserts a new line; only `⏎` sends (§9.2).
     ///
-    /// **Read off the event rather than left to the binding table.** In a field
-    /// editor `⇧⏎` is `insertNewlineIgnoringFieldEditor:`; in a plain text view
-    /// it is `insertNewline:`, which is what `⏎` is — so the one key that must
-    /// not send was sending. A refusal that explains itself is often two
-    /// sentences and an alternative command is often two lines, and this is the
-    /// only way to get one, which is what lets `⏎` be unambiguous.
-    ///
-    /// Nothing else is read off the event here any more. A field holding the
-    /// caret is an ordinary field: `1` types a `1` and `←` moves the caret.
+    /// Read off the event: in a plain text view `⇧⏎` is `insertNewline:`, same as `⏎`.
     override func keyDown(with event: NSEvent) {
         if event.keyCode == 36, event.modifierFlags.contains(.shift) {
             insertText("\n", replacementRange: selectedRange())
@@ -2692,20 +1970,15 @@ final class AnswerFieldView: NSTextView {
         super.keyDown(with: event)
     }
 
-    /// The panel's own recessed step, which is where a field belongs on it: the
-    /// one surface a person is meant to put something into, drawn as the one
-    /// surface that is set into the row.
+    /// The panel's recessed step: the one surface meant for input is drawn set into the row.
     override init(frame: NSRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
         configure()
     }
 
-    /// **Through `NSTextView`'s own `init(frame:)`, never the designated
-    /// initialiser with a `nil` container.** A text view built with no
-    /// container has no text system behind it: measured on Release, every
-    /// keystroke reached `keyDown` and then fell straight through to the
-    /// panel's, because there was nothing there to insert into — a field that
-    /// took the caret and swallowed everything typed into it.
+    /// Through `NSTextView`'s `init(frame:)`, never the designated initialiser with a `nil`
+    /// container: that has no text system, and keystrokes fell through to the panel (measured,
+    /// Release).
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         configure()
@@ -2732,9 +2005,7 @@ final class AnswerFieldView: NSTextView {
         insertionPointColor = .white
         textContainerInset = NSSize(width: 8, height: 5)
         textContainer?.lineFragmentPadding = 0
-        // A `13` pt line in a `28` pt box, so a second line scrolls rather than
-        // growing the row: every height in §12 is fixed before the first
-        // keystroke.
+        // `13` pt line in a `28` pt box: a second line scrolls rather than growing the row (§12).
         textContainer?.widthTracksTextView = true
     }
 
@@ -2742,20 +2013,11 @@ final class AnswerFieldView: NSTextView {
         NSSize(width: NSView.noIntrinsicMetric, height: PanelMetrics.answerRowHeight)
     }
 
-    /// The ground, then the text, then the placeholder — all three here rather
-    /// than in a view above.
+    /// Ground, text and placeholder all drawn here: a SwiftUI overlay would need every keystroke
+    /// and focus change published.
     ///
-    /// A SwiftUI overlay would have to be told when the field stopped being
-    /// empty and when it took the caret, which means publishing every keystroke
-    /// and every click — the one thing this view exists to avoid.
-    ///
-    /// **The ground is the row's quiet button wash, not §4.2's recessed step.**
-    /// §7 refused a recessed rectangle immediately under a body that is already
-    /// on one, because a second one reads as more body rather than as a place to
-    /// type, and that reasoning is untouched: this is the same theme wash the
-    /// `Back`, `Deny` and `Submit` beside it wear, at the same corner and the same
-    /// height, and it is drawn only while the pointer is on the field or the
-    /// caret is in it.
+    /// The ground is the quiet button wash (as on `Back`, `Deny`, `Submit`), not §4.2's recessed
+    /// step, and is drawn only while hovered or focused (§7).
     override func draw(_ dirtyRect: NSRect) {
         drawGround()
         super.draw(dirtyRect)
@@ -2784,30 +2046,20 @@ final class AnswerFieldView: NSTextView {
             NotchPalette.themeInk.onDrawingColor(wash).setFill()
             path.fill()
         }
-        // The focus mark, and it is the option card's own: the field holding the
-        // caret and the option holding the answer are the same statement about
-        // where what you do next will land, so they are drawn the same way.
+        // The focus mark matches the option card's selected stroke.
         guard isFocused else { return }
         NotchPalette.themeInk.onDrawingColor(Self.focusEdgeOpacity).setStroke()
         path.lineWidth = 1
         path.stroke()
     }
 
-    /// The weight ``OptionRow`` strokes a selected card at.
     private static let focusEdgeOpacity = 0.5
 
-    /// The pointer, so a field with nothing in it still says it is one.
+    /// Tracking area so an empty field still reads as one under the pointer.
     ///
-    /// `.activeAlways`: this panel holds the keyboard by activating the app
-    /// (ADR 0020), but it is drawn and hovered long before that, and a tracking
-    /// area that waited for key status would leave the field dead under the
-    /// pointer for the whole of the time the panel is merely being read.
-    ///
-    /// **Tagged, and only the tagged one is ever removed.** `NSTextView`
-    /// installs tracking areas of its own and owns them, so removing by owner
-    /// would take the text system's with it — and both this and the ones it
-    /// keeps deliver `mouseEntered:` to the same method, which is why the tag is
-    /// read there too.
+    /// - `.activeAlways`: the panel is hovered long before it holds the keyboard (ADR 0020).
+    /// - Tagged, and only the tagged area is removed: `NSTextView` owns its own areas, which also
+    ///   deliver `mouseEntered:` here.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         for area in trackingAreas where Self.isHoverArea(area) {
@@ -2839,12 +2091,7 @@ final class AnswerFieldView: NSTextView {
         if Self.isHoverArea(event.trackingArea) { isHovered = false }
     }
 
-    /// The caret arriving and leaving, which is the one state this view draws
-    /// that nothing tells it about.
-    ///
-    /// **Neither of these takes the caret; they only report it.** A click on the
-    /// field is what gives it, `NSTextView` handles that itself, and a click
-    /// anywhere else is what takes it back (``OverlayPanel/sendEvent(_:)``).
+    /// Report caret arrival and departure; they never take it (``OverlayPanel/sendEvent(_:)``).
     override func becomeFirstResponder() -> Bool {
         let took = super.becomeFirstResponder()
         if took { needsDisplay = true }
@@ -2858,15 +2105,8 @@ final class AnswerFieldView: NSTextView {
     }
 }
 
-/// A read-only report of where a scroller stands, drawn in place of the
-/// system's own indicator: a thin line over the whole range, and a thicker,
-/// capsule-ended line over the slice currently visible.
-///
-/// **Always drawn while there is anything to scroll**, not just while
-/// scrolling or hovered — the same standard as the request body's own rail
-/// this generalises. `1.5` points for the range and `3` for the position: it
-/// reports where the reader is and is deliberately not a grip, because it is
-/// never the only way to move.
+/// A read-only scroll indicator: a `1.5` pt line over the range and a `3` pt capsule over the
+/// visible slice. Always drawn while there is anything to scroll; not a grip.
 private struct ScrollRail: View {
     let visibleHeight: CGFloat
     let contentHeight: CGFloat
@@ -2893,19 +2133,10 @@ private struct ScrollRail: View {
     }
 }
 
-/// A body taller than the space it has, and how much of it is missing.
+/// A body taller than its space, with a count of the lines below the fold.
 ///
-/// **The wheel is the only thing that scrolls it**, and nothing else on this
-/// surface scrolls (§6.2). The count is what makes that honest: a fade is right
-/// for a title, where what is lost is more of the same sentence, and wrong for a
-/// command, where what is lost may be a second command after `&&`, a `--force`,
-/// or a path outside the project. So the body says how many lines are under the
-/// fold — **lines rather than bytes**, which is the unit a hidden clause hides
-/// in (§15 q04) — and says nothing once nothing is.
-///
-/// A count that names something unreachable is an apology, which is why the two
-/// arrived together: the rail reports where the reader is, at `1.5` points it is
-/// not a grip, and it is never the only way to move.
+/// Only the wheel scrolls it (§6.2). Counted in lines, not bytes, because a hidden clause
+/// (`&&`, `--force`) hides in lines (§15 q04).
 private struct ScrollingRequestBody: View {
     let layout: RequestBodyLayout
 
@@ -2917,11 +2148,8 @@ private struct ScrollingRequestBody: View {
 
     private var overflows: Bool { travel > 0 }
 
-    /// The slice of the body ``RequestBodyView`` draws lines for (§4.7).
-    ///
-    /// The arithmetic is ``RequestBodyLayout/drawnWindow(scrolledBy:)``'s,
-    /// beside the fold count it has to agree with rather than here beside the
-    /// wheel that moves it.
+    /// The slice ``RequestBodyView`` draws lines for (§4.7); arithmetic lives in
+    /// ``RequestBodyLayout/drawnWindow(scrolledBy:)`` beside the fold count.
     private var window: ClosedRange<CGFloat>? {
         guard overflows else { return nil }
         return layout.drawnWindow(scrolledBy: offset)
@@ -2933,54 +2161,23 @@ private struct ScrollingRequestBody: View {
                 maxWidth: .infinity,
                 alignment: .topLeading
             )
-            // **Rasterised once, then moved.** Translating the body made
-            // SwiftUI re-render every leaf under it on every frame of the
-            // wheel, and a question's leaves are four option cards -- a
-            // `Button` around a fill, a `strokeBorder` and two nested stacks
-            // each. Composited into an image *before* the offset, the scroll
-            // becomes a layer transform: `2.32` ms an event to `1.12`, and a
-            // sustained sweep of the list past an open row from `40%` of a
-            // core to `15%`, which is what that sweep costs with the row shut
-            // (Release, 2026-09-07).
-            //
-            // **`system-architecture.md` §6 measured this in 2026-09-05 and
-            // found it bought nothing, and that reading was right about what
-            // it measured**: a sixty-line command is a stack of `Text` views,
-            // which rasterise to about what they cost to draw (`2.20` ms an
-            // event against `2.07`). It is the cards that this takes out of
-            // the frame, not the lines.
-            //
-            // Verified rather than assumed, because this is the class of
-            // change `AGENTS.md` §7 is about: pixel-identical against the same
-            // panel without it (`227` of `1.36M` pixels differing by more than
-            // `8/255`, every one of them option-card antialiasing, and `0` on
-            // the argument-field form), the same accessibility tree element for
-            // element, options still clickable, and hover across the cards
-            // unchanged at `11%`. On a body far past the viewport -- `1,529`
-            // lines, the hook boundary's `128 KB` cap -- it costs `16 MB` of
-            // resident memory and buys nothing, which is the right way round:
-            // nothing is rasterised that the row is not drawing.
+            // Rasterised before the offset so the wheel is a layer transform: option cards re-rendered
+            // every frame, `2.32` ms → `1.12` ms an event; sweep past an open row `40%` → `15%` of a core
+            // (Release, 2026-09-07). Plain `Text` lines gain nothing (`system-architecture.md` §6).
+            // Verified pixel-identical and same AX tree; `16 MB` on a `128 KB` body (`AGENTS.md` §7).
             .drawingGroup()
             .offset(y: -offset)
             .frame(height: layout.drawnHeight, alignment: .top)
             .clipped()
-            // The fade the count sits over. Without it the line at the fold is
-            // cut through its own glyphs, which reads as damage rather than as
-            // more -- and §4.4's count is drawn *over* this rather than instead
-            // of it, because a fade alone cannot say a `--force` is under there.
+            // Fade at the fold; §4.4's count is drawn over it, since a fade alone cannot show a
+            // `--force` below.
             .mask(alignment: .top) { fold }
             .overlay(alignment: .trailing) { rail }
             .overlay(alignment: .bottomTrailing) { count }
-            // **Driven rather than nested.** A second `ScrollView` inside the
-            // list's own chains against it and loses -- the same finding that
-            // left the Recent queue without a scroller of its own -- so the
-            // wheel is read directly and the body is translated. It also makes
-            // §4.4's count exact, because the offset it counts from is the
-            // offset that was applied.
-            //
-            // **Over the body, never behind it** (`system-architecture.md` §6):
-            // the catcher only ever sees a wheel event if it wins the hit test,
-            // and behind the lines it never does.
+            // Wheel read directly and the body translated: a nested `ScrollView` chains against the
+            // list's and loses. Keeps §4.4's count exact.
+            // Over the body, never behind: behind the lines it never wins the hit test
+            // (`system-architecture.md` §6).
             .overlay(
                 WheelCatcher(claimsTheWheel: overflows) { delta in
                     offset = min(max(offset - delta, 0), travel)
@@ -2995,10 +2192,7 @@ private struct ScrollingRequestBody: View {
             }
     }
 
-    /// Solid to the last full line, then out.
-    ///
-    /// Only where there is something below: a body that fits is drawn whole, and
-    /// fading its foot would say there was more when there is not.
+    /// Solid to the last full line, then out; only when something is below.
     @ViewBuilder
     private var fold: some View {
         if layout.linesBelowTheFold(scrolledBy: offset) > 0 {
@@ -3024,10 +2218,7 @@ private struct ScrollingRequestBody: View {
         )
     }
 
-    /// `+2 lines`, over the fade the body's last line already has.
-    ///
-    /// **Spoken as well as drawn** (§13.3): a reader who cannot see the count
-    /// must not be the only one who does not know something is missing.
+    /// `+2 lines`, over the fade. Spoken as well as drawn (§13.3).
     @ViewBuilder
     private var count: some View {
         let hidden = layout.linesBelowTheFold(scrolledBy: offset)
@@ -3043,26 +2234,13 @@ private struct ScrollingRequestBody: View {
     }
 }
 
-/// Reads the wheel over one region, and claims nothing else.
+/// Reads the wheel over one region and claims nothing else.
 ///
-/// The same shape as ``SecondaryClickCatcher``, down to the placement: an
-/// `NSView` drawn **over** the region, claiming exactly one kind of event in
-/// ``WheelCatcherView/hitTest(_:)`` and transparent to every other, so the
-/// row's clicks and the panel's hover are untouched.
-///
-/// It was written as a `.background` instead, which reads as the safer half of
-/// that shape and is the one thing the shape cannot do: AppKit dispatches
-/// `scrollWheel` to whatever `hitTest` answers with, SwiftUI answers with the
-/// frontmost hit-testable thing it finds, and the body's own lines are
-/// hit-testable -- so behind them this view was never hit at all, and every
-/// wheel event over an open request went to the list's `ScrollView` instead
-/// (`system-architecture.md` §6).
+/// Like ``SecondaryClickCatcher``: drawn over the region, claiming one event type in
+/// ``WheelCatcherView/hitTest(_:)``. As a `.background` it was never hit, since the body's
+/// lines win the hit test (`system-architecture.md` §6).
 struct WheelCatcher: NSViewRepresentable {
-    /// Whether there is anything under this region for the wheel to move.
-    ///
-    /// A body that fits claims nothing, so the wheel falls through to the list
-    /// it is drawn in: swallowing it would make the pointer resting on a short
-    /// request the one place on the panel where the list cannot be scrolled.
+    /// A body that fits claims nothing, so the wheel still scrolls the list.
     let claimsTheWheel: Bool
     let onScroll: (CGFloat) -> Void
 
@@ -3084,8 +2262,7 @@ final class WheelCatcherView: NSView {
     var claimsTheWheel = false
 
     override func scrollWheel(with event: NSEvent) {
-        // A trackpad reports pixels and a wheel reports lines; both arrive as
-        // `scrollingDeltaY`, and the precise flag is what says which.
+        // Trackpad reports pixels, a wheel lines; the precise flag says which.
         let delta = event.hasPreciseScrollingDeltas
             ? event.scrollingDeltaY
             : event.scrollingDeltaY * 12
@@ -3093,54 +2270,29 @@ final class WheelCatcherView: NSView {
         onScroll?(delta)
     }
 
-    /// Whether an event of this type is one this view is entitled to take.
-    ///
-    /// Split out from ``hitTest(_:)`` for the reason
-    /// ``SecondaryClickView/claims(_:)`` is: it is the one thing here that can
-    /// be asserted without a running event loop, and the one thing that must not
-    /// drift. Widen it and the lines and options underneath stop taking clicks;
-    /// narrow it and the body stops scrolling.
+    /// Split out from ``hitTest(_:)`` to be testable without an event loop, like
+    /// ``SecondaryClickView/claims(_:)``. Wider breaks clicks underneath; narrower breaks scrolling.
     func claims(_ eventType: NSEvent.EventType?) -> Bool {
         claimsTheWheel && eventType == .scrollWheel
     }
 
-    /// Claimed only for the wheel, and only where there is travel.
-    ///
-    /// `nil` is also the answer when there is no current event at all, which is
-    /// how AppKit asks about geometry rather than about a gesture.
+    /// Claimed only for the wheel, only with travel. `nil` with no current event: that is AppKit
+    /// asking about geometry.
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard claims(NSApp.currentEvent?.type) else { return nil }
         return super.hitTest(point)
     }
 
-    /// It reads one gesture and owns no state; the field on an open row is the
-    /// only thing on this panel that wants the keyboard.
     override var acceptsFirstResponder: Bool { false }
 }
 
-/// One request's body: the lines it wrapped to, and the options under them.
+/// One request's body: the lines the layout counted, and the options under them.
 ///
-/// **The lines are the ones the layout counted**, character for character,
-/// which is what makes §4.4's count of what is below the fold true rather than
-/// approximately true.
-///
-/// **It draws the lines the window reaches and holds the rest of the height
-/// open** (§4.7). A body is bounded by the panel and a payload is not: the hook
-/// boundary allows `128 KB`, which is a plan of fifteen hundred wrapped lines
-/// behind a viewport that shows eight, and a `Text` per line put opening one at
-/// `0.80` s, `240` wheel events over it at `2.09` s, and `39` MB on the
-/// process that will never be looked at. What stands in for the
-/// lines that are nowhere near the viewport is their own height, so the body is
-/// exactly as tall as ``RequestBodyLayout/contentHeight`` either way — which is
-/// what the wheel's travel, the rail and §4.4's count are all measured from,
-/// and none of them knows this happens.
-///
-/// `window` is `nil` wherever there is no viewport to be outside of — a
-/// measurement, a snapshot, a specimen — and that draws every line.
+/// Draws only lines the window reaches and holds the rest open by height (§4.7): a `128 KB`
+/// payload as a `Text` per line took `0.80` s to open, `2.09` s for `240` wheel events and
+/// `39` MB. Height always equals ``RequestBodyLayout/contentHeight``. `window` `nil` draws all.
 struct RequestBodyView: View {
     let layout: RequestBodyLayout
-    /// The vertical slice of the body that is on screen, in the body's own
-    /// coordinates, or `nil` for all of it.
     var window: ClosedRange<CGFloat>?
 
     var body: some View {
@@ -3162,13 +2314,8 @@ struct RequestBodyView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// **Every field is built, and only its lines are windowed.** A field is
-    /// one accessibility element carrying its whole label and value
-    /// (§13.3), and it is the argument that supplies those rather than the
-    /// drawn lines — so skipping a field would take a parameter of the
-    /// permission out of the tree, where skipping its lines takes nothing at
-    /// all. Their count is what a tool's own signature bounds; their lines are
-    /// what the payload does.
+    /// Every field is built and only its lines windowed: each field is one accessibility element
+    /// with its whole label and value (§13.3).
     private var arguments: some View {
         VStack(alignment: .leading, spacing: PanelMetrics.argumentSpacing) {
             ForEach(Array(zip(layout.fields, layout.fieldTops)), id: \.0.id) { field, top in
@@ -3213,14 +2360,9 @@ struct RequestBodyView: View {
         }
     }
 
-    /// One run of equal-height lines, drawn where the window reaches it and
-    /// held open by its own height where it does not.
-    ///
-    /// `top` is where this run starts in the body, which is the one thing a
-    /// stack cannot work out for itself and the one thing that must agree with
-    /// ``RequestBodyLayout/linesBelowTheFold(scrolledBy:)`` — so both take it
-    /// from ``RequestBodyLayout/fieldTops`` and
-    /// ``RequestBodyLayout/textTop`` rather than each adding it up.
+    /// One run of equal-height lines, drawn where the window reaches it, held open otherwise.
+    /// `top` comes from ``RequestBodyLayout/fieldTops`` and ``RequestBodyLayout/textTop`` so it
+    /// agrees with ``RequestBodyLayout/linesBelowTheFold(scrolledBy:)``.
     private func lineStack(
         _ lines: [String],
         height: CGFloat,
@@ -3264,8 +2406,7 @@ struct RequestBodyView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
 
         if layout.setting == .machineText {
-            // The recessed ground exists to mark machine text, and putting
-            // prose on it would make the mark mean nothing (§4.2).
+            // The recessed ground marks machine text only (§4.2).
             lines
                 .padding(.horizontal, PanelMetrics.machineTextHorizontalInset)
                 .padding(.vertical, PanelMetrics.machineTextVerticalInset)
@@ -3292,13 +2433,8 @@ struct RequestBodyView: View {
 /// Expanding text never selects or sends an answer. Read-only requests retain
 /// the disclosure while disabling selection.
 ///
-/// **A ticked option stays ticked whatever is in the field** (§5.4, reversed
-/// 2026-09-07). Text used to suppress the marker and the card emphasis, which
-/// was the announcement that the options had stopped being the answer — and it
-/// made an option unselectable in practice, because selecting one changed
-/// nothing anybody could see. The priority is now the other way round, so the
-/// suppression moves to the side that loses: the field dims, and the card is
-/// simply selected.
+/// A ticked option stays ticked whatever is in the field; the field dims instead (§5.4,
+/// reversed 2026-09-07).
 struct OptionRow: View {
     @EnvironmentObject private var store: MonitorStore
     let layout: RequestBodyLayout.Option
@@ -3308,19 +2444,9 @@ struct OptionRow: View {
     private var selected: Bool { store.isOptionTicked(layout.id) }
     private var isAnswerable: Bool { store.openRequest?.canBeAnswered == true }
 
-    /// **The card is the target, and it is the whole card** (§6.6). The
-    /// rectangle the pointer lights up and the rectangle a click lands in are
-    /// the same one: the `10` pt insets, the marker column and the disclosure's
-    /// own line all belong to the option, so anywhere the hover fill reaches
-    /// selects it.
-    ///
-    /// It reads as one statement and it is built as one: the padding is inside
-    /// the button's label rather than around the button, and the disclosure's
-    /// line is *held open* there by a clear band and drawn over the top of it.
-    /// Laid out as siblings in a `VStack` the two buttons divide the card
-    /// between them, and everything neither one covers — the ring, and the
-    /// whole of the disclosure's line either side of two words — is ground that
-    /// answers the pointer and refuses the click.
+    /// The whole card is the target (§6.6): padding sits inside the button's label, and the
+    /// disclosure's line is held open by a clear band and drawn over it. As `VStack` siblings the
+    /// gaps lit on hover but refused the click.
     var body: some View {
         ZStack(alignment: .bottomLeading) {
             Button {
@@ -3340,9 +2466,6 @@ struct OptionRow: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     if layout.canExpand {
-                        // The disclosure's band, held open inside the button so
-                        // the card is one target and its two words are the
-                        // exception drawn over it.
                         Color.clear.frame(height: PanelMetrics.optionDisclosureHeight)
                     }
                 }
@@ -3410,61 +2533,19 @@ struct OptionRow: View {
 
 /// The bar at the head of one product's block on the live list.
 ///
-/// **It is ``RecentSeam``'s bar with the badge standing where the label
-/// stands.** The same `32`, the same caption idiom for the count, the same
-/// hairline — and none of the seam's control: no chevron, no hover fill, no
-/// press, no click. Folding a block is not offered, and a bar that washes
-/// under the pointer and then does nothing is a promise made quietly
-/// (`answer-in-notch.md` §11 rule 03). What that buys, besides honesty, is
-/// that folding is a pure addition if it is ever wanted: the chevron goes back
-/// at `492`, the rule stops `8` short of it again, and the seam's own ground
-/// and `Button` arrive with it.
+/// - ``RecentSeam``'s bar with the badge where the label stands, minus the control: folding a
+///   block is not offered, so no chevron, hover or click (`answer-in-notch.md` §11 rule 03).
+/// - The rule runs the full width, since there is no control to stop short of.
+/// - Square ground, not rounded: the bar pins, and a `12` pt corner would show rows beneath.
+/// - All slack sits above the chip (``PanelMetrics/productGroupHeaderSlack``, `8`), so a
+///   heading is nearer what it heads.
+/// - The leading block drops the slack (``PanelMetrics/leadingProductGroupHeaderHeight``); the
+///   band brings its own, so ``ExpandedPanelContent`` draws no hairline.
 ///
-/// **The rule therefore runs the full content width**, where the seam's stops
-/// short of the control it sits beside. That difference is the only thing on
-/// this surface that tells a label from a thing you can press, so it is worth
-/// the two lines it costs.
-///
-/// **The ground is a square rectangle rather than the seam's rounded one**,
-/// because this bar pins: rows scroll *under* it, and a `12` pt corner leaves
-/// four gaps for a row's own corner to show through. Both are black, so
-/// nothing about it is visible until something slides beneath.
-///
-/// **All of the bar's slack sits above the chip, and none below it.** Centred,
-/// the bar put half its slack over the chip and half under — and the row
-/// beneath brings its own top padding, so the chip stood nearer to the rule
-/// above it than to the caption it was heading. A heading nearer to what
-/// precedes it than to what it heads is a heading attached to the wrong thing;
-/// centring is right for a bar that closes a list and wrong for one that opens
-/// a block. Taking the whole of the slack above inverts it — the slack clear
-/// of what came before, and the row's own padding and nothing added to the
-/// caption below.
-///
-/// **The slack is `8`, where it was `16`** — see
-/// ``PanelMetrics/productGroupHeaderSlack``. At `16` the inversion was right
-/// and the figure was not: a row ends on its own `8.5`, so a block boundary
-/// cost `24.5` of black against the `17` the list spends between two rows, and
-/// the largest gap on the surface fell between two things that belong to the
-/// same list. Halved, the chip keeps `16.5` above and `8.5` below — still
-/// twice as near to what it heads — and a block boundary now costs what a row
-/// boundary costs.
-///
-/// **The first block's bar is that bar with the slack taken off**, `16` and
-/// the chip alone (``PanelMetrics/leadingProductGroupHeaderHeight``). The
-/// slack is what separates a heading from what precedes it, and the first
-/// heading is preceded by the band, which brings its own — so the `16` was
-/// paid twice and the panel opened on a stripe of black. Off, the chip's top
-/// edge stands where the panel's own hairline used to be drawn, and this bar's
-/// rule stands `8` under it, which is why that hairline is now not drawn at
-/// all (``ExpandedPanelContent``).
-///
-/// Internal for the same reason ``ActiveSessionList`` is — the height it draws
-/// at against the height the panel was sized to is only checkable by laying it
-/// out.
+/// Internal like ``ActiveSessionList``, so its laid-out height can be checked.
 struct ProductGroupHeader: View {
     let group: MonitorAggregation.SessionGroup
-    /// Whether this is the block the panel opens on, which is drawn without
-    /// the slack — see ``PanelMetrics/leadingProductGroupHeaderHeight``.
+    /// The block the panel opens on, drawn without the slack.
     var isLeading: Bool = false
 
     private var height: CGFloat {
@@ -3481,23 +2562,9 @@ struct ProductGroupHeader: View {
                 HStack(spacing: PanelMetrics.productBadgeCountSpacing) {
                     ProductBadge(name: group.agent.displayName)
 
-                    // **The separator is drawn rather than set, and it is the
-                    // seam's own dot** -- the same `2` pt in the same caption
-                    // ink (``PanelMetrics/captionSeparatorDotSize``). Drawn
-                    // because a set `·` sits on its own x-height, which is
-                    // below the line this bar centres its contents on, so the
-                    // rule ran past the mark rather than through it.
-                    //
-                    // It was `3` at the hairline's value, on the reading that
-                    // a separator is chrome rather than a reading. That reads
-                    // as two idioms on one bar: §4.2 *is* the Recent seam with
-                    // a chip standing where the label stands, and a chip and a
-                    // count are held apart by whatever holds a word and a
-                    // count apart. One bar, one mark.
-                    //
-                    // It stands on the **middle** of the gap the glyph held
-                    // (``PanelMetrics/productBadgeCountSpacing``), so the count
-                    // has not moved by a point through either change.
+                    // A drawn `2` pt dot like the seam's
+                    // (``PanelMetrics/captionSeparatorDotSize``): a set `·` sits below the bar's
+                    // centre line. Centred in ``PanelMetrics/productBadgeCountSpacing``.
                     Circle()
                         .fill(NotchPalette.label)
                         .frame(
@@ -3506,13 +2573,8 @@ struct ProductGroupHeader: View {
                         )
                         .accessibilityHidden(true)
 
-                    // One step brighter while this block holds somebody's
-                    // attention. Grouped, the most urgent row on the surface
-                    // may be inside the second block and below the fold; this
-                    // is what says so, and it says it in the channel this
-                    // panel already spends on exactly that meaning
-                    // (`panel-v2.md` §1.1): every value brighter than the
-                    // values around it is brighter because a person is wanted.
+                    // One step brighter while the block wants attention: grouped, the most urgent row may be
+                    // below the fold (`panel-v2.md` §1.1).
                     Text(verbatim: "\(group.sessions.count)")
                         .font(Font(PanelMetrics.captionFont))
                         .foregroundStyle(
@@ -3536,7 +2598,6 @@ struct ProductGroupHeader: View {
         .animation(.easeInOut(duration: 0.16), value: group.wantsAttention)
     }
 
-    /// Brightness cannot be heard, so the lit count says what it means.
     private var spokenLabel: String {
         let count = group.sessions.count
         let rows = "\(count) session\(count == 1 ? "" : "s")"
@@ -3546,19 +2607,10 @@ struct ProductGroupHeader: View {
     }
 }
 
-/// The rule between the list and what it has let go of.
+/// The rule between the live list and the Recent queue (`expanded-panel-v2.md` §2.2).
 ///
-/// A label, a hairline and a chevron on one `32` pt line at the foot of the
-/// live list (`expanded-panel-v2.md` §2.2). **The whole line is the target**,
-/// and that is a departure from the quota's control: §5.4 gave that chevron a
-/// `16 × 16` hit area because the rest of its line is a reading somebody might
-/// want to select, and this line carries only its own name — so it takes the
-/// row's own hover fill and the row's own click (§2.4 rule 08).
-///
-/// The count is live and is the one thing here that says there is more below
-/// than is drawn: the eight points the viewport has left over at six or more
-/// fall inside the sixth row's top padding and carry no ink at all, so an
-/// over-full queue is drawn exactly like a full one.
+/// The whole `32` pt line is the target, unlike the quota chevron (§2.4 rule 08). The count is
+/// the only sign of an over-full queue: the viewport's spare `8` pt carries no ink.
 private struct RecentSeam: View {
     @EnvironmentObject private var store: MonitorStore
     @Environment(\.overlayBodyWidth) private var overlayBodyWidth
@@ -3597,11 +2649,8 @@ private struct SeamContent: View {
                 .fill(Color.black)
 
             HStack(spacing: 8) {
-                // The caption idiom exactly, separator included -- and the
-                // separator is one of the bar's own contents rather than a
-                // glyph inside the label, so it stands on the hairline's line
-                // and at the size the row below sets its own separator
-                // (``PanelMetrics/captionSeparatorDotSize``).
+                // The separator is the bar's own content, not a glyph in the label, sized by
+                // ``PanelMetrics/captionSeparatorDotSize``.
                 HStack(spacing: PanelMetrics.seamSeparatorSpacing) {
                     Text("Recent")
 
@@ -3651,27 +2700,15 @@ private struct SeamContent: View {
 
     private var isEmphasized: Bool { isHovered || isPressed }
 
-    /// The caption's ink, which the drawn separator takes too: the label and
-    /// its dot are one reading and brighten together.
     private var ink: Color {
         isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label
     }
 }
 
-/// The rule a folding bar draws between its label and its chevron.
+/// The rule between a folding bar's label and its chevron, drawn only while the section is open.
 ///
-/// **It says the section is open, not that the section exists.** The Recent
-/// seam used to draw it at rest and the footer's spend line never drew it at
-/// all, which read as two different kinds of bar; they are one kind, so they
-/// draw one mark, and the mark belongs to the state that has a list under it
-/// to rule off. Folded, there is nothing below to separate and the line is
-/// decoration on a closed row.
-///
-/// It keeps its width while hidden so nothing beside it moves on the way in
-/// or out — the label and the chevron stay where they were — and it grows and
-/// retreats from the label's edge, which is the edge a rule is drawn from. It
-/// still stops short of the control rather than running under it: a 1 pt line
-/// through a chevron reads as a strike, not as a rule.
+/// Keeps its width while hidden so nothing beside it moves; grows from the label's edge and stops
+/// short of the chevron (a line through it reads as a strike).
 private struct FoldSeamRule: View {
     let isVisible: Bool
 
@@ -3685,19 +2722,10 @@ private struct FoldSeamRule: View {
     }
 }
 
-/// A row that has left the list, under the rule.
+/// A row that has left the list: **product · project · subject** and an age, at half a live
+/// row's height (`expanded-panel-v2.md` §2.3). Claims no status.
 ///
-/// One line — **product · project · subject** — and an age, at half a live
-/// row's height (`expanded-panel-v2.md` §2.3). **Nothing here claims a
-/// status**, because the rule's meaning is that the list stops there: the
-/// ground family does not travel below it, and a bare age counts the other way
-/// from a bare Running reading besides.
-///
-/// Its click is the live row's click, unchanged, which is also the answer to
-/// §8.5 question 06: a product that has gone dark is re-asked at the moment
-/// somebody wants it, and `openAndWait` already reports what it could not do.
-/// Its secondary click is the live row's too, meaning the same thing one rule
-/// down — take this away (§2.4 rule 09).
+/// Click and secondary click are the live row's (§8.5 question 06, §2.4 rule 09).
 private struct RetiredRow: View {
     @EnvironmentObject private var store: MonitorStore
 
@@ -3724,13 +2752,8 @@ private struct RetiredRow: View {
         }
     }
 
-    /// The line spelled out, with the age as words.
-    ///
-    /// **The product is named here whether or not a badge is drawn**, and that
-    /// is not the live row's rule. A badge is dropped when there is nothing to
-    /// disambiguate *on the surface*; a reader arriving at a line under a rule
-    /// has no surface to compare it against, and the product is the first thing
-    /// that says where clicking would go.
+    /// Spoken line with the age in words. Always names the product: a reader has no surface to
+    /// disambiguate against.
     private var accessibilityText: String {
         let session = departure.session
         let age = departure.spokenAgeText(at: store.recentReadAt)
@@ -3759,9 +2782,7 @@ private struct RetiredRowContent: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .fill(NotchPalette.themeInk.on.opacity(fillOpacity))
                 )
-                // The live row's wash, at the live row's inset: nothing stands
-                // over a retired row that this could collide with, and one
-                // wash drawn two ways would still be two idioms.
+                // The live row's wash at the live row's inset.
                 .padding(.vertical, PanelMetrics.sessionRowGroundInset)
 
             HStack(spacing: 12) {
@@ -3769,8 +2790,7 @@ private struct RetiredRowContent: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .fixedSize(horizontal: false, vertical: true)
 
-                // Bare, tabular, and never wider than two characters — the
-                // window and the reading agree (§2.3).
+                // Bare, tabular, at most two characters (§2.3).
                 Text(departure.ageText(at: store.recentReadAt))
                     .font(.system(size: 13, weight: .light).monospacedDigit())
                     .foregroundStyle(isEmphasized ? NotchPalette.labelEmphasized : NotchPalette.label)
@@ -3792,22 +2812,14 @@ private struct RetiredRowContent: View {
         )
     }
 
-    /// **product · project · subject**, in the three inks the panel already has.
-    ///
-    /// It overflows and fades rather than truncating, like every other line
-    /// here. The badge is drawn on every row and asks nothing (§8.6): it used
-    /// to follow the live row's presence rule and stop while there was only
-    /// one product to name, and nothing below the seam is grouped, so this is
-    /// the only place the product is ever said here.
+    /// **product · project · subject** in the panel's three inks; overflows and fades. The badge is
+    /// always drawn (§8.6): nothing below the seam is grouped.
     private var breadcrumb: some View {
         HStack(spacing: 6) {
             ProductBadge(name: departure.session.agent.displayName)
 
             if store.coversWords(of: departure.session) {
-                // One line covered by one bar, at the title's length -- a
-                // retired row is `Project · title` set as a single run, so a
-                // fourth figure of its own would be a number saying nothing
-                // the row's own halves do not (`cover-the-words.md` §4.1).
+                // One bar at the title's length; a retired row is a single run (`cover-the-words.md` §4.1).
                 CoverBar(
                     length: PanelMetrics.coverBarBreadcrumbLength,
                     lineHeight: PanelMetrics.sessionRowCaptionHeight
@@ -3841,10 +2853,7 @@ private struct RetiredRowContent: View {
 
     private var isEmphasized: Bool { isHovered || isPressed }
 
-    /// The live row's wash, at the live row's weights — see
-    /// ``NotchPalette/RowEmphasis``. A retired row is a row of a list that is
-    /// clicked for the same reason and opens the same thing, so it answers the
-    /// pointer the same way.
+    /// The live row's wash and weights (``NotchPalette/RowEmphasis``).
     private var fillOpacity: Double {
         if isPressed { return NotchPalette.RowEmphasis.sessionPressedFillOpacity }
         if isHovered { return NotchPalette.RowEmphasis.sessionHoverFillOpacity }
@@ -3852,8 +2861,7 @@ private struct RetiredRowContent: View {
     }
 }
 
-/// Internal rather than private so a figure can host it in a state a pointer
-/// would otherwise have to be in — see the geometry tests' hovered row.
+/// Internal so a figure can host it in a pointer state (see the geometry tests' hovered row).
 struct SessionRowContent: View {
     @Environment(\.sessionRowIsPressed) private var isPressed
 
@@ -3864,10 +2872,8 @@ struct SessionRowContent: View {
 
     var body: some View {
         ZStack {
-            // **The wash stands off the row's own edges** -- a block's heading
-            // gives all its slack to the chip's top and leaves the air beneath
-            // to this row's padding, and that air has to survive the row being
-            // looked at (``PanelMetrics/sessionRowGroundInset``).
+            // The wash is inset (``PanelMetrics/sessionRowGroundInset``) so the air under a heading's
+            // chip survives hover.
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .fill(Color.black)
                 .overlay(
@@ -3880,15 +2886,8 @@ struct SessionRowContent: View {
                 VStack(alignment: .leading, spacing: PanelMetrics.sessionRowLineSpacing) {
                     SessionRowCaption(
                         session: session,
-                        // **A closed live row draws a chip only on the flat
-                        // list.** Grouped, the heading above it has already
-                        // said the name, and a boundary after a boundary is a
-                        // mark doing nothing (`panel-v2.md` §3.4) — a chip
-                        // repeating the heading on each line is the separator
-                        // that decision deleted. With `Group by product` off
-                        // there is no heading, and the row is the only thing
-                        // that can say whose it is. ``OpenRow`` keeps its own
-                        // either way, and the reason is written there.
+                        // Chip only on the flat list: grouped, the heading already names it
+                        // (`panel-v2.md` §3.4). ``OpenRow`` keeps its own.
                         showsAttribution: !store.groupsSessionsByProduct,
                         isEmphasized: isEmphasized,
                         isCovered: isCovered
@@ -3908,26 +2907,12 @@ struct SessionRowContent: View {
                         )
                     }
 
-                    // **The last thing said about this row**, which is the
-                    // product's own preview until an answer leaves from here
-                    // and this app has something newer to say (§8 states 02
-                    // and 03), or ``RowContentFallback/liveProgress`` when the
-                    // product has said nothing at all yet. One line, in one
-                    // ink, always drawn -- see ``MonitorStore/previewLine(for:)``.
-                    //
-                    // **Covered, the line is asked for anyway and thrown
-                    // away.** A cover that also dropped the row's third line
-                    // would take `20` points out of a `72` pt row, and the
-                    // panel would change height at the moment somebody
-                    // reached for the gesture -- with an audience watching,
-                    // which is the one thing `cover-the-words.md` §4.2
-                    // arranges never to happen.
+                    // Always one line: the product's preview, this app's answer status (§8 states
+                    // 02 and 03), or ``RowContentFallback/liveProgress``. See
+                    // ``MonitorStore/previewLine(for:)``. Covered, the line is still laid out so
+                    // the `72` pt row does not change height (`cover-the-words.md` §4.2).
                     if isCovered {
-                        // **The searchlight crosses the cover too.** It is
-                        // the channel that answers *live or finished* --
-                        // the one thing on this panel readable without
-                        // looking straight at it -- and covering takes the
-                        // content away, not the reading.
+                        // The searchlight crosses the cover too: covering hides content, not live/finished.
                         CoverBar(
                             length: PanelMetrics.coverBarPreviewLength,
                             lineHeight: PanelMetrics.sessionRowPreviewHeight,
@@ -3966,17 +2951,12 @@ struct SessionRowContent: View {
 
     private var sweepsBody: Bool { store.sweepsBody(for: session) }
 
-    /// Whether this row's three runs are drawn as bars
-    /// (`cover-the-words.md` §3).
+    /// Whether the row's three runs are drawn as bars (`cover-the-words.md` §3).
     private var isCovered: Bool { store.coversWords(of: session) }
 
     private var isEmphasized: Bool { isHovered || isPressed }
 
-    /// The row's own wash, in ``NotchPalette/themeInk``'s lit colour at a
-    /// few points of opacity — see ``NotchPalette/RowEmphasis``. Still the
-    /// app's own ink doing the answering, just as a fill again rather than a
-    /// border, and still never what a tile sitting on the row measures its
-    /// own lift against.
+    /// The row's wash in ``NotchPalette/themeInk``'s lit colour; see ``NotchPalette/RowEmphasis``.
     private var fillOpacity: Double {
         if isPressed { return NotchPalette.RowEmphasis.sessionPressedFillOpacity }
         if isHovered { return NotchPalette.RowEmphasis.sessionHoverFillOpacity }
@@ -3987,86 +2967,35 @@ struct SessionRowContent: View {
 private struct SessionStatusControl: View {
     @EnvironmentObject private var store: MonitorStore
     let session: MonitoredSession
-    /// Whether the pointer is on **this mark**, rather than anywhere on the row.
-    ///
-    /// The distinction is the whole of `answer-in-notch.md` §3: the row's text
-    /// is the Thread and the mark is the request, so a pointer resting on the
-    /// title must not offer a word describing what the mark would do. It is
-    /// held here rather than passed down for the same reason — the row's own
-    /// hover answers a different question.
+    /// Pointer on this mark, not the row: the text is the Thread and the mark is the request
+    /// (`answer-in-notch.md` §3).
     @State private var isMarkHovered = false
 
-    // One mark per row at most, and no hue — this surface says everything with
-    // brightness and shape, and the amber and green dots were the only two
-    // colours left on it. What changed in `figma-design.md` page 14 is that the
-    // mark now has three silhouettes rather than one drawn three ways: a bare
-    // reading while the turn runs, the same reading on white while it wants a
-    // person, and ~~on a dim ground~~ **behind a dot** once it has finished.
-    //
-    // **Presence and brightness were both comparisons, and that was the bug.**
-    // "No timer" only reads as finished beside a row that has one, and a white
-    // timer only reads as waiting beside a dimmer one — so a row read on its
-    // own, or a list where every row happens to be in the same state, answered
-    // neither question. A ground is a silhouette, which one row can answer
-    // alone. It is the ``SubagentBadgeView`` tile at reading width, which is
-    // also why the two compose here without a case of their own.
-    //
-    // **The finished silhouette is a dot now, and it is the same argument.** A
-    // mark in front of the digits is answerable by one row exactly as a ground
-    // behind them was, and it costs the surface one silhouette rather than two:
-    // the notch already drew this dot for a finished turn it could not
-    // otherwise speak for (``FinishedTurnDot``), so the panel and the bar stop
-    // saying one thing two ways. The tile stays where it is still a tile —
-    // ``SubagentBadgeView`` — and the bright ground stays, because it answers
-    // *does this want a person* rather than *has this stopped*.
-    //
-    // A finished row with a subagent still working keeps the badge in this
-    // slot, as before: the turn's own clock has stopped — it really did end —
-    // but the thread has not, and the badge is already this tile, so the
-    // silhouette is unchanged and only what sits inside it differs.
-    //
-    // **The ground has both states, and which one it gets is the whole
-    // difference between two very different situations.** Dim, work is in
-    // flight and nobody is needed. Bright, something here is stopped on a
-    // question — the turn itself, or a subagent of it, which is reachable on a
-    // Completed row because a subagent's dialog can open after the parent
-    // turn's terminal. The row's own state is untouched either way; see
+    // One mark per row, no hue; three silhouettes that one row answers alone
+    // (`figma-design.md` page 14):
+    // - Running: a bare reading.
+    // - Wants a person: the word on the bright ground.
+    // - Finished: a dot and the digits, like ``FinishedTurnDot``; a subagent still working keeps
+    //   the ``SubagentBadgeView`` tile here.
+    // A dim badge ground means work in flight; bright means something is stopped on a question,
+    // possibly a subagent on a Completed row. The row's state is untouched; see
     // ``wantsAttention``.
     var body: some View {
         if session.status.wantsPerson {
-            // **The name, not the duration** (`panel-v2.md` §3.5). A row that
-            // wants a person says what it wants them for, and the ground is
-            // sized once for the longest word it can hold so that nothing moves
-            // when a passing pointer changes that word to `Answer` or `Read`
-            // (`answer-in-notch.md` §3.3). A ground sized for `0:42` could not
-            // hold either without moving, which is why the two could not both
-            // live here and why the duration went to the finished row's dark
-            // ground.
-            //
-            // It reads the row's **own** turn and never its derived status, so
-            // a Running row whose subagent is waiting keeps its timer and says
-            // so in brightness alone -- which is `CONTEXT.md`'s rule that a row
-            // reports one turn, with the ground as its single exception.
+            // The verb, not the duration (`panel-v2.md` §3.5). Reads the row's own turn, not its derived
+            // status (`CONTEXT.md`: a row reports one turn, the ground its single exception).
             waitingWord
         } else if let startedAt = store.elapsedStart(for: session) {
             reading(startedAt: startedAt, stoppedAt: nil)
         } else if session.showsSubagentBadge {
-            // `dual-agent-design.md` §10: an expanded row's badge is neutral,
-            // whatever else is connected -- the row already names its product
-            // on the caption above, and since `colour-v2.md` §1 there is no
-            // product hue for it to be neutral *against*. One badge carrying
-            // the whole count, with the ground saying whether any of them is
-            // stopped.
+            // Neutral badge (`dual-agent-design.md` §10; no product hue since `colour-v2.md` §1). One
+            // badge for the whole count; the ground says whether any is stopped.
             SubagentBadgeView(badge: session.subagentBadge)
         } else if let span = store.finishedElapsed(for: session) {
-            // What the turn took, which the slot used to throw away. No other
-            // part of this surface reports it, and it is what turns the mark
-            // from an absence into a record.
+            // What the turn took; nothing else on the surface reports it.
             reading(startedAt: span.start, stoppedAt: span.end)
         } else if session.status.keepsTiming {
-            // Unfinished but its start was never observed — unreachable with
-            // hook-sourced data, and it must not be left unmarked when previews
-            // are hidden and there is no swept body either.
+            // Start never observed (unreachable with hook data); must not be left unmarked.
             Circle()
                 .fill(NotchPalette.label)
                 .frame(width: 8, height: 8)
@@ -4076,31 +3005,16 @@ private struct SessionStatusControl: View {
 
     /// What this row wants, on the ground that says it wants something.
     ///
-    /// A `Text` rather than the layer-backed readout it replaces, and that is
-    /// an improvement rather than a compromise: the readout redrew this cell
-    /// once a second for as long as a row sat waiting, and a name does not tick
-    /// at all. `AGENTS.md` §7's rule is about continuous motion, and this
-    /// removes some.
-    ///
-    /// **It is built like a control now and not like a reading.** It used to be
-    /// a ``ReadingGround`` — the elapsed reading's own `16` pt tile — at a width
-    /// reserved for the longest of four strings, which drew a `113 × 16` slab
-    /// of pure white under a phrase naming a state. It is ``AnswerControl``'s
-    /// own height, corner, padding and weight now, over one verb at one width,
-    /// and the ground is the app's own ink, deepened under the pointer. See
-    /// ``NotchPalette/brightGround``.
+    /// A `Text` that does not tick (`AGENTS.md` §7). Built like ``AnswerControl`` (height, corner,
+    /// padding, weight) on the app's ink; see ``NotchPalette/brightGround``.
     private var waitingWord: some View {
         Text(word)
             .font(Font(PanelMetrics.waitingMarkFont))
             .foregroundStyle(NotchPalette.onBrightGround)
             .lineLimit(1)
             .fixedSize()
-            // One width for all three verbs, and the word centred in it --
-            // ``PanelMetrics/waitingMarkWidth`` is the widest of them, so the
-            // padding is `12` a side on `Approve` and more on the other two.
-            // A frame rather than padding because it is the silhouette that is
-            // shared here, not the inset: one control appearing once per row
-            // should draw one shape down the list.
+            // One width for all three verbs (``PanelMetrics/waitingMarkWidth``), word centred: one
+            // silhouette down the list.
             .frame(
                 width: PanelMetrics.waitingMarkWidth,
                 height: PanelMetrics.waitingMarkHeight
@@ -4112,22 +3026,14 @@ private struct SessionStatusControl: View {
                 )
                 .fill(ground)
             )
-            // No curve, like the row it sits on: a chip that lit at a
-            // different speed from its row would read as two things answering
-            // one pointer (``NotchPalette/RowEmphasis/controlHoverDuration``).
-            // An overlay rather than a background, and it declines every hit:
-            // a view behind the content never wins the hit test, and this one
-            // must not win it anyway -- the tap below is the target.
+            // No curve, matching the row (``NotchPalette/RowEmphasis/controlHoverDuration``).
+            // An overlay that declines every hit; the tap below is the target.
             .overlay(PointingHandCursor())
             .onHover { isMarkHovered = $0 }
             .contentShape(Rectangle())
-        // **The mark is the request; the text is the Thread** (§3). A tap on a
-        // descendant takes precedence over the row's own button, so this is the
-        // second target without the row becoming two views — and no other row
-        // gains one, because a row with no mark has nothing to open.
+        // The mark is the request, the text is the Thread (§3); a descendant's tap wins over the row.
         .onTapGesture { store.toggleOpenRow(session) }
-        // Spoken as an action rather than a second label: assistive technology
-        // reaches it by its own means, which are not a pointer (§13.3).
+        // Spoken as an action, not a second label (§13.3).
         .accessibilityElement()
         .accessibilityLabel(session.status.displayName)
         .accessibilityAddTraits(session.request == nil ? [] : .isButton)
@@ -4136,20 +3042,9 @@ private struct SessionStatusControl: View {
         }
     }
 
-    /// The word inside the ground, and the pointer no longer changes it.
-    ///
-    /// ~~The status at rest, and what a click would do under the pointer.~~
-    /// **Superseded.** The swap was there because `Approval needed` does not
-    /// look like something to click; a verb does, so the word a click would
-    /// have revealed is simply the word. What that removes is not only a
-    /// hover state but the reserved width it forced (§3.3, and
-    /// ``PanelMetrics/drawnWaitingMarkWidth(_:)``): nothing on the row can move
-    /// under a passing pointer when nothing on the row changes.
-    ///
-    /// Which verb is a fact about **this row's request** rather than about its
-    /// product, because the two products differ per shape rather than wholesale
-    /// (`answer-in-notch.md` §11 rule 06) — so it is asked of the request, and
-    /// a request no connection is held for says `Read` whatever its status.
+    /// The verb inside the ground; hover never changes it, so nothing moves (§3.3,
+    /// ``PanelMetrics/drawnWaitingMarkWidth(_:)``). Asked of the request, not the product; a
+    /// request with no held connection says `Read` (`answer-in-notch.md` §11 rule 06).
     private var word: String {
         PanelMetrics.waitingMarkWord(
             for: session.status,
@@ -4157,27 +3052,13 @@ private struct SessionStatusControl: View {
         )
     }
 
-    /// The app's ink, deepened in the same hue while the pointer is on it.
     private var ground: Color {
         isMarkHovered ? NotchPalette.requestHoverGround : NotchPalette.brightGround
     }
 
-    /// The reading, on the ground its state gives it — and behind the dot that
-    /// says it has stopped.
+    /// The reading on its state's ground, behind a dot once stopped (``FinishedTurnDot``).
     ///
-    /// **A stopped reading is a dot and bare digits**, where it used to be
-    /// digits on a filled tile. The tile was a silhouette, and the argument for
-    /// it holds: "no timer" and "a dimmer timer" are both comparisons with a
-    /// neighbour, and a row read on its own answered neither. A dot in front of
-    /// the figure is a silhouette too — one row can answer with it alone — and
-    /// it is the mark the notch was *already* drawing for the same fact
-    /// (``FinishedTurnDot``), so the two surfaces stop saying one thing two
-    /// ways.
-    ///
-    /// What it also buys is alignment: with the ground went its `6` of padding,
-    /// so a running row's digits and a finished row's now end on the same
-    /// column instead of the finished one standing `6` short of it. The
-    /// difference between the two rows is the dot, which is the difference.
+    /// No tile on a stopped reading, so running and finished digits end on the same column.
     @ViewBuilder
     private func reading(startedAt: Date, stoppedAt: Date?) -> some View {
         let readout = ElapsedReadout(
@@ -4189,10 +3070,8 @@ private struct SessionStatusControl: View {
         )
         HStack(spacing: 0) {
             if stoppedAt != nil {
-                // **Still, where the notch's breathes.** A collapsed bar is
-                // glanced at and has one line to say everything on; an open
-                // panel is being read, and a dot pulsing once per row would be
-                // the list moving under somebody scanning it (`AGENTS.md` §7).
+                // Still, unlike the notch's breathing dot: a pulse per row would move the list under a reader
+                // (`AGENTS.md` §7).
                 FinishedTurnDot(breathes: false)
                     .padding(.trailing, dotGap)
             }
@@ -4204,64 +3083,31 @@ private struct SessionStatusControl: View {
         }
     }
 
-    /// How far the dot stands off the digits, which is a **drawn** distance
-    /// and therefore not always the same laid-out one.
-    ///
-    /// The collapsed wing spends ``PanelMetrics/buriedFinishDotSpacing`` and
-    /// then puts its reading on a ``ReadingGround`` it keeps permanently, for
-    /// the width it bills — so the gap a person reads up there is that spacing
-    /// plus the ground's own padding. Most rows have no ground (see
-    /// ``groundFill``), and a bare reading that spent only the spacing would
-    /// put the same mark `4` nearer the same digits on the panel than on the
-    /// bar. So a row with no ground pays the padding here instead, and the
-    /// mark is the same mark at the same distance on both surfaces
-    /// (`compact-view-v2.md` §4.3).
-    ///
-    /// The row's digits do not move for it: the slot is trailing-anchored, so
-    /// what the extra `4` moves is the dot.
+    /// Drawn gap from dot to digits. The collapsed wing adds ``ReadingGround`` padding to
+    /// ``PanelMetrics/buriedFinishDotSpacing``; a row with no ground pays that `4` here so both
+    /// surfaces match (`compact-view-v2.md` §4.3). Trailing-anchored, so only the dot moves.
     private var dotGap: CGFloat {
         groundFill == nil
             ? PanelMetrics.drawnFinishDotGap
             : PanelMetrics.buriedFinishDotSpacing
     }
 
-    /// The ground under the reading, or nil on the states that have none.
-    ///
-    /// **Two of them now.** Running was the one state drawn bare — a set of
-    /// silhouettes needs one member that is nothing, and it should be the state
-    /// that fills most of the list. A finished turn is the second: its dot is
-    /// the silhouette, and a dot in front of a filled tile would be the same
-    /// mark drawn twice. ~~`NotchPalette.restingInk.chipFill`~~ is left to
-    /// ``SubagentBadgeView``, which is a badge rather than a reading and still
-    /// wants a tile to be one.
-    ///
-    /// What is left here is the bright ground, and it answers a different
-    /// question: not *has this stopped* but *does this want a person*.
+    /// The bright ground when the row wants a person; nil otherwise. Running and finished readings
+    /// are bare; the tile stays with ``SubagentBadgeView``.
     private var groundFill: Color? {
         wantsAttention ? NotchPalette.brightGround : nil
     }
 
-    /// Whether this row wants the person, from either of the two places that
-    /// can want them.
-    ///
-    /// The turn's own state is the first. The second is a subagent of this
-    /// thread sitting on a permission prompt, which is not the turn's state and
-    /// must not be turned into one: the row stays Completed, its clock stays
-    /// stopped, its preview stays the final answer, and it stays dismissable.
-    /// Only the brightness changes — which is what this surface says everything
-    /// with, and it is exactly the difference between `1 subagent` meaning
-    /// "still working" and meaning "stopped, waiting for you".
+    /// Whether the turn wants the person, or a subagent of this thread sits on a permission prompt.
+    /// The latter changes only brightness: the row stays Completed, its clock stopped, its preview
+    /// the final answer, and dismissable.
     private var wantsAttention: Bool {
         session.status == .inputNeeded
             || session.status == .approvalNeeded
             || session.subagentsAwaitingApproval
     }
 
-    /// The reading is always whichever end of the pair its ground is not.
-    ///
-    /// Brightness is still the attention channel; it has moved from the four
-    /// glyph strokes onto the filled area behind them, which is the whole of
-    /// what makes it legible at a glance instead of only in comparison.
+    /// The reading takes whichever end of the pair its ground does not.
     private var tint: NSColor {
         wantsAttention
             ? NotchPalette.onBrightGroundDrawingColor
@@ -4273,39 +3119,19 @@ private struct SessionStatusControl: View {
     }
 }
 
-/// The row's leading `11 pt` line: the Project, and — while more than one
-/// product is connected — a badge naming which product this one is.
+/// The row's leading `11 pt` line: the product badge (while more than one product is
+/// connected), then the Project.
 ///
-/// **One presentation, and it is the only one** (`colour-v2.md` §5). The four
-/// the picker used to offer all answered *which product* in a channel other
-/// than the name: two tinted the name, one struck a rail down the block's
-/// leading edge, and the fourth was this chip. Three of them are gone with the
-/// product hues, so the chip is what is left — drawn in the ink the user chose
-/// rather than in one that says whose it is, which is the whole of the
-/// decision.
-///
-/// **The badge, then the Project, with no separator between them**
-/// (`panel-v2.md` §3.4). The `Codex ·` prefix the chip replaces had a dot
-/// dividing two words inside one grey run; beside a chip that dot is a boundary
-/// after a boundary. The `6` between them is the badge's own padding, so
-/// nothing is measured here that was not measured before.
-///
-/// The attribution costs horizontal space and what it costs comes out of the
-/// Project text. That is accepted rather than overlooked: the caption is the
-/// least important line in the row and it ends in a fade rather than an
-/// ellipsis, so losing its tail is the cheapest thing on this surface to lose.
+/// The chip is the only product presentation (`colour-v2.md` §5), in the user's ink. No
+/// separator after the badge (`panel-v2.md` §3.4); the `6` is the badge's padding. The
+/// attribution's width comes out of the Project, which fades.
 private struct SessionRowCaption: View {
     let session: MonitoredSession
     let showsAttribution: Bool
-    /// Whether the row this caption sits in is under the pointer or held
-    /// down, so its own text can lift a shade the way the row's border does.
+    /// Row hovered or pressed, so the caption lifts a shade with it.
     var isEmphasized: Bool = false
-    /// Whether the Project is covered (`cover-the-words.md` §3).
-    ///
-    /// **The badge is not.** `Codex` and `Claude Code` name the tool and not
-    /// the work, and they are what keeps a covered row legible as a row
-    /// rather than as a stack of bars. It is the one exclusion the document
-    /// leaves open (§12 question 01).
+    /// Whether the Project is covered (`cover-the-words.md` §3). The badge never is: it names the
+    /// tool, not the work (§12 question 01).
     var isCovered: Bool = false
 
     var body: some View {
@@ -4329,29 +3155,17 @@ private struct SessionRowCaption: View {
                     .truncationMode(.tail)
             }
         }
-        // The line is the badge's own height whether or not a badge is in it,
-        // so nothing on a row moves at the moment a second product connects.
+        // Badge height whether or not a badge is drawn, so a second product connecting moves nothing.
         .frame(height: PanelMetrics.sessionRowCaptionHeight)
     }
 }
 
-/// A product's name, in the one presentation this surface has for it.
+/// A product's name as a chip: ground from ``NotchPalette/themeInk``'s unlit value, text from
+/// its lit one.
 ///
-/// Ground from ``NotchPalette/themeInk``'s unlit value and text from its lit
-/// one, so the chip and the mark on the bar can never drift.
-///
-/// **The hue lives in the text, not in the ground, and that is by
-/// construction.** The unlit value runs at `0.55 ×` the lit chroma at
-/// `L 0.235` — what makes a `5 × 5` dark grid carry any hue at all — and at
-/// badge size that reads as near-black. The ground's job is to be a boundary
-/// and the text's is to be the colour.
-///
-/// **Inverted, it is the pair the other way round** — the lit ink for the
-/// ground and the unlit for the name, which is ``NotchPalette/brightGround``
-/// and ``NotchPalette/onBrightGround``: the pair this surface reserves for *a
-/// row wants a person* (`colour-v2.md` §4). A trail badge takes that form for
-/// a block holding such a row, instead of dimming (`expanded-panel-v2.md`
-/// §4.6).
+/// The hue lives in the text; the unlit ground reads near-black at badge size. Inverted
+/// (``NotchPalette/brightGround`` / ``NotchPalette/onBrightGround``) means a row wants a person
+/// (`colour-v2.md` §4); a trail badge flips for such a block (`expanded-panel-v2.md` §4.6).
 private struct ProductBadge: View {
     let name: String
     var isInverted: Bool = false
@@ -4374,37 +3188,15 @@ private struct ProductBadge: View {
     }
 }
 
-/// The two badge lines the grouped list keeps on screen, and every heading
-/// between them, drawn over the list at the positions ``ProductTrailLayout``
-/// gives for the current offset (`expanded-panel-v2.md` §4.6).
+/// The two badge trails and every heading between them, drawn over the list at
+/// ``ProductTrailLayout``'s positions (`expanded-panel-v2.md` §4.6).
 ///
-/// **The grounds are what make a trail a line rather than a chip over a row.**
-/// Every heading carries its own `16` of black, so the line that names a block
-/// is opaque wherever it stands: the rows scroll under the top strip and the
-/// active heading's rule cuts them at it. The foot has no rule — it is names
-/// alone — so the rows fade out over ``PanelMetrics/productTrailFadeHeight``
-/// before its `16` of black instead of being cut.
-///
-/// **~~Neither ground is drawn while there is nothing to pin: a list that fits
-/// its viewport draws exactly what it always drew.~~ Superseded — a list that
-/// fits its viewport is not a list that cannot move under a heading.** The
-/// leading heading is drawn at the top of the viewport at every offset, and
-/// ``ProductTrailLayout`` is asked with the heights the *store* was sized to
-/// while the offset is the scroll view's own. The two disagree for as long as
-/// a panel resize is in flight — the scroller is still the old height around
-/// content that is already the new one, so it really does scroll — and a
-/// ground that was conditional on `scrolls` was absent exactly there: a row
-/// slid up through the chip, the count and the rule, which is how the fault
-/// was reported. The condition is gone rather than corrected, because a
-/// heading's line is chrome and chrome is opaque; on a list that is not moving
-/// it is black on black and draws what it always drew.
-///
-/// The grounds are laid down before any chip, so a heading arriving on the top
-/// strip never blacks out the badges already standing there.
-///
-/// The overlay hit-tests only where it draws: the grounds swallow a click on
-/// a heading's own line, the badges take theirs, and everything else falls
-/// through to the rows beneath.
+/// - Every heading carries `16` of opaque black; rows scroll under the top strip and fade over
+///   ``PanelMetrics/productTrailFadeHeight`` at the foot, which has no rule.
+/// - Grounds are drawn even when the list fits: during a panel resize the scroller still
+///   scrolls, and a conditional ground let rows slide through the chip.
+/// - Grounds are laid before any chip, so an arriving heading never blacks out badges.
+/// - Hit-tests only where it draws; everything else falls through to the rows.
 private struct ProductTrails: View {
     let groups: [MonitorAggregation.SessionGroup]
     let layout: ProductTrailLayout
@@ -4443,9 +3235,7 @@ private struct ProductTrails: View {
 
             ForEach(headings, id: \.0.id) { group, heading in
                 TrailHeading(group: group, heading: heading, select: select)
-                    // As wide as what is left of the viewport past the chip,
-                    // so the rule ends on the content box's trailing edge
-                    // wherever the chip is standing.
+                    // Width past the chip, so the rule ends on the content box's trailing edge.
                     .frame(width: max(width - heading.x, 0), alignment: .leading)
                     .offset(x: heading.x, y: heading.y)
             }
@@ -4454,10 +3244,8 @@ private struct ProductTrails: View {
     }
 }
 
-/// One heading as the overlay draws it: ``ProductGroupHeader``'s chip line —
-/// the badge, the seam's dot, the count and the rule on one `16` — with the
-/// badge a control and everything after it faded by how far onto a trail the
-/// heading is.
+/// One heading as the overlay draws it: ``ProductGroupHeader``'s chip line, the badge a control,
+/// the rest faded by trail progress.
 private struct TrailHeading: View {
     let group: MonitorAggregation.SessionGroup
     let heading: ProductTrailLayout.Heading
@@ -4502,17 +3290,10 @@ private struct TrailHeading: View {
     }
 }
 
-/// A block's badge as a control: click, and the list scrolls that block to
-/// the top.
+/// A block's badge as a control: click scrolls that block to the top.
 ///
-/// **On a trail it dims, unless its block wants a person, in which case it
-/// flips** — the bright ground with the dark name, the pair the surface
-/// reserves for exactly that meaning — so the one signal §4.5 needs is never
-/// the thing that fades. Both follow the heading's own progress onto the
-/// trail, so a flip crossfades with the docking and unflips as the heading
-/// comes back into the flow, where its lit count says the same thing; the two
-/// channels never speak at once. Under the pointer a dimmed badge brightens,
-/// and the hand says it can be pressed; there is no ground and no chevron.
+/// On a trail it dims, or flips if its block wants a person (§4.5), crossfading with docking so
+/// flip and lit count never show at once. Hover brightens a dimmed badge and shows the hand.
 private struct TrailBadge: View {
     let group: MonitorAggregation.SessionGroup
     let trailed: CGFloat
@@ -4548,7 +3329,6 @@ private struct TrailBadge: View {
         .help("Scroll to \(name)")
     }
 
-    /// Brightness cannot be heard, so the flip says what it means.
     private var spokenLabel: String {
         let count = group.sessions.count
         let rows = "\(count) session\(count == 1 ? "" : "s")"
@@ -4560,87 +3340,38 @@ private struct TrailBadge: View {
 
 /// The pointing hand over every control on the panel.
 ///
-/// **`addCursorRect(_:cursor:)` is the ordinary way to do this and it does not
-/// work here.** AppKit services cursor rectangles for the key window only, and
-/// this overlay is usually not one -- the same property
-/// ``SecondaryClickView/acceptsFirstMouse(for:)`` exists for. A tracking area
-/// registered `.activeAlways` is delivered regardless, so the cursor is set on
-/// the way in and put back on the way out.
-///
-/// **~~That is the whole mechanism.~~ Superseded -- delivery was never the hard
-/// part.** The area arrives on a closed row exactly as described above and the
-/// hand still did not appear, because the *set* is the half the window server
-/// refuses from an application that is not the active one. What makes the
-/// paragraph above true is ``BackgroundCursor``, which asks for the right to
-/// give the instruction at all.
-///
-/// **`.cursorUpdate` as well as `.mouseEnteredAndExited`, and both are load
-/// bearing.** An open row latches the panel, and a latched panel *is* key --
-/// so AppKit starts running the cursor-management pass it had been skipping,
-/// and whatever owns the rectangle under the pointer wins. Inside the request
-/// body that is the scroll view, whose document cursor is the arrow: measured
-/// 2026-09-06, an option row washed correctly under the pointer and handed
-/// back an arrow, because `mouseEntered` had set the hand once and the next
-/// mouse-moved reset it. A `.cursorUpdate` area takes part in that same pass
-/// and outranks the rectangle, so the hand survives. It has its own
-/// `.activeInKeyWindow` area: AppKit does not support `.cursorUpdate` with
-/// `.activeAlways`. The background area handles entry, exit and movement;
-/// movement repairs a competing arrow after entry without waiting for the
-/// pointer to leave and re-enter. Neither area polls or activates the app.
-///
-/// **`set()` rather than `push()`/`pop()`**, deliberately: the cursor stack is
-/// global to the process and this view lives on a row that can retire, and on
-/// a panel that collapses the moment the pointer leaves it. A push whose pop
-/// never runs would leave the hand on the whole machine, where a `set()` that
-/// is never balanced is corrected by the next thing to set a cursor.
+/// - Not `addCursorRect(_:cursor:)`: AppKit services cursor rects for the key window only, and
+///   this overlay usually is not one. An `.activeAlways` area delivers regardless;
+///   ``BackgroundCursor`` lets the non-active app actually set it.
+/// - A separate `.cursorUpdate` area (`.activeInKeyWindow`; AppKit rejects it with
+///   `.activeAlways`): a latched panel is key, and the request body's scroll view reset the
+///   hand to an arrow (measured 2026-09-06). `.mouseMoved` repairs it while in background.
+/// - `set()`, not `push()`/`pop()`: the stack is process-global and a pop may never run on a
+///   retired row or collapsed panel.
 struct PointingHandCursor: NSViewRepresentable {
     func makeNSView(context: Context) -> PointingHandView { PointingHandView() }
 
     func updateNSView(_ nsView: PointingHandView, context: Context) {}
 }
 
-/// Lets this process set the cursor while another application is the active
-/// one -- which is every hover the panel ever gets, apart from those on an open
-/// row.
+/// Lets this process set the cursor while another application is active, i.e. every hover
+/// except on an open row.
 ///
-/// **`NSCursor.set()` does nothing outside the active application**, and that,
-/// not the tracking area, is what the hand on a closed row had been running
-/// into. Measured 2026-09-06 on a panel built exactly like this one -- a
-/// non-activating panel at level `25` in an accessory application:
-/// `mouseEntered` arrives on time, `set()` returns, and the pointer in the very
-/// next screenshot is still an arrow. Activate the application and the same
-/// call takes with the panel still **not key**, so what the window server gates
-/// on is activation, not key status.
-///
-/// That is the whole reason the controls inside an open row were right and the
-/// mark on a closed row was wrong: opening a row latches the panel and latching
-/// activates this app (``OverlayPanelController``), while hover deliberately
-/// does neither. `answer-in-notch.md` §9.4 leaves the keyboard with the
-/// application the person is typing in, and a pointer image is not worth taking
-/// it back for -- so the fix cannot be to activate.
-///
-/// **The window server will take the instruction from a background connection
-/// if the connection asks to be allowed to give it**, which is all this does.
-/// It changes nothing else: this app still does not activate, does not take key
-/// status, and does not take the keyboard.
-///
-/// **The property is not in a public header**, so it is asked for through
-/// `dlsym` and its absence is simply `false` -- a macOS that stops offering it
-/// puts the panel back to the arrow it drew before this, rather than failing to
-/// launch. ``NotchlineTests`` pins the agreement, which is the signal that a
-/// release has withdrawn it.
+/// - `NSCursor.set()` does nothing outside the active app; the gate is activation, not key
+///   status (measured 2026-09-06, non-activating panel at level `25`, accessory app).
+/// - Activating is not an option: §9.4 of `answer-in-notch.md` leaves the keyboard with the
+///   app being typed in. This changes nothing about activation, key status or keyboard.
+/// - The property is private, fetched via `dlsym`; absent means `false` and the arrow.
+///   ``NotchlineTests`` pins the agreement to catch a release withdrawing it.
 enum BackgroundCursor {
-    /// Asked once per process, and the answer is whether the window server
-    /// agreed. Reading it is what asks.
+    /// Asked once per process; reading it asks. `true` if the window server agreed.
     static let isAllowed: Bool = requestFromWindowServer()
 
     private static func requestFromWindowServer() -> Bool {
         typealias MainConnectionID = @convention(c) () -> Int32
         typealias SetConnectionProperty =
             @convention(c) (Int32, Int32, CFString, CFTypeRef) -> Int32
-        // `RTLD_DEFAULT`. CoreGraphics is already loaded either way, and a
-        // symbol that has gone is a `nil` to check here rather than a process
-        // that will not start.
+        // `RTLD_DEFAULT`: a vanished symbol is a `nil` here, not a launch failure.
         let loadedImages = UnsafeMutableRawPointer(bitPattern: -2)
         guard
             let connectionSymbol = dlsym(loadedImages, "CGSMainConnectionID"),
@@ -4662,9 +3393,7 @@ final class PointingHandView: NSView {
     private var tracking: NSTrackingArea?
     private var cursorTracking: NSTrackingArea?
 
-    /// `.inVisibleRect` keeps the area in step with the row as the list
-    /// scrolls; without it the rectangle is the one captured here and a
-    /// scrolled row hands out the hand over whatever moved into its old place.
+    /// `.inVisibleRect` keeps the area in step with a scrolling row.
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
@@ -4688,17 +3417,12 @@ final class PointingHandView: NSView {
         cursorTracking = cursorArea
     }
 
-    /// The key window's own cursor pass, which is the one the scroll view under
-    /// the options would otherwise win. Same cursor as ``mouseEntered(with:)``
-    /// -- this says it again at the moment AppKit asks, rather than once on the
-    /// way in and never afterwards.
+    /// The key window's cursor pass, which the options' scroll view would otherwise win.
     override func cursorUpdate(with event: NSEvent) {
         NSCursor.pointingHand.set()
     }
 
-    /// Never takes a click. The chip underneath is the target and this view
-    /// only says what the pointer looks like over it -- and a tracking area is
-    /// geometric, so declining every hit costs it nothing.
+    /// Never takes a click; the tracking area is geometric and unaffected.
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
 
     override func mouseEntered(with event: NSEvent) {
@@ -4715,15 +3439,9 @@ final class PointingHandView: NSView {
         NSCursor.arrow.set()
     }
 
-    /// A row can retire, or the panel collapse, while the pointer is still on
-    /// the chip -- and then `mouseExited` never arrives. Leaving the window is
-    /// the one moment that is always observed, so the arrow is restored there
-    /// too. It is what the pointer would have been given anyway.
-    ///
-    /// Arriving in a window is where the process asks the window server for the
-    /// right to set a cursor at all (``BackgroundCursor``). Here rather than at
-    /// launch because this is the only view on the panel that sets one, and it
-    /// is asked before any tracking area of this view can fire.
+    /// Restores the arrow on leaving the window, since `mouseExited` never arrives if the row
+    /// retires or the panel collapses. Also requests ``BackgroundCursor`` before any tracking
+    /// area here can fire.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard window != nil else {
@@ -4734,20 +3452,11 @@ final class PointingHandView: NSView {
     }
 }
 
-/// Turns a secondary click on the view it covers into one call, and leaves
-/// every other event alone.
+/// Turns a secondary click on the covered view into one call and leaves every other event alone.
 ///
-/// **Why AppKit.** SwiftUI has no secondary-click gesture. What it has is
-/// `contextMenu`, which is a menu -- a second click to make a one-item choice,
-/// on a panel that hides itself as soon as the pointer leaves it. The press
-/// itself is the whole interaction here, so the press is what this reads.
-///
-/// **How it stays out of the way.** The view sits above the row and would
-/// otherwise swallow the primary click the row is built around. `hitTest`
-/// answers only while the event being dispatched is a secondary press;
-/// everything else -- the primary click, the hover that expands the panel,
-/// cursor tracking -- gets `nil` and finds the SwiftUI button underneath, as if
-/// this were not here.
+/// AppKit because SwiftUI only offers `contextMenu`, a second click on a panel that hides on
+/// exit. `hitTest` answers only for a secondary press, so primary clicks, hover and cursor
+/// tracking reach the SwiftUI button beneath.
 struct SecondaryClickCatcher: NSViewRepresentable {
     let action: () -> Void
 
@@ -4758,8 +3467,7 @@ struct SecondaryClickCatcher: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: SecondaryClickView, context: Context) {
-        // Re-assigned rather than captured once: the closure holds the row this
-        // view was made for, and SwiftUI reuses the view when the list reorders.
+        // Re-assigned: SwiftUI reuses the view when the list reorders.
         nsView.action = action
     }
 }
@@ -4767,34 +3475,24 @@ struct SecondaryClickCatcher: NSViewRepresentable {
 final class SecondaryClickView: NSView {
     var action: (() -> Void)?
 
-    /// Whether an event of this type is one this view is entitled to take.
-    ///
-    /// Split out from ``hitTest(_:)`` because it is the one thing here that can
-    /// be asserted without a running event loop, and the one thing that must
-    /// not drift: widen it and the row underneath stops opening, because its
-    /// primary click never reaches the button.
+    /// Split out from ``hitTest(_:)`` to be testable without an event loop. Widening it stops the
+    /// row's primary click reaching the button.
     static func claims(_ eventType: NSEvent.EventType?) -> Bool {
         eventType == .rightMouseDown || eventType == .rightMouseUp
     }
 
-    /// Claimed only for the secondary press. See ``SecondaryClickCatcher``.
-    ///
-    /// `nil` is also the answer when there is no current event at all, which is
-    /// how AppKit asks about geometry rather than about a click.
+    /// Claimed only for the secondary press. `nil` with no current event: AppKit asking about
+    /// geometry.
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard Self.claims(NSApp.currentEvent?.type) else { return nil }
         return super.hitTest(point)
     }
 
-    /// The overlay is not activating and never becomes key, so the panel is
-    /// clicked while another application holds the front every time. Without
-    /// this the first press on it would be spent bringing this app forward,
-    /// which it does not even do.
+    /// The overlay never becomes key, so without this the first press would be spent on
+    /// activation.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    /// On the press, not the release, which is when a secondary click acts
-    /// everywhere else on this system -- a menu opens under the pointer the
-    /// moment the button goes down.
+    /// On the press, as secondary clicks act everywhere else on the system.
     override func rightMouseDown(with event: NSEvent) {
         action?()
     }

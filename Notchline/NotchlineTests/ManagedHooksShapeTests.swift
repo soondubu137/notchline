@@ -2,15 +2,9 @@ import Foundation
 import Testing
 @testable import Notchline
 
-/// The two things a third product's hooks file needed that the first two did
-/// not: a container of this app's own at the root, and events whose handlers
-/// sit in a bare list rather than in matcher groups (`ManagedHookDefinition.Shape`).
-///
-/// Measured against Antigravity CLI 1.2.2 on 2026-09-11: its root is a set of
-/// named hooks, its tool events take matcher groups, its lifecycle events take
-/// handler lists, and a group written under a list-shaped event disables the
-/// whole named hook. Every fixture here is that file's shape with the user's
-/// own hooks beside ours.
+/// Named-hook containers and list-shaped handlers (`ManagedHookDefinition.Shape`). Measured on
+/// Antigravity CLI 1.2.2, 2026-09-11: tool events take matcher groups, lifecycle events take
+/// handler lists, and a group under a list-shaped event disables the whole named hook.
 struct ManagedHooksShapeTests {
     private let helper = "/bin/sh '/Users/someone/Library/Application Support/Notchline/agents/antigravity/hook.sh'"
 
@@ -27,7 +21,6 @@ struct ManagedHooksShapeTests {
         )
     }
 
-    /// The user's own named hook, as the product's documentation spells one.
     private let theirs: [String: Any] = [
         "lint-checker": [
             "PostToolUse": [
@@ -43,9 +36,7 @@ struct ManagedHooksShapeTests {
 
     // MARK: - What is written
 
-    /// A list-shaped definition is written as the handler itself, with no
-    /// group and no matcher around it; a grouped one keeps its group. Nothing
-    /// is stamped at the root of a file this app creates.
+    /// Nothing is stamped at the root of a file this app creates.
     @Test
     func aListShapedDefinitionIsWrittenBareAndAGroupedOneInItsGroup() throws {
         let root = try configuration.installing(into: [:], isNewFile: true)
@@ -68,9 +59,6 @@ struct ManagedHooksShapeTests {
 
     // MARK: - Beside the user's own
 
-    /// The user's named hooks are not touched, and a handler of theirs inside
-    /// this app's own container survives an install, a second install and a
-    /// removal — this app takes out exactly what it put in.
     @Test
     func theUsersHandlersSurviveInstallReinstallAndRemoval() throws {
         var original = theirs
@@ -97,7 +85,6 @@ struct ManagedHooksShapeTests {
         #expect(lint == before)
     }
 
-    /// A container that held only this app's definitions goes with them.
     @Test
     func anEmptiedContainerIsRemovedWithItsLastHandler() throws {
         let installed = try configuration.installing(into: theirs, isNewFile: false)
@@ -108,9 +95,6 @@ struct ManagedHooksShapeTests {
 
     // MARK: - Repair
 
-    /// A handler of ours in the list that is not what this build writes reads
-    /// as needing repair, is named as changing, and is replaced by exactly one
-    /// current handler on install.
     @Test
     func aStaleListHandlerIsReportedAndReplaced() throws {
         var installed = try configuration.installing(into: [:], isNewFile: true)
@@ -131,22 +115,16 @@ struct ManagedHooksShapeTests {
 
     // MARK: - Refusals
 
-    /// A list-shaped event holding something this type cannot read is a
-    /// refusal to write, never a replacement.
     @Test
     func anUnreadableListIsRefusedRatherThanOverwritten() throws {
         let root: [String: Any] = ["notchline": ["Stop": "./not-a-list.sh"]]
         #expect(throws: ManagedHooksConfigurationError.eventIsNotGroupArray(event: "Stop")) {
             try configuration.installing(into: root, isNewFile: false)
         }
-        // Removal has nothing of ours to find there, so it leaves it alone.
         let removed = try configuration.removing(from: root)
         #expect((removed["notchline"] as? [String: Any])?["Stop"] as? String == "./not-a-list.sh")
     }
 
-    /// The container key is the only thing that changed for the two products
-    /// that share `hooks` with the user: a grouped definition under `hooks`
-    /// still installs, verifies and strips exactly as before.
     @Test
     func theDefaultContainerIsStillHooks() throws {
         let classic = ManagedHooksConfiguration.command(

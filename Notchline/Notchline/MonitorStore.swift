@@ -20,13 +20,8 @@ enum DisplayGeometry: String, CaseIterable, Identifiable {
 
 struct DisplayOption: Identifiable {
     let id: String
-    /// The window server's own handle for this display, when it has one.
-    ///
-    /// `id` above is a string because it is also a defaults key, and it falls
-    /// back to a frame description on a screen that reports no display number.
-    /// This is the unfalsified value, and `nil` where that fallback was taken —
-    /// ``OverlayConcealment`` needs the display's bounds in window-server
-    /// coordinates and has no way to derive them from `frame`.
+    /// The window server's handle, `nil` where `id` fell back to a frame description.
+    /// ``OverlayConcealment`` needs window-server bounds and cannot derive them from `frame`.
     let displayID: CGDirectDisplayID?
     let ordinal: Int
     let name: String
@@ -49,15 +44,9 @@ struct DisplayOption: Identifiable {
         return hasTopInset && hasAuxiliaryArea ? .notched : .noNotch
     }
 
-    /// The height the menu bar occupies on this display.
-    ///
-    /// `NSScreen` offers two measurements of the band at the top of a notched
-    /// screen and they disagree. `safeAreaInsets.top` is the camera housing —
-    /// on a 14-inch M3 Pro at *More Space*, `38`. `frame.maxY -
-    /// visibleFrame.maxY` is what the menu **bar** occupies, `40`, because
-    /// `visibleFrame` also leaves a gap under the bar for window content. This
-    /// takes the larger of the two, so it answers for the bar and not for the
-    /// hardware; ``panelBandHeight`` is the one the panel is drawn at.
+    /// The larger of `safeAreaInsets.top` (camera housing, `38` on a 14-inch M3 Pro at *More
+    /// Space*) and `frame.maxY - visibleFrame.maxY` (the bar, `40`). The panel uses
+    /// ``panelBandHeight``.
     var menuBarHeight: CGFloat {
         let occupiedTopHeight = max(0, frame.maxY - visibleFrame.maxY)
         let measuredHeight = max(occupiedTopHeight, safeAreaInsets.top)
@@ -66,36 +55,11 @@ struct DisplayOption: Identifiable {
             : max(1, fallbackMenuBarHeight)
     }
 
-    /// The band the collapsed panel fills — **the cut-out on a notched
-    /// display, the menu bar on every other one.**
-    ///
-    /// The two are not the same height and the difference is visible. A
-    /// notched screen's menu bar is a couple of points taller than the notch
-    /// it surrounds (`40` against `38` on a 14-inch M3 Pro at *More Space*),
-    /// so a panel drawn at the bar's height hangs below the hardware: the
-    /// black continues past the cut-out's lower corners, and the collapsed
-    /// surface reads as *taller than the notch* rather than as the notch
-    /// carrying on sideways. The whole shape's claim is that it is the same
-    /// object as the cut-out, and a couple of points of overhang is enough to
-    /// break it — the lower corners are drawn where a person can lay them
-    /// against the hardware's own.
-    ///
-    /// `safeAreaInsets.top` is the cut-out, and it is the measurement to take:
-    /// the auxiliary areas beside the notch report the same height (`38` here)
-    /// and this one survives the menu bar being auto-hidden, which takes the
-    /// occupied band to zero while leaving the hardware where it is.
-    ///
-    /// **Not a fixed pixel count.** The cut-out is a shape of fixed
-    /// millimetres and its height in points falls as the display scaling
-    /// coarsens — `38` under *More Space*, about `32` by default, `22` at
-    /// *Larger Text* — so a hard-coded `74` device pixels (`37` pt at 2x) is
-    /// right at one step, short at the next, and taller than the entire menu
-    /// bar at *Larger Text*. Reading it per display is what keeps it exact at
-    /// every step.
-    ///
-    /// A display without a notch keeps the menu bar band: there is no hardware
-    /// to agree with, the pill is an imitation of a cut-out, and it should
-    /// fill the bar it sits in.
+    /// The band the collapsed panel fills: the cut-out on a notched display, the menu bar
+    /// otherwise. On a notched display the bar is taller (`40` vs `38`) and would hang the
+    /// panel below the hardware. `safeAreaInsets.top` survives an auto-hidden menu bar, and is
+    /// read per display because the cut-out's height in points varies with scaling (`38`,
+    /// ~`32`, `22`) — never a fixed pixel count.
     var panelBandHeight: CGFloat {
         guard geometry == .notched, safeAreaInsets.top >= 1 else {
             return menuBarHeight
@@ -113,13 +77,8 @@ struct DisplayOption: Identifiable {
         return max(0, auxiliaryTopRightArea.minX - auxiliaryTopLeftArea.maxX)
     }
 
-    /// The cut-out's trailing edge, in screen coordinates.
-    ///
-    /// The compact panel is pinned to this edge rather than to the display
-    /// centre. Centring assumes the camera housing is centred on the panel --
-    /// true on every Mac measured so far, but it also rounds the panel against
-    /// the display's midpoint instead of against the one edge it has to meet,
-    /// and a fraction of a point there is a visible seam beside a black cut-out.
+    /// The cut-out's trailing edge, in screen coordinates. The compact panel pins to it rather
+    /// than centring: rounding against the midpoint leaves a visible seam beside the cut-out.
     var centerOcclusionMaxX: CGFloat? {
         guard geometry == .notched,
               let auxiliaryTopRightArea,
@@ -131,9 +90,7 @@ struct DisplayOption: Identifiable {
     }
 
     var configurationSummary: String {
-        // The band the panel is actually drawn at, named for what it is on
-        // this display: reporting the menu bar on a notched screen would print
-        // a number two points off the panel standing under it.
+        // Names the band actually drawn; the menu bar on a notched screen is two points off.
         let band = geometry == .notched ? "notch" : "menu bar"
         return "\(geometry.title) · \(band) \(Int(panelBandHeight.rounded())) pt"
     }
@@ -171,649 +128,245 @@ struct DisplayOption: Identifiable {
     }
 }
 
-/// The collapsed surface's trailing wing: one subagent badge per product,
-/// sharing a slot with the elapsed timer exactly as the plain string this
-/// replaced (`compactTrailingText`) used to share it.
-///
-/// One value rather than several views for the same reason the old string was
-/// one: the panel's width is measured from it, so badges and a timer that
-/// could independently disagree about what they drew would leave the width
-/// composed from several readings instead of one.
-/// What the collapsed surface draws on the far side of the notch.
-///
-/// **The badges are gone from it.** Every subagent in flight is counted by the
-/// leading wing's second numeral now — one aggregate figure rather than a
-/// tinted tile per product — so this end of the bar carries the reading and
-/// nothing else (`compact-view-v2.md` §3, §4).
+/// What the collapsed surface draws on the far side of the notch: the timer reading only;
+/// subagents are counted in the leading wing (`compact-view-v2.md` §3, §4). One value, since
+/// the panel's width is measured from it.
 struct CompactTrailingReading: Equatable {
     var timerText: String?
-    /// Whether those digits have stopped.
-    ///
-    /// A turn ending does not take the reading away: it freezes at the last
-    /// value the timer showed. ~~and the ground it was already standing on
-    /// fills, so the panel's edge does not move by a point at that instant. A
-    /// filled ground is allowed here where the white flip is not, because "this
-    /// figure has stopped" is a property of the figure rather than a comparison
-    /// with its neighbours — and it is the one thing the digits cannot say
-    /// alone (`compact-view-v2.md` §4.2).~~ **The ground is gone and the dot
-    /// says it instead** — see ``drawsFinishedDot``. The property being a
-    /// property rather than a comparison is exactly why it can be a mark of its
-    /// own, and the wing was already drawing that mark for the other half of
-    /// the same fact. The edge still does not move at that instant on a wing
-    /// that was already drawing the dot; where it was not, the wing opens by
-    /// the dot's own `4 + 8`.
+    /// Whether the digits have stopped: a finished turn freezes at the last value, and
+    /// ``drawsFinishedDot`` says so (`compact-view-v2.md` §4.2).
     var isFrozen = false
-    /// Whether a finished, unread turn is sitting under a mark that is drawing
-    /// something else.
-    ///
-    /// That turn has no representative: the mark draws the most urgent status
-    /// anywhere, and the reading belongs to whatever is being timed. The dot is
-    /// its stand-in (§4.3).
+    /// Whether a finished, unread turn is hidden under a mark drawing something else; the dot
+    /// stands in for it (§4.3).
     var buriesAFinishedTurn = false
 
     static let empty = CompactTrailingReading()
 
     var isEmpty: Bool { timerText == nil && !buriesAFinishedTurn }
 
-    /// Whether the wing draws the finished-turn dot.
-    ///
-    /// **Two questions with one answer, and one mark between them.** A finished
-    /// turn the aggregate mark is not drawing has no representative and takes
-    /// the dot as its stand-in; a *frozen* reading is a finished turn drawing
-    /// itself, and used to say so with a filled ground behind the digits. Those
-    /// were two marks for one fact. The ground is gone and the dot covers both:
-    /// it stands in front of the reading whether the reading is that turn's own
-    /// or somebody else's (`compact-view-v2.md` §4.2 and §4.3).
-    ///
-    /// The two are very nearly exclusive already — ``isFrozen`` needs nothing
-    /// running and ``buriesAFinishedTurn`` stands down once the aggregate is
-    /// Completed — so this is a union rather than a choice, and it can only
-    /// ever draw one dot. It is read by the width composition as well as by the
-    /// view, which is what keeps the drawn wing and the billed wing one number.
+    /// One dot for both a frozen reading and a buried finished turn (`compact-view-v2.md` §4.2,
+    /// §4.3). Read by the width composition as well as the view, so drawn and billed width agree.
     var drawsFinishedDot: Bool { buriesAFinishedTurn || isFrozen }
 }
 
 enum PanelMetrics {
     static let referenceCompactHeight: CGFloat = 46
-    /// The cut-out's upper fillet, as a share of its height.
-    ///
-    /// The notch does not end on a corner where its sides meet the top of the
-    /// display: the glass curves back out into the screen. That curve is half
-    /// the lower one, and drawing it at the lower radius is what makes an
-    /// imitation read as a black box parked under the bezel instead of as the
-    /// cut-out carrying on sideways.
+    /// The cut-out's upper fillet, half the lower radius. Drawing it at the lower radius reads
+    /// as a black box under the bezel rather than the cut-out.
     static let notchUpperRadiusRatio: CGFloat = 1.0 / 8
     /// The cut-out's lower corners, as a share of its height.
     static let notchLowerRadiusRatio: CGFloat = 1.0 / 4
-    /// How far the lower corners' curvature is spread past a circular arc.
-    ///
-    /// A circular corner is tangent to the straight edge it leaves but not
-    /// *curved* like it: curvature jumps from nothing to `1/r` at the join, in
-    /// one step. The eye reads that step as a crease — the edge appears to
-    /// stop being straight at a nameable point rather than to bend away — and
-    /// it is at its most visible exactly where this shape puts it: a long
-    /// straight run of pure black meeting a small radius against a lit
-    /// wallpaper. It was the complaint about these two corners.
-    ///
-    /// So the corner is built the way Apple's own are, and the way Figma's
-    /// *corner smoothing* control works: the curve starts `(1 + smoothing)`
-    /// radii back along each straight edge instead of one, spends the extra
-    /// length easing curvature up from zero, holds a circular arc of
-    /// `90° × (1 - smoothing)` through the turn, and eases back down to zero
-    /// into the other edge. Both control points of each easing segment lie
-    /// **on** the straight edge, which is what makes the curvature there
-    /// exactly zero and the join unfindable.
-    ///
-    /// `0.6` is the value Figma calls 60% and the closest single number to
-    /// iOS's own continuous corners. `0` reproduces the plain circular corner
-    /// exactly, arc and control handles alike, which is the reduction
-    /// `theLowerCornersReduceToCircularArcsWithoutSmoothing` pins.
-    ///
-    /// **The two upper fillets keep their circular arc.** They are the trace
-    /// of where the glass curves back out to the top of the screen (§3.3 of
-    /// `docs/figma-design.md`), they are half the size, and they meet the
-    /// screen's own top edge rather than a lit background — there is no crease
-    /// to see, and widening them would widen the window they are drawn in.
+    /// Corner smoothing for the lower corners, as in Figma's control and Apple's continuous
+    /// corners: a circular arc's curvature jump reads as a crease against a lit wallpaper.
+    /// The curve starts `(1 + smoothing)` radii back, eases curvature up from zero (control
+    /// points on the straight edge), holds `90° × (1 - smoothing)` of arc, and eases out.
+    /// `0.6` is Figma's 60%; `0` reproduces the circular corner
+    /// (`theLowerCornersReduceToCircularArcsWithoutSmoothing`). The upper fillets stay circular
+    /// (`docs/figma-design.md` §3.3): smaller, against the screen's top edge, no crease to see.
     static let notchLowerCornerSmoothing: CGFloat = 0.6
 
-    /// How far back along each straight edge a lower corner reaches.
-    ///
-    /// One radius for a circular corner; `1.6` radii at the smoothing above.
-    /// This, not the radius, is what has to fit inside the panel's height and
-    /// half its width.
+    /// How far back along each straight edge a lower corner reaches; this, not the radius, must
+    /// fit inside the panel's height and half its width.
     static func smoothCornerReach(radius: CGFloat) -> CGFloat {
         max(0, radius) * (1 + max(0, notchLowerCornerSmoothing))
     }
-    /// How thick the optional surface outline is drawn.
-    ///
-    /// Drawn inside the contour rather than centred on it, so this is the full
-    /// width of the line and none of it is lost to the clip.
-    ///
-    /// `0.8`, which does not land on a pixel boundary: at 2x it covers a pixel
-    /// and most of its neighbour, so the line is antialiased rather than
-    /// crisp. That is the intended look and not an oversight -- a hard
-    /// single-pixel rule reads as a drawn border, and the softer edge is what
-    /// makes this read as the black simply ending.
-    ///
-    /// A constant, not a share of the menu bar height like the two radii:
-    /// those follow the hardware's shape, while a boundary does not get
-    /// thicker because the menu bar got taller.
+    /// Drawn inside the contour, so this is the full line width. `0.8` is deliberately off the
+    /// pixel grid: antialiased, it reads as the black ending rather than a drawn border. A
+    /// constant, not a share of the menu bar height.
     static let surfaceOutlineWidth: CGFloat = 0.8
     static let expandedBaselineWidth: CGFloat = 610
-    /// A live row's three lines, stacked with the spacing the row stacks them
-    /// with: `16 + 2 + 17 + 2 + 18`.
-    ///
-    /// Declared because the row's height is now composed *from* it rather than
-    /// chosen and divided into it — see ``sessionRowVerticalPadding``.
+    /// A live row's three lines with their spacing: `16 + 2 + 17 + 2 + 18`.
     static let sessionRowContentHeight: CGFloat = sessionRowCaptionHeight
         + sessionRowLineSpacing
         + sessionRowTitleHeight
         + sessionRowLineSpacing
         + sessionRowPreviewHeight
-    /// The air above a live row's first line and below its last.
-    ///
-    /// **`8.5`, where it was `12.5`.** The three lines a row carries were
-    /// centred in a height chosen before them, and what fell out was `25` pt
-    /// of black between one row's last word and the next row's first — more
-    /// air *between* two rows than a row spends on its own three lines'
-    /// leading, which is the panel claiming the rows are further apart than
-    /// they are. `8.5` leaves `17` between them: still the largest gap on the
-    /// list, and still comfortably clear of the `12` pt corner the hover
-    /// ground is drawn with.
-    ///
-    /// It is a half point for the same reason `12.5` was — the block it
-    /// centres is odd — and it lands on the pixel grid at 2x, which is the
-    /// scale this panel is drawn at.
+    /// The air above a live row's first line and below its last. `8.5` leaves `17` between
+    /// rows, clear of the `12` pt hover corner; the half point lands on the grid at 2x.
     static let sessionRowVerticalPadding: CGFloat = 8.5
-    /// The air a row's own wash leaves at the top and bottom of its frame.
-    ///
-    /// **A row's ground is not the row.** `expanded-panel-v2.md` §4.2 gives a
-    /// block's heading all of its slack above the chip and none below, on the
-    /// reading that "the row beneath brings its own top padding" — which it
-    /// does, until the row is under the pointer and its ground fills the whole
-    /// `72`, flush against the bottom edge of the chip's own ground. Two
-    /// filled shapes sharing an edge read as one shape with a notch cut out of
-    /// it, which is neither of the things they say apart.
-    ///
-    /// `2` is a seam rather than a margin: `4` pixels at the scale this panel
-    /// is drawn at, plainly not nothing and not enough to read as space the
-    /// list has left. The caption keeps `6.5` of the row's `8.5` above it, so
-    /// nothing moves and no glyph comes near the ground's edge — and two
-    /// adjacent rows, which could never both be washed at once but can now be
-    /// a washed one and an open one, stand `4` apart instead of touching.
+    /// Inset of a row's hover ground inside its frame, so a washed row never shares an edge with
+    /// a heading chip's ground (`expanded-panel-v2.md` §4.2). `2` is `4` pixels: a seam, not space.
     static let sessionRowGroundInset: CGFloat = 2
-    /// **`72` = `8.5 + 55 + 8.5`**, and it is composed in that direction now.
-    ///
-    /// It was `80`, a constant the row's own lines were centred in. Written
-    /// that way the height was the decision and the padding was whatever was
-    /// left, so a row's air could only be changed by changing a number that
-    /// says nothing about air. Now the padding is the decision — see
-    /// ``sessionRowVerticalPadding`` — and the height follows it, which is
-    /// also what keeps ``OpenRow``'s explicit inset equal to the closed row's
-    /// implicit one: an open row's caption and title have to be exactly where
-    /// the closed row left them.
+    /// `72` = `8.5 + 55 + 8.5`, composed from ``sessionRowVerticalPadding``, which also keeps
+    /// ``OpenRow``'s explicit inset equal to the closed row's.
     static let sessionRowHeight: CGFloat = sessionRowContentHeight
         + sessionRowVerticalPadding * 2
-    /// A row that has left the list, drawn under the seam.
-    ///
-    /// **Half a live row, exactly** (`expanded-panel-v2.md` §2.1) — the
-    /// plainest statement of "less than a live row" this surface can make. It
-    /// was measured from the half-row it has to equal rather than from the one
-    /// line it carries, so nothing about that line's contents moves it.
-    ///
-    /// `36` now that a live row is `72`, which puts `10` above its one line
-    /// and `10` below where there were `12`. The queue's air comes down with
-    /// the list's because it is the same air — and it comes down by less,
-    /// which is right: a one-line row has nothing to be crowded against.
+    /// A row that has left the list: half a live row, exactly (`expanded-panel-v2.md` §2.1).
     static let retiredRowHeight: CGFloat = sessionRowHeight / 2
-    /// The rule between the list and what has left it -- and, now, the
-    /// footer's own spend line: the two closing bars this panel has, drawn
-    /// alike down to the rule each shows only while it is open
-    /// (`quota-footer-v2.md` §2).
-    ///
-    /// `9` + a `14` pt caption line + `9`.
+    /// The rule between the list and the Recent queue, and the footer's spend line
+    /// (`quota-footer-v2.md` §2): `9` + a `14` pt caption line + `9`.
     static let recentSeamHeight: CGFloat = 32
-    /// How far a row's last glyphs take to fade out.
-    ///
-    /// One declaration, because two lines draw it by different means: the live
-    /// row's title and body fade inside ``SessionRowTextView``'s own layer
-    /// mask, and a retired row — one static line with no sweep to run — fades
-    /// under a plain SwiftUI gradient. Written apart they would drift, and the
-    /// two are three points from each other on the same panel.
+    /// Shared by the live row's layer mask (``SessionRowTextView``) and a retired row's SwiftUI
+    /// gradient, so the two fades cannot drift.
     static let rowTrailingFadeWidth: CGFloat = 48
-    /// The tallest the *live* session viewport is ever drawn, ungrouped.
-    ///
-    /// **A height rather than a row count.** `288` is what `sessionRowHeight ×
-    /// 4` already is; saying it in points is what lets an open row (taller
-    /// than a closed one) still share the same viewport rather than needing a
-    /// row count of its own.
-    ///
-    /// **Four rows, where it was three** (2026-09-09, with the trails). The
-    /// grouped list's cap is *a trail, four rows, a trail*
-    /// (``groupedSessionViewportCap``), and the flat list — the same rows
-    /// without the chrome — shows the same four, so turning `Group by
-    /// product` off never changes how many rows are on screen.
-    ///
-    /// **The live list and the Recent queue no longer share one viewport or
-    /// one scroller.** Each folds on its own past its own cap — see
-    /// ``recentViewportCap`` for the queue's.
+    /// The tallest the ungrouped live viewport is drawn: four rows, as a height so a taller open
+    /// row shares it. Matches ``groupedSessionViewportCap``'s rows, so `Group by product` never
+    /// changes the row count. The Recent queue has its own (``recentViewportCap``).
     static let sessionViewportCap: CGFloat = sessionRowHeight * 4
-    /// One line of badges at an edge of the grouped viewport: the top strip
-    /// the active block's heading holds, and the foot line the pending
-    /// blocks' badges wait on (`expanded-panel-v2.md` §4.6).
-    ///
-    /// The badge's own height, because that is all the line is: the top strip
-    /// is the leading heading's `16` — its chip where the panel's hairline
-    /// stood, its rule under it — and the foot draws the chip alone, with no
-    /// count and no rule.
+    /// One line of badges at an edge of the grouped viewport (`expanded-panel-v2.md` §4.6): the
+    /// badge's own height.
     static var productTrailHeight: CGFloat { productBadgeHeight }
-    /// The tallest the grouped live viewport is ever drawn: **a trail, four
-    /// rows, a trail** — `16 + 288 + 16`.
-    ///
-    /// The chrome is one line at each edge whatever the list holds, so the cap
-    /// no longer grows by a heading per product: every heading is on screen at
-    /// every offset, in the flow, on the top strip or on the foot line, and
-    /// none of them is paid for out of rows.
+    /// The tallest the grouped live viewport is drawn: a trail, four rows, a trail
+    /// (`16 + 288 + 16`), however many products there are.
     static var groupedSessionViewportCap: CGFloat {
         productTrailHeight * 2 + sessionViewportCap
     }
-    /// The travel over which a heading docks onto the top strip or lifts off
-    /// the foot line: the bar's own height, so the whole of a heading's slack
-    /// is where its motion happens (`expanded-panel-v2.md` §4.6).
+    /// Docking travel: the heading bar's height, so its slack is where the motion happens
+    /// (`expanded-panel-v2.md` §4.6).
     static var productTrailDockingDistance: CGFloat { productGroupHeaderHeight }
-    /// A badge on either trail stands at this weight — the panel's own value
-    /// for *not the subject*, which is what every closed row drops to while a
-    /// row is open. A block that wants a person keeps full weight and flips
-    /// its badge instead (``NotchPalette/brightGround``).
+    /// The panel's *not the subject* weight. A block that wants a person keeps full weight and
+    /// flips its badge instead (``NotchPalette/brightGround``).
     static let productTrailBadgeOpacity: Double = 0.45
-    /// The room a row's last line fades out over before the foot line, so a
-    /// row scrolling under it is faded rather than cut: the foot draws no rule
-    /// to cut it with.
+    /// The fade above the foot line, which draws no rule, so rows scrolling under it fade.
     static var productTrailFadeHeight: CGFloat { productBadgeHeight }
-    /// The face a product badge is set in — one declaration, so the width a
-    /// trail slot is laid out to (``productBadgeWidth(_:)``) is measured off
-    /// the face the badge is drawn in.
+    /// One declaration, so ``productBadgeWidth(_:)`` measures the face the badge is drawn in.
     static let productBadgeFont = NSFont.systemFont(ofSize: 10, weight: .medium)
-    /// How wide a badge naming this product draws: its padding either side of
-    /// the rendered name, measured rather than tabulated (`colour-v2.md` §4).
+    /// Padding either side of the rendered name, measured rather than tabulated
+    /// (`colour-v2.md` §4).
     static func productBadgeWidth(_ name: String) -> CGFloat {
         productBadgePadding * 2 + textWidth(name, font: productBadgeFont)
     }
-    /// The air a block's heading keeps above its chip, and the whole of what
-    /// separates one product's block from the one above it
-    /// (`expanded-panel-v2.md` §4.2).
-    ///
-    /// **`8`, where it was `16`.** The bar took its height from
-    /// ``recentSeamHeight`` — the Recent seam with a chip standing where the
-    /// seam's label stands — and then moved the seam's `8 + 8` of centring
-    /// wholly above the chip, on the reading that a heading has to stand
-    /// nearer to what it heads than to what precedes it. The inversion is
-    /// right and the figure was not: a row already ends on
-    /// ``sessionRowVerticalPadding``, so `16` of slack put `24.5` of black
-    /// between one block's last word and the next block's chip — half again
-    /// the `17` the list spends between two rows, and the largest empty space
-    /// on the surface by a wide margin. A gap that big stops reading as *a new
-    /// block begins here* and starts reading as *the list ended*.
-    ///
-    /// `8` keeps the statement and drops the waste: `16.5` above the chip and
-    /// `8.5` below it, so the heading is still twice as close to the block it
-    /// heads as to the one it follows, and a block boundary now costs what a
-    /// row boundary costs rather than half again more. It also leaves `10`
-    /// between the chip's own ground and a washed row's — see
-    /// ``sessionRowGroundInset``, which is the value that stops two grounds
-    /// from sharing an edge.
+    /// A heading's air above its chip, and all that separates two blocks
+    /// (`expanded-panel-v2.md` §4.2). `8` puts `16.5` above the chip and `8.5` below, so a block
+    /// boundary costs what a row boundary does (`17`).
     static let productGroupHeaderSlack: CGFloat = 8
-    /// The bar a product's block on the live list is headed with: its chip,
-    /// with the slack above it.
-    ///
-    /// **Composed from the slack rather than divided into it.** It was
-    /// ``recentSeamHeight``, a height chosen first and then spent — which
-    /// meant the air between two blocks could only be changed by changing a
-    /// number that says nothing about air, and could not be changed at all
-    /// without claiming this bar was no longer the seam. The same move
-    /// ``sessionRowHeight`` made: the padding is the decision and the height
-    /// follows it.
-    ///
-    /// What it still takes from the seam is everything that is not the
-    /// figure — the caption idiom, the hairline, the chip standing where the
-    /// label stands. What it does **not** take is the control: no chevron at
-    /// `492`, and so the hairline runs on to the content box's own trailing
-    /// edge instead of stopping `8` short of one. A bar that washes under the
-    /// pointer and then does nothing is a promise made quietly
-    /// (`answer-in-notch.md` §11 rule 03), and there is nothing to fold yet.
+    /// A block's heading bar: chip plus slack, composed from the slack. No chevron: nothing to
+    /// fold, so the hairline runs to the content box's trailing edge (`answer-in-notch.md` §11
+    /// rule 03).
     static var productGroupHeaderHeight: CGFloat {
         productBadgeHeight + productGroupHeaderSlack
     }
-    /// The bar the **first** block is headed with, which is the bar with its
-    /// slack taken off: the chip alone, `16`.
-    ///
-    /// A heading's slack is what separates it from what precedes it, and the
-    /// first heading is preceded by the band — which already brings its own
-    /// air, half the difference between the menu bar's height and the `16.6`
-    /// matrix standing in the middle of it. Spending the slack on top of that
-    /// put the first chip `26` under the matrix and left the panel opening on
-    /// a stripe of black — which is what the figure was when the slack was
-    /// `16`, and is the reason this end of it is `0` rather than half.
-    ///
-    /// It is also what lets the panel's own top hairline come off. That rule
-    /// and this bar's rule are the same `1` pt of white at `15%` on the same
-    /// two `x` values, `24` apart, saying nothing different from each other;
-    /// with the slack gone the block's rule stands where the panel's stood —
-    /// `8` lower, which is the chip's own half — and the panel draws one line
-    /// there instead of two. See ``MonitorStore/listLeadsWithABlockHeading``,
-    /// which is the single question both ends of that answer to.
+    /// The first heading drops its slack (the chip alone, `16`): the band above already brings
+    /// its air, and its rule replaces the panel's top hairline. See
+    /// ``MonitorStore/listLeadsWithABlockHeading``.
     static var leadingProductGroupHeaderHeight: CGFloat { productBadgeHeight }
-    /// What a grouped list spends on its headings: the leading one short, and
-    /// every one after it whole.
     static func groupHeadingsHeight(count: Int) -> CGFloat {
         guard count > 0 else { return 0 }
         return leadingProductGroupHeaderHeight
             + productGroupHeaderHeight * CGFloat(count - 1)
     }
-    /// The tallest the Recent queue's own viewport is ever drawn: five retired
-    /// rows, half a live row each.
+    /// The Recent queue's viewport cap: five retired rows.
     static let recentViewportCap: CGFloat = retiredRowHeight * 5
-    /// The panel's horizontal inset, collapsed and expanded alike.
-    ///
-    /// `12`, not the `24` this started at. The name says `expanded` because
-    /// that is where it was first measured, but it has always governed both:
-    /// the compact side margin, the wings around a cut-out, and the inset of
-    /// the expanded rows and footer. Halving it moves every one of those, and
-    /// the reference widths derived from it move with it — see
-    /// `figma-design.md` §3.3 for the numbers this composes.
+    /// The panel's horizontal inset, collapsed and expanded alike despite the name: compact
+    /// margins, wings, expanded rows and footer. See `figma-design.md` §3.3.
     static let expandedHorizontalPadding: CGFloat = 12
-    /// The session row's block stops short of the panel's own inset, so its
-    /// hover fill has a gutter rather than running into the edge.
-    ///
-    /// The row's padding makes that gutter back up again, which is why the two
-    /// are written against each other instead of both being spelled `6`: a row's
-    /// text lands on `expandedHorizontalPadding` — the same margin as the matrix
-    /// above it and the footer below it — whatever that value becomes.
-    ///
-    /// **Both are constants again.** The `Colour bar` attribution moved the
-    /// gutter to the panel's full inset so its rail would line up with the
-    /// matrix above; with the four presentations reduced to the badge
-    /// (`colour-v2.md` §6) there is no rail, and no form of the row gives up
-    /// its `6 + 6`.
+    /// The row's block stops short of the panel inset so its hover fill has a gutter; the row's
+    /// padding adds it back, so text lands on `expandedHorizontalPadding` whatever that becomes.
     static let sessionRowGutter: CGFloat = 6
     static let sessionRowPadding: CGFloat = expandedHorizontalPadding
         - sessionRowGutter
 
-    /// The rail a scrolling list draws to report where its reader stands, and
-    /// the lane it stands in.
-    ///
-    /// **The rail is never drawn on the panel's margin.** Its right edge lands
-    /// exactly on ``expandedHorizontalPadding`` — the same column a row's text,
-    /// the matrix above and the footer below all end on — so the `12` pt inset
-    /// stays empty, as it is everywhere else on the panel. Standing it any
-    /// further right would put it in that inset; standing it over the rows would
-    /// put it on top of what it is reporting about.
-    ///
-    /// That lane has to come from somewhere, so a list that scrolls hands it
-    /// back: the rows narrow by ``scrollRailLane`` for exactly as long as there
-    /// is a rail, and take the width back the moment there is not.
+    /// The scroll rail and its lane. Its right edge lands on ``expandedHorizontalPadding``, so
+    /// the `12` pt inset stays empty; the rows narrow by ``scrollRailLane`` only while it shows.
     static let scrollRailWidth: CGFloat = 3
-    /// Between a row's own trailing text and the rail beside it.
     static let scrollRailGap: CGFloat = 4
     static let scrollRailLane: CGFloat = scrollRailWidth + scrollRailGap
 
-    /// The width either scrolling list (the live rows, the Recent queue) is
-    /// drawn at: the panel's own width, less the gutter on each side.
-    ///
-    /// `isScrolling` is what takes the rail's lane out of it. A list that fits
-    /// has no rail and gives up nothing.
+    /// Panel width less the gutters, and less the rail's lane only while `isScrolling`.
     static func sessionViewportWidth(
         panelWidth: CGFloat,
         isScrolling: Bool = false
     ) -> CGFloat {
         panelWidth - sessionRowGutter * 2 - (isScrolling ? scrollRailLane : 0)
     }
-    /// The row's three text lines, as the row lays them out.
-    ///
-    /// They live here rather than as literals in the view because the row's
-    /// content block is composed from them, so a line height that changed in
-    /// the view and not here would leave the wrong black under it.
-    ///
-    /// **The caption is `16` whether or not it carries a badge**
-    /// (`panel-v2.md` §2). The badge is a point taller than the `11 pt` line it
-    /// stands on, and holding the line at the badge's own height is what stops
-    /// every row moving at the moment a second product connects. The row is
-    /// still `80`: the content block absorbs it at `55`.
+    /// Declared here because the row's content block is composed from them. The caption is `16`
+    /// with or without a badge (`panel-v2.md` §2), so rows don't move when a product connects.
     static let sessionRowCaptionHeight: CGFloat = 16
     static let sessionRowTitleHeight: CGFloat = 17
     static let sessionRowPreviewHeight: CGFloat = 18
     static let sessionRowLineSpacing: CGFloat = 2
 
-    /// The bar a covered run leaves behind (`cover-the-words.md` §4).
-    ///
-    /// **Fully rounded, and one height for every line it stands in.** The
-    /// three runs it replaces are set at three sizes; ranking their covers
-    /// would be ranking things nobody can read.
+    /// The bar a covered run leaves (`cover-the-words.md` §4): fully rounded, one height for
+    /// every line.
     static let coverBarHeight: CGFloat = 6
-    /// **The lengths are fixed, and they are not the text's.**
-    ///
-    /// `0.13`, `0.32` and `0.45` of the row's `496` pt content box, rounded to
-    /// whole points. A bar sized to the run it covers leaks the shape of the
-    /// work — how long a Project's name is, whether a prompt was one clause or
-    /// four — and it would twitch line by line as a preview streams, which is
-    /// the one continuously changing run on this surface. The three descend
-    /// because the three lines descend: that is layout, and layout is not a
-    /// channel anybody reads meaning off.
+    /// Fixed lengths, not the text's (`0.13`, `0.32`, `0.45` of the `496` pt content box): a bar
+    /// sized to its run leaks the work's shape and twitches as a preview streams.
     static let coverBarProjectLength: CGFloat = 64
     static let coverBarTitleLength: CGFloat = 160
     static let coverBarPreviewLength: CGFloat = 224
-    /// A retired row is one line carrying `Project · title`, so it is covered
-    /// at the title's length rather than at a fourth figure of its own.
+    /// A retired row's one line is covered at the title's length.
     static var coverBarBreadcrumbLength: CGFloat { coverBarTitleLength }
 
-    /// The chip that names a product on a session row's caption line and on a
-    /// retired row's breadcrumb (`colour-v2.md` §4).
-    ///
-    /// **Not on the footer.** A badge marks a product on something that is
-    /// happening, against three other pieces of text; the quota table names a
-    /// group in a table somebody opened, where the chip was the only saturated
-    /// object among a column of grey figures.
-    ///
-    /// Its width is `6 + measured text + 6` and is never tabulated — the text
-    /// is real rendered text, so the chip is measured by drawing it rather than
-    /// by a table this file would have to keep in step with the font.
+    /// The chip that names a product on a row's caption and a retired row's breadcrumb, not the
+    /// footer (`colour-v2.md` §4). Width is `6 + measured text + 6`, never tabulated.
     static let productBadgeHeight: CGFloat = 16
     static let productBadgeRadius: CGFloat = 5
     static let productBadgePadding: CGFloat = 6
-    /// The caption idiom's `11` pt Light, which the block heading's count and
-    /// the Recent seam's both take.
     static let captionFont = NSFont.systemFont(ofSize: 11, weight: .light)
-    /// The room the separator held between a block's badge and its count.
-    ///
-    /// **The dot is gone and its space is not.** `Codex · 3` put a mark
-    /// immediately after a chip, which is a boundary after a boundary — the
-    /// same thing `panel-v2.md` §3.4 took the row's colour bar out for, and the
-    /// chip is a stronger boundary than any separator drawn beside it. What a
-    /// separator *does* between a word and a figure is hold them apart, and a
-    /// chip needs that held apart just as much, so the gap stays exactly as
-    /// wide as it was: ``productBadgePadding`` plus the `"· "` this measures.
-    ///
-    /// Measured rather than tabulated, for the reason the badge's own width is
-    /// (``productBadgeHeight``): the glyph is real rendered text, so a table
-    /// here would be a second answer this file had to keep in step with the
-    /// font. The seam's `Recent · 3` keeps its dot — a word and a figure on one
-    /// line is what the idiom is for, and there is no boundary there already —
-    /// and draws it rather than setting it, for the reason
-    /// ``captionSeparatorDotSize`` gives.
+    /// The room a set `"· "` takes at the caption face, measured, so the badge-to-count gap is
+    /// what it would be with a text separator.
     static var captionSeparatorWidth: CGFloat {
         textWidth("· ", font: captionFont)
     }
-    /// Badge to count on a block's heading: the padding, and the room the
-    /// separator held.
     static var productBadgeCountGap: CGFloat {
         productBadgePadding + captionSeparatorWidth
     }
-    /// The separator's own mark, back in that gap and drawn rather than set.
-    ///
-    /// **A glyph sits where its font puts it, and that is not the middle of
-    /// the bar.** A `·` is centred on the x-height, which at the caption's
-    /// `11` pt Light leaves it `0.77` below the line a bar centres its
-    /// contents on — so the bar's own hairline ran past the dot rather than
-    /// through it. Drawn, the dot is one of those contents like the rule is,
-    /// and the two land on one line by construction. That is the whole of why
-    /// this mark is drawn, on both bars that draw it.
-    ///
-    /// **`2`, in the caption's own ink, on the heading and the seam alike.**
-    /// ~~`3` at the hairline's `15%` white: a separator is not a reading, and
-    /// the mark is chrome on the rule's own layer.~~ Superseded 2026-09-09.
-    /// The two bars are one bar — §4.2 is `2.2`'s seam with a badge standing
-    /// where the label stands — and one bar draws one mark; a chip and a count
-    /// are held apart by the same thing a word and a count are. `2` is what a
-    /// `·` at the *retired row's* `13` pt Regular rasterises to: that glyph's
-    /// ink measures `1.65`, but a flat disc at `1.65` snaps to `1.5` on a `2×`
-    /// panel and comes out a third lighter than the glyph beside it. So the
-    /// panel's separator is sized by what its own text draws rather than by
-    /// what it measures, and every dot on the surface is that dot.
+    /// The separator dot, drawn rather than set: a `·` glyph at `11` pt Light sits `0.77` below
+    /// the bar's centre line, off its hairline. `2`, in caption ink, on heading and seam alike —
+    /// the `13` pt Regular `·` measures `1.65` but a `1.65` disc snaps to `1.5` at 2x and reads
+    /// lighter.
     static let captionSeparatorDotSize: CGFloat = 2
-    /// What stands either side of that dot, so the dot lands on the middle of
-    /// the gap and the count still does not move.
-    ///
-    /// One spacing rather than two, because an `HStack` of three has exactly
-    /// one: half of what is left of ``productBadgeCountGap`` once the dot has
-    /// taken its own width out of the middle.
+    /// Spacing either side of the dot, so it centres in ``productBadgeCountGap`` and the count
+    /// does not move.
     static var productBadgeCountSpacing: CGFloat {
         (productBadgeCountGap - captionSeparatorDotSize) / 2
     }
 
-    /// What stands either side of that dot on the seam, so neither the word nor
-    /// the figure moves: the run `" · "` held this gap at the caption's own
-    /// face, and an `HStack` of three has exactly one spacing to put half of
-    /// it in.
+    /// Spacing either side of the seam's dot, so the word and figure stay where `" · "` put them.
     static var seamSeparatorSpacing: CGFloat {
         (textWidth(" · ", font: captionFont) - captionSeparatorDotSize) / 2
     }
     static let expandedReadoutSpacing: CGFloat = 12
     static let expandedNotchClearance: CGFloat = 8
-    /// A table line to the next one.
     static let footerCaptionSpacing: CGFloat = 5
-    /// The spend line to whatever the control opened beneath it.
     static let footerRuleSpacing: CGFloat = 9
-    /// One line of the footer's `11pt` caption.
-    ///
-    /// Measured rather than derived, for the same reason
-    /// ``sessionRowCaptionHeight`` is: every footer height below is composed
-    /// from it, so a caption that changed size in the view and not here would
-    /// leave the wrong black under it. It is also the air between one product
-    /// group and the next — one line of it.
+    /// One line of the footer's `11pt` caption; every footer height is composed from it. Also the
+    /// air between product groups.
     static let footerCaptionHeight: CGFloat = 14
 
-    /// The inset below the resting footer's 32 pt spend line.
-    ///
-    /// **`3`, chosen so the clearance it produces is the panel's own side
-    /// margin.** The number that is read off the screen is not this one: the
-    /// spend line centres its caption inside a `32` pt bar, so what stands
-    /// between the last line of text and the panel's bottom edge is this inset
-    /// plus the bar's own `9` pt of inner air. At `6` that clearance was `15`,
-    /// half again the ``expandedHorizontalPadding`` every column on this panel
-    /// is set from, and the footer read as a table with a blank line under it.
-    /// At `3` it is `12` — the same margin left, right and below, which is what
-    /// makes the bottom edge look like an edge rather than a gap.
+    /// Chosen so the clearance below the spend line's text (this plus the bar's `9` of inner air)
+    /// is `12`, the panel's ``expandedHorizontalPadding``.
     static let footerBottomMargin: CGFloat = 3
-    /// Match the resting caption's bottom clearance when the table is open.
-    /// The resting caption is centred inside the spend line; table captions
-    /// occupy only their own line height, so they need that inner inset too.
+    /// Table captions occupy only their line height, so they add the resting caption's inner
+    /// inset to match its bottom clearance.
     static let footerCaptionBottomMargin: CGFloat = footerBottomMargin
         + (recentSeamHeight - footerCaptionHeight) / 2
 
-    /// One window's line in the table, and the gap after it.
     static let footerWindowRowHeight: CGFloat = footerCaptionHeight
         + footerCaptionSpacing
-    /// The window column's indent inside the footer's own content box.
-    ///
-    /// One more step of ``expandedHorizontalPadding``, which puts a window's
-    /// label at `24` on the panel — one step in from the `12` its product's
-    /// name stands on. **Indentation carries the level on its own now**: the
-    /// leader that used to help it was a second hairline five per cent away
-    /// from the panel's own, and the weight of the product's name says the
-    /// same thing without being drawn.
+    /// One step of ``expandedHorizontalPadding`` in, putting a window's label at `24` on the panel;
+    /// indentation alone carries the level.
     static let footerWindowIndent: CGFloat = expandedHorizontalPadding
-    /// The clear space between two columns on this footer.
-    ///
-    /// Twice ``expandedHorizontalPadding``, and it does both of the jobs a
-    /// gutter has here: the least a product's name may stand from its own
-    /// spend, and the space between a window's name and its share.
+    /// The least a product's name stands from its spend, and the gap between a window's name and
+    /// its share.
     static let footerColumnGutter: CGFloat = expandedHorizontalPadding * 2
-    /// The window column, sized to the widest name a window can carry.
-    ///
-    /// `Current session` measures `81.56` at 11 pt Light, which is the widest
-    /// this app draws; a per-model window is named for whatever model the
-    /// account is capped on, so this is a column rather than a measurement.
-    /// The label and the share share one box with the slack between them, so a
-    /// longer name eats the gutter instead of colliding with the figure.
+    /// Sized to the widest window name: `Current session` measures `81.56` at 11 pt Light.
+    /// Per-model windows are named by the account's model, so a longer name eats the gutter.
     static let footerWindowColumnWidth: CGFloat = 84
     /// The share column: `100% left` is `48.78`, and nothing wider can appear.
     static let footerShareColumnWidth: CGFloat = 52
-    /// Where the share column's trailing edge lands, measured inside the
-    /// footer's content box: `184` on the panel.
-    ///
-    /// **It is set rather than chosen.** It was `300`, measured when the panel
-    /// was `520` wide; at `610` that is not a margin, an edge or a centre, and
-    /// it left the share stranded between two gaps of `216` and `284` with
-    /// `74` points of reading on the line. Composed from the columns it
-    /// actually holds, the share lands beside the window it belongs to and the
-    /// row reads as one phrase.
+    /// The share column's trailing edge in the footer's content box, `184` on the panel, composed
+    /// from the columns so the share stands beside its window.
     static let footerShareTrailingEdge: CGFloat = footerWindowIndent
         + footerWindowColumnWidth
         + footerColumnGutter
         + footerShareColumnWidth
 
-    /// What both of the band's controls draw at, inside a box that scales.
-    ///
-    /// `13`, and it is one number rather than two because the pair has to read
-    /// as one group: the gear is `gearshape` at this point size and the mark
-    /// is the brand's menu bar template resampled to exactly `13 × 13`, so the
-    /// asset in the catalogue is pinned to this constant. Changing it means
-    /// regenerating `NotchlineMark.imageset` from `design/assets/05-menubar`
-    /// at the new size, or the mark starts drawing through a resample.
+    /// Both band controls' glyph size. The mark asset is pinned to `13 × 13`: changing this means
+    /// regenerating `NotchlineMark.imageset` from `design/assets/05-menubar`.
     static let bandControlGlyphSize: CGFloat = 13
 
-    /// The gear scales with the menu bar: `32` under a `46pt` bar, `20` under a
-    /// `24pt` one. It is trailing-aligned inside the footer's content box, which
-    /// is where macOS panels put their settings control.
+    /// Scales with the menu bar: `32` under a `46pt` bar, `20` under a `24pt` one.
     static func settingsButtonSize(compactHeight: CGFloat) -> CGFloat {
         let ratio = (compactHeight - 24) / (46 - 24)
         return min(32, max(20, 20 + ratio * 12))
     }
 
-    /// The resting pill once it is hovered.
-    ///
-    /// It grows sideways to put the two controls within reach, and does
-    /// nothing else. With nothing connected there is no content to drop into a
-    /// panel, so dropping one would open an empty box; the reason lives in
-    /// Settings, and the gear is the one action that reaches it.
-    ///
-    /// **The mark beside the gear is reachable here too, and it costs `64`**
-    /// at the reference bar — twice a button, because the form is composed
-    /// symmetrically. That is the state where it is worth most: nothing is
-    /// connected, which is what a fresh install looks like, and the About
-    /// panel is the one surface that says what this app is and which version
-    /// of it is running. Hiding the mark until an agent appears would put the
-    /// app's own name behind having already set the app up.
-    ///
-    /// **Composed symmetrically, like every other width on this panel.** It was
-    /// added up instead — `leading + cut-out + trailing` — and the panel is
-    /// centred while expanded, so that sum was never the drawing: the room
-    /// beside the cut-out is `(width − cut-out) ÷ 2` on *both* sides. The
-    /// trailing side is the wider of the two here, so this form is
-    /// `cut-out + 2 × (8 + mark + gear + 12)` and the pair keeps its `8` at
-    /// every scaling step — `247` at `127 × 22`, `323` at `185 × 32`, `368` at
-    /// the reference `200 × 46`, `371` at this machine's `220 × 38`. ~~`207`,
-    /// `274`, `304`, `316`~~ were the same series with one control on this
-    /// side.
-    ///
-    /// **Dropping the word is what makes that affordable.** The old sum
-    /// reserved `Disconnected` on the leading side and drew it there
-    /// (`drawsCompactStatusName` is `isExpanded || noNotch`), which put about
-    /// `25` pt of that word behind the cut-out on a notched screen; with the
-    /// name gone from every surface the leading side falls to `36.6`, the
-    /// trailing side binds, and `304` is still `92` narrower than the form that
-    /// had the fault. `figma-design.md` §6.4's `400` and its checklist's
-    /// `400.6` are void with the rest (`expanded-header-v2.md` §5).
+    /// The resting pill once hovered: grows sideways to reach the gear and the About mark, and
+    /// nothing else (nothing connected means no content to drop). Composed symmetrically, since
+    /// the expanded panel is centred: `cut-out + 2 × (8 + mark + gear + 12)` — `247` at
+    /// `127 × 22`, `323` at `185 × 32`, `368` at `200 × 46`, `371` at `220 × 38`
+    /// (`expanded-header-v2.md` §5).
     static func restingExpandedWidth(
         geometry: DisplayGeometry,
         centerOcclusionWidth: CGFloat,
@@ -821,9 +374,7 @@ enum PanelMetrics {
     ) -> CGFloat {
         let trailing = expandedTrailingSideWidth(compactHeight: compactHeight)
         guard geometry == .notched, centerOcclusionWidth >= 1 else {
-            // Nothing to be symmetric about: this form composes to itself, the
-            // status mark and the two controls with one clearance between
-            // them.
+            // Nothing to be symmetric about: the status mark and the two controls, one clearance apart.
             return ceil(
                 expandedHorizontalPadding + statusMatrixSize + trailing
             )
@@ -831,42 +382,17 @@ enum PanelMetrics {
         return ceil(centerOcclusionWidth + trailing * 2)
     }
 
-    /// The footer at rest: today's spend, the control, and nothing else.
-    ///
-    /// **`35`, at every connected form** — every product count, every window
-    /// count, and every share. ~~`38`~~ was the same line over a `6` pt inset;
-    /// see ``footerBottomMargin`` for why the inset is `3`. It is the only closed height the footer has:
-    /// no window speaks, because there is no threshold for one to cross
-    /// (`quota-footer-v2.md` §4), so nothing the machine observes changes this
-    /// figure at all.
-    ///
-    /// **The spend line is `32` now, not `16`.** It draws the same bar the
-    /// Recent seam does — ``recentSeamHeight`` — so the two closing lines
-    /// this panel has match, and its own hover reaches the whole line rather
-    /// than the `16pt` chevron alone.
+    /// The footer at rest: `35` at every connected form. No window crosses a threshold
+    /// (`quota-footer-v2.md` §4), so nothing changes it. The spend line is ``recentSeamHeight``
+    /// so the panel's two closing lines match.
     static let restingFooterHeight: CGFloat = recentSeamHeight
         + footerBottomMargin
     /// The chevron glyph's own square, inside the spend line's `32pt` bar.
     static let quotaFoldControlSize: CGFloat = 16
 
-    /// Footer height: the resting line, or the table somebody opened.
-    ///
-    /// **`35`, or `19W + 28P + 39`**. The opened form composes as the spend
-    /// line and its gap (`32 + 9`), then one group per product — a caption
-    /// line at `14`, and `19` for each of its windows — with `14` of air
-    /// between groups and `12` below the last line. Multiplied out that is
-    /// `53 + Σ(14 + 19w) + 14(P − 1)`, which is `19W + 28P + 39`.
-    ///
-    /// ~~`38`, or `19W + 28P + 42`~~ was the same composition with `15` below
-    /// the last line rather than `12` (``footerBottomMargin``).
-    ///
-    /// **`28P` is the arithmetic `quota-footer-v2.md` was written with**, before
-    /// §2 added a point to every product line so a badge would fit on it. The
-    /// badge is gone from this footer and the line is a caption line again.
-    ///
-    /// **Nothing connected is no footer at all**: no products, no windows and
-    /// no tokens is nothing to say, and a wing with nothing to say is removed
-    /// rather than left blank (§8.5 question 07).
+    /// `35` at rest, or `19W + 28P + 39` open: spend line and gap (`32 + 9`), per product a `14`
+    /// caption and `19` per window, `14` between groups, `12` below. Nothing connected is no
+    /// footer (§8.5 question 07).
     static func footerHeight(
         productCount: Int,
         windowCount: Int,
@@ -883,7 +409,6 @@ enum PanelMetrics {
             + footerCaptionBottomMargin
     }
 
-    /// The same height, asked of the rules themselves.
     static func footerHeight(rules: [FooterRule], isExpanded: Bool = false) -> CGFloat {
         footerHeight(
             productCount: rules.count,
@@ -892,15 +417,8 @@ enum PanelMetrics {
         )
     }
     static let thinExpandedBodyHeight: CGFloat = 48
-    /// The live viewport over a footer at rest: `308` at every connected
-    /// form, every working-agent count and every share, with the Recent queue
-    /// empty or folded.
-    ///
-    /// **Not the panel's cap any more.** With the live list and the Recent
-    /// queue scrolling on their own (``sessionViewportCap``,
-    /// ``recentViewportCap``), a queue somebody opens can stand on top of this
-    /// — there is no longer one ceiling the whole panel answers to, only the
-    /// two caps each part answers to on its own.
+    /// The live viewport over a resting footer: `308`. Not a panel cap — the live list and the
+    /// Recent queue each fold on their own caps.
     static let expandedContentHeight: CGFloat = sessionViewportCap
         + restingFooterHeight
     static let thinExpandedContentHeight: CGFloat = thinExpandedBodyHeight
@@ -908,66 +426,28 @@ enum PanelMetrics {
 
     // MARK: - The About panel
 
-    /// The lockup at the top of the About panel: the full image, clear space
-    /// and all.
-    ///
-    /// `36`, which is `25.5` of drawn mark — the brand package bakes one pitch
-    /// of clear space into every lockup file (`155` of mark in a `219` box),
-    /// so the number here is the box and not the figure. That puts the mark
-    /// half again the size of the status matrix on the band above it, which is
-    /// the point: the two are the same five columns, and the one that is a
-    /// logo has to be plainly the bigger of them or the panel reads as a
-    /// second status display.
-    ///
-    /// The lockup's own ratio does the width — `1075.15 : 219`, so `36` draws
-    /// `176.7` wide, well past the `110` the package sets as this lockup's
-    /// floor.
+    /// The About lockup's box height, clear space included: `36` draws `25.5` of mark (`155` in
+    /// `219`), half again the status matrix, so the logo is plainly not a status display.
     static let aboutLockupHeight: CGFloat = 36
-    /// The lockup's own ratio, `1075.15 : 219`, which is the package's box and
-    /// not a crop of it: the file carries its clear space, so drawing the
-    /// image to this ratio is what keeps that space intact.
+    /// The package's box ratio, not a crop, so the baked-in clear space stays intact.
     static let aboutLockupAspect: CGFloat = 1075.15 / 219
     static var aboutLockupWidth: CGFloat { aboutLockupHeight * aboutLockupAspect }
 
     /// The air above the lockup, measured from the rule that closes the band.
     static let aboutTopMargin: CGFloat = 28
-    /// Below the update control, at the panel's own bottom edge.
     static let aboutBottomMargin: CGFloat = 24
-    /// Between the lockup and the first line under it.
     static let aboutLockupTextGap: CGFloat = 20
-    /// Between the version, copyright notice and repository link.
     static let aboutTextLineGap: CGFloat = 4
-    /// Between that block and the control.
     static let aboutTextControlGap: CGFloat = 22
-    /// The repository joins the two caption lines above the update control.
     static let aboutLinkHeight: CGFloat = 20
 
-    /// One line of the About panel's text, at the height SwiftUI lays a single
-    /// line of ``captionFont`` out at.
-    ///
-    /// Measured off the face rather than picked, so a change of font moves the
-    /// panel's height with it instead of leaving two lines of `11` pt inside a
-    /// box built for a different size.
-    ///
-    /// **`ceil` on each half, not on the sum, and the difference is two
-    /// points.** `NSLayoutManager.defaultLineHeight` for this face is `13`,
-    /// and SwiftUI draws the same line `14` tall: it rounds the ascent and the
-    /// descent up separately — `10.63 → 11` and `2.32 → 3` — rather than
-    /// rounding their sum of `12.96` once. Composed from the layout manager's
-    /// figure the body came out two points taller than the window it was drawn
-    /// in, and with the body pinned to the top that put the control two points
-    /// into its own bottom margin.
+    /// SwiftUI's single-line height for ``captionFont``: it ceils ascent and descent separately
+    /// (`14`), not their sum like `NSLayoutManager.defaultLineHeight` (`13`).
     static var aboutTextLineHeight: CGFloat {
         ceil(captionFont.ascender) + ceil(-captionFont.descender)
     }
 
-    /// **The one body on this panel that does not answer to what is running.**
-    ///
-    /// Every other height here is composed from a row count, a queue and a
-    /// footer, and changes while the user watches. This one is the app naming
-    /// itself: a lockup, the version, the copyright notice and two controls, none
-    /// of which the machine can add to or take away. So it is a constant, and
-    /// a session starting behind an open About panel moves nothing.
+    /// A constant: nothing running changes the About panel's content, so it never moves.
     static var aboutPanelHeight: CGFloat {
         aboutTopMargin
             + aboutLockupHeight
@@ -979,18 +459,12 @@ enum PanelMetrics {
             + answerRowHeight
             + aboutBottomMargin
     }
-    /// The status matrix is a fixed size, not a share of the menu bar.
-    ///
-    /// Taken from the indicator-to-text ratio at loaders.wtf — a 92pt indicator
-    /// beside 72pt text — applied to the label's fixed 13pt: 13 × 1.2778 ≈ 16.6.
-    /// Because the label never scaled with the bar either, tying only the
-    /// indicator to it left the two drifting apart between a 46pt and a 24pt bar.
+    /// Fixed, not a share of the menu bar, because the 13pt label doesn't scale either. From
+    /// loaders.wtf's indicator-to-text ratio (92pt beside 72pt): 13 × 1.2778 ≈ 16.6.
     static let statusMatrixSize: CGFloat = 16.6
-    /// The notch label renders Light — measure it at the weight it draws at,
-    /// or every compact width is over-reserved.
+    /// Light, as drawn; any other weight over-reserves every compact width.
     private static let statusLabelFont = NSFont.systemFont(ofSize: 13, weight: .light)
-    /// The elapsed timer uses tabular figures so its width stops changing every
-    /// second; measure it with the same metrics.
+    /// Tabular figures, so the width does not change every second.
     private static let timerFont = NSFont.monospacedDigitSystemFont(
         ofSize: 13,
         weight: .light
@@ -998,31 +472,15 @@ enum PanelMetrics {
 
     // MARK: - The aggregate counts column
 
-    /// The sessions numeral, and the face the whole column is measured from.
-    ///
-    /// **`11` pt, at the optical size the column was drawn at.** The board's
-    /// figures are SF Pro Display's: a `6.6` digit advance, a `7.85` cap, a
-    /// `5.71` cap under it. AppKit hands out SF Pro *Text* at `11` pt — the
-    /// optical cut macOS uses at small sizes, whose digits are `6.99` — so the
-    /// drawing's own `6.6` is unreachable through ``NSFont/systemFont(ofSize:)``
-    /// and every published width would have had to move to meet it. Asking
-    /// CoreText for the display optical size gives `6.616` and a `7.750` cap:
-    /// the drawing, to within a hundredth and a tenth.
-    ///
-    /// Regular rather than the reading's Light. Light measures `6.549` and
-    /// medium `6.784`, so regular is also the weight whose digits land inside
-    /// the `6.6` the column is billed at — the reservation and the ink agree by
-    /// construction rather than by luck.
+    /// `11` pt at the display optical size: AppKit's SF Pro Text digits are `6.99`, the board's
+    /// SF Pro Display `6.6`; CoreText's display cut gives `6.616`. Regular, since Light (`6.549`)
+    /// and medium (`6.784`) miss the billed `6.6`.
     static let countsSessionFont = countsFont(ofSize: 11)
     /// The subagents numeral: the same face, two steps down (`5.637` cap).
     static let countsSubagentFont = countsFont(ofSize: 8)
 
-    /// One counts face: monospaced digits at the display optical size.
-    ///
-    /// Tabular figures for the reason the reading uses them — a proportional
-    /// `1` would resize the leading wing every time a session opened
-    /// (`compact-view-v2.md` §3.2 rule 05) — and the optical override so the
-    /// digits measure what the column reserves.
+    /// Monospaced digits (a proportional `1` resizes the wing, `compact-view-v2.md` §3.2 rule 05)
+    /// at the display optical size.
     private static func countsFont(ofSize size: CGFloat) -> NSFont {
         let base = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .regular)
         let descriptor = base.fontDescriptor.addingAttributes([
@@ -1032,31 +490,19 @@ enum PanelMetrics {
         return NSFont(descriptor: descriptor, size: size) ?? base
     }
 
-    /// Where the display cut begins. Anything past SF's `20` pt crossover
-    /// gives the same digits; this is the smallest value that is plainly on
-    /// the far side of it.
+    /// Past SF's `20` pt crossover every value gives the display digits.
     private static let countsOpticalSize: CGFloat = 20
 
-    /// Between the mark and the counts beside it.
     static let aggregateCountsGap: CGFloat = 4
 
-    /// One numeral's width, which is every numeral's width.
-    ///
-    /// `6.616`, the drawn advance rather than the board's nominal `6.6`. The
-    /// difference is under a hundredth of a point and it lands inside the
-    /// single `ceil` every composed width takes, so the published totals stand:
-    /// the notched bar is still `304` at one digit and `310` at two, and the
-    /// pill is still `250` because its middle is a subtraction and absorbs it
-    /// (`compact-view-v2.md` §6.1).
+    /// `6.616`, the drawn advance; the difference from `6.6` is absorbed by each width's `ceil`
+    /// (`304`/`310` notched, `250` pill; `compact-view-v2.md` §6.1).
     static var countsDigitWidth: CGFloat {
         textWidth("8", font: countsSessionFont)
     }
 
-    /// The column at the digits it is drawing: nothing, one numeral, or two.
-    ///
-    /// Zero sessions is no column at all — a bar at rest is one grey matrix and
-    /// never a bar reading `0` (§3.2 rule 03). The subagent numeral is narrower
-    /// than the sessions numeral above it and never widens this.
+    /// Zero sessions is no column (§3.2 rule 03). The subagent numeral is narrower and never
+    /// widens this.
     static func countsColumnWidth(sessionCount: Int) -> CGFloat {
         guard sessionCount > 0 else { return 0 }
         return CGFloat(String(sessionCount).count) * countsDigitWidth
@@ -1065,30 +511,16 @@ enum PanelMetrics {
     /// The column at two digits, which is what the pill holds open.
     static var reservedCountsColumnWidth: CGFloat { 2 * countsDigitWidth }
 
-    /// The room the column stands in, gap and all.
-    ///
-    /// The gap belongs to the column rather than to the mark, so a bar with no
-    /// rows gives back both together and the matrix is the whole wing. The pill
-    /// holds the room at two digits whatever it is drawing, including nothing.
+    /// The gap belongs to the column, so a bar with no rows gives both back. The pill reserves two
+    /// digits whatever it draws.
     static func countsSlotWidth(sessionCount: Int, reserved: Bool) -> CGFloat {
         if reserved { return aggregateCountsGap + reservedCountsColumnWidth }
         guard sessionCount > 0 else { return 0 }
         return aggregateCountsGap + countsColumnWidth(sessionCount: sessionCount)
     }
 
-    /// Where the sessions numeral stands, measured up from the matrix's bottom
-    /// edge.
-    ///
-    /// Two positions and one movement between them. With a subagent under it
-    /// the numeral's cap-top is **on the matrix's top edge**; alone it is
-    /// optically centred on the matrix's `16.6`, which puts its baseline
-    /// exactly half the leftover above the bottom. So the rise when the first
-    /// subagent starts is that same half — `4.425` at the drawn cap, where the
-    /// board says `4.375` for a `7.85` one (§3.4).
-    ///
-    /// This takes a vertical move on the figure the eye is on, caused by
-    /// something the user did not do. It is taken deliberately: the resting
-    /// drawing is the one this surface spends most of its life showing.
+    /// Sessions numeral baseline above the matrix's bottom: cap-top on the matrix's top edge with
+    /// a subagent, optically centred alone — a `4.425` rise when the first subagent starts (§3.4).
     static func countsSessionBaseline(
         hasSubagents: Bool,
         matrixSize: CGFloat = statusMatrixSize
@@ -1102,47 +534,23 @@ enum PanelMetrics {
 
     // MARK: - The expanded band
 
-    /// The band's leading side: the collapsed bar's own group, and nothing
-    /// after it.
-    ///
-    /// **`53.8` at every agent count** (`colour-v2.md` §3). It used to grow
-    /// `19.2` an agent, for one column of numbers per working agent in that
-    /// agent's own inks; the decomposition is gone with the product hues that
-    /// were the only thing on it saying whose a number was, so the band draws
-    /// the aggregate mark and the accumulated totals and stops.
-    ///
-    /// The consequence is that **the leading group is now identical collapsed
-    /// and expanded** — mark at `12`, totals at `32.6`, nothing appearing on
-    /// hover and nothing moving.
+    /// The band's leading side: `53.8` at every agent count, identical collapsed and expanded
+    /// (`colour-v2.md` §3).
     static let expandedLeadingSideWidth: CGFloat = expandedHorizontalPadding
         + statusMatrixSize
         + aggregateCountsGap
         + reservedCountsColumnWidth
         + expandedNotchClearance
 
-    /// The band's trailing side: the two controls this surface has.
-    ///
-    /// **It was one control, and the second is the app naming itself.** The
-    /// mark opens the About panel (``MonitorStore/isShowingAbout``), and it
-    /// stands to the left of the gear because the gear is where macOS panels
-    /// put their settings control and moving it would move the one thing on
-    /// this side a user has already learnt the position of.
-    ///
-    /// The pair sits flush — no clearance between them — because each is a
-    /// ``settingsButtonSize`` box around a `13` pt glyph and already carries
-    /// `3.5`–`9.5` of its own padding on every side. A gap on top of that
-    /// would read as two groups rather than as this surface's controls.
+    /// The band's trailing side: the About mark, then the gear where macOS puts settings. Flush,
+    /// since each ``settingsButtonSize`` box already pads its `13` pt glyph.
     static func expandedTrailingSideWidth(compactHeight: CGFloat) -> CGFloat {
         expandedNotchClearance
             + settingsButtonSize(compactHeight: compactHeight) * 2
             + expandedHorizontalPadding
     }
 
-    /// The leading group at what it draws: the aggregate mark, and the counts
-    /// where there are any.
-    ///
-    /// The gap goes with the column, so a bar with no rows is the matrix alone
-    /// and gives back every point the numerals were taking.
+    /// The gap goes with the column, so a bar with no rows is the matrix alone.
     static func drawnLeadingGroupWidth(sessionCount: Int) -> CGFloat {
         let counts = countsColumnWidth(sessionCount: sessionCount)
         return statusMatrixSize + (counts > 0 ? aggregateCountsGap + counts : 0)
@@ -1155,19 +563,10 @@ enum PanelMetrics {
 
     // MARK: - The pill's middle
 
-    /// The face the name of the work is drawn in.
-    ///
-    /// `13` pt Light — the face the status name used to take, and the one this
-    /// document's own measurements were made against: `notchline` is `55.10`
-    /// here, which is the figure `compact-view-v2.md` §6.3 fits the middle
-    /// around. Naming the face therefore moves nothing.
+    /// `13` pt Light; `notchline` measures `55.10`, the figure `compact-view-v2.md` §6.3 fits.
     static let projectNameFont = statusLabelFont
 
-    /// How long the name is faded out over where the middle ends.
-    ///
-    /// A name too long to fit fades rather than clipping or ellipsing: a reader
-    /// can act on the start of a name, and an ellipsis would spend three glyphs
-    /// saying that a name exists.
+    /// A long name fades rather than clips or ellipsises.
     static let projectNameFadeWidth: CGFloat = 12
 
     /// How long each Project is named before the next one.
@@ -1177,155 +576,59 @@ enum PanelMetrics {
 
 
 
-    /// The subagent badge: font, minimum size, and the padding that lets a
-    /// two-digit count grow it rather than clip it.
-    ///
-    /// `dual-agent-design.md` §10 draws the badge at a fixed `15 × 15` for the
-    /// single-digit counts every mockup shows; that figure is this type's
-    /// floor rather than a hardcoded width -- `figma-design.md` §4.6's one
-    /// lesson is that a slot must grow to fit what it actually draws, and a
-    /// count of `10` or more is real once a thread has spawned enough
-    /// subagents.
+    /// The subagent badge. `15 × 15` (`dual-agent-design.md` §10) is a floor: a count of `10`+
+    /// grows it (`figma-design.md` §4.6).
     static let subagentBadgeFont = NSFont.systemFont(ofSize: 9, weight: .semibold)
     static let subagentBadgeMinSize: CGFloat = 15
     static let subagentBadgeCornerRadius: CGFloat = 4
     static let subagentBadgeHorizontalPadding: CGFloat = 4
-    /// Between the badges and the timer they share the trailing slot with.
     static let subagentBadgeTimerSpacing: CGFloat = 8
 
-    /// The ground an elapsed reading sits on, which is what tells the four
-    /// session states apart (`figma-design.md` page 14).
-    ///
-    /// **The badge's own tile, at reading width.** Presence and brightness were
-    /// the only two channels the slot used, and both are comparisons: a row
-    /// with no timer only reads as finished beside a row that has one, and a
-    /// white timer only reads as waiting beside a dimmer one. Cover the
-    /// neighbours and neither answer survives. A ground is a silhouette, which
-    /// one row can answer on its own -- bare while the turn runs, white while
-    /// it wants a person, dim once it has finished.
-    ///
-    /// Deliberately the same geometry as ``subagentBadgeCornerRadius`` and
-    /// ``subagentBadgeHorizontalPadding`` rather than numbers of its own: the
-    /// badge already draws a reading on a ground that flips when a person is
-    /// wanted, and this is that mark answering for the turn as well as for its
-    /// subagents. Two marks in one family, not two families.
+    /// The ground an elapsed reading sits on (`figma-design.md` page 14): a silhouette one row can
+    /// answer alone. Shares the subagent badge's geometry — one family of marks.
     static let readingGroundHeight: CGFloat = 16
     static var readingGroundCornerRadius: CGFloat { subagentBadgeCornerRadius }
     static var readingGroundPadding: CGFloat { subagentBadgeHorizontalPadding }
-    /// What a ground adds to the reading it wraps.
     static var readingGroundWidthCost: CGFloat { readingGroundPadding * 2 }
 
-    /// One light face for request buttons, including the waiting mark and
-    /// destination control. Measurement and drawing share the same font.
+    /// One light face for request buttons, the waiting mark and destination control; measurement
+    /// and drawing share it.
     static let requestControlFont = NSFont.systemFont(ofSize: 13, weight: .light)
 
-    /// What one answer takes: its own word, and ``controlHorizontalPadding`` a
-    /// side.
-    ///
-    /// **One expression, read by the control and by the pin that names it.**
-    /// The answers hug — they are two or three words of the request's own
-    /// vocabulary, and a reserved width would have to be the widest of every
-    /// word either product can send. The first-run window measures inwards from
-    /// the row's trailing edge to place its pins, so it needs the same figure
-    /// the control is drawn at; asking it here is what keeps the drawing and
-    /// the pin from parting company (`figma-design.md` §7.1.2).
+    /// One answer's width: its word plus ``controlHorizontalPadding`` a side. Answers hug; the
+    /// first-run window places its pins from this same figure (`figma-design.md` §7.1.2).
     static func drawnAnswerControlWidth(_ label: String) -> CGFloat {
         ceil(textWidth(label, font: requestControlFont)) + controlHorizontalPadding * 2
     }
     static let waitingMarkFont = requestControlFont
 
-    /// The mark is a control, so it is built like one rather than like the
-    /// readings it shares the slot with.
-    ///
-    /// ~~Twice the ``readingGroundHeight`` it used to take, and cut like the
-    /// answer it becomes rather than like the reading it replaced. That leaves
-    /// it `4` taller than ``answerRowHeight`` — the affirmative it grows into
-    /// when the row opens (`answer-in-notch.md` §3.1) — which is the one number
-    /// here settled by how it feels under the pointer rather than by the system
-    /// it belongs to.~~
-    ///
-    /// **Superseded — it *is* ``answerRowHeight``, and derived rather than
-    /// written down.** `32` was the reading's tile doubled, which is a number
-    /// about the mark's ancestry rather than about what it now is; against the
-    /// answer row it left the one object §3.1 describes travelling down the row
-    /// and shedding four points on the way. The corner, the padding and the
-    /// weight are already the answers'; the height was the last of the four
-    /// still holding out, and "how it feels under the pointer" is not a
-    /// measurement that outranks the three.
-    ///
-    /// ~~On ``readingGroundHeight``'s own `0.25` corner ratio~~ — **superseded**:
-    /// that ratio was the badge family's, inherited from the reading this
-    /// replaced, and at `32` tall it drew an `8` pt pill above a row of `4` pt
-    /// tiles. The corner and the padding are ``controlCornerRadius`` and
-    /// ``controlHorizontalPadding`` now, which the answers already took.
+    /// Built like a control, not a reading: ``answerRowHeight``, with the answers' corner and
+    /// padding, so it is the same object as the affirmative it grows into (`answer-in-notch.md`
+    /// §3.1).
     static var waitingMarkHeight: CGFloat { answerRowHeight }
     static var waitingMarkCornerRadius: CGFloat { controlCornerRadius }
     static var waitingMarkPadding: CGFloat { controlHorizontalPadding }
 
-    /// What the mark takes, and it is one width whichever word it holds.
-    ///
-    /// ~~**Fixed, and that is the whole point.**~~ ~~Superseded — it hugs the
-    /// one word it will ever show.~~ **Fixed again, and for a different
-    /// reason.** The first reservation was forced: the word changed to `Answer`
-    /// or `Read` under the pointer, *nothing on a row may move* as a pointer
-    /// passes over it (`answer-in-notch.md` §3.3), so the ground was measured
-    /// against the longest phrase it might have to hold — `113 pt` of the
-    /// brightest value on the panel even for a four-letter word, `19%` of the
-    /// row's content box spent naming a condition. That is what hugging was
-    /// right to remove, and the word no longer changes under the pointer
-    /// anyway: ``waitingMarkWord(for:canBeAnswered:)`` decides it from the
-    /// row's own request, at rest.
-    ///
-    /// What hugging cost was the **list**. Three verbs of three lengths, each
-    /// right-aligned to its row's trailing edge, left a ragged column down a
-    /// mixed queue — and these are one control appearing once per row, not
-    /// three controls. So they draw one silhouette: the widest of the three,
-    /// which is `Approve` at `76`. `Read` pays `20 pt` for that, against the
-    /// `57` the phrase used to cost it, and the reservation is now over the
-    /// three words the mark can actually say rather than over the four strings
-    /// it once might have.
-    ///
-    /// **Derived rather than written down**, so a fourth word cannot quietly
-    /// outgrow it — the test pins that every word
-    /// ``waitingMarkWord(for:canBeAnswered:)`` can return fits.
+    /// One width whichever word it holds: the widest of ``waitingMarkWords`` (`Approve`, `76`),
+    /// so a mixed queue keeps a straight column. The word is decided at rest, and nothing on a
+    /// row moves under the pointer (`answer-in-notch.md` §3.3). Derived; a test pins that every
+    /// word fits.
     static let waitingMarkWidth: CGFloat = waitingMarkWords
         .map(huggedWaitingMarkWidth)
         .max() ?? 0
 
-    /// Every word the mark can say, which is what ``waitingMarkWidth`` is the
-    /// widest of.
     static let waitingMarkWords = [
         waitingMarkApproveWord, waitingMarkAnswerWord, waitingMarkReadWord
     ]
 
-    /// What one word would take if the ground still hugged it: the string as
-    /// measured, plus ``waitingMarkPadding`` a side.
-    ///
-    /// Only the widest word is drawn with that padding; the rest keep the width
-    /// and centre inside it, which is what makes the column straight.
+    /// A word's width with ``waitingMarkPadding`` a side; narrower words centre inside the widest.
     static func huggedWaitingMarkWidth(_ word: String) -> CGFloat {
         ceil(textWidth(word, font: waitingMarkFont) + waitingMarkPadding * 2)
     }
 
-    /// What the mark says on a row that wants a person.
-    ///
-    /// **A verb, and it offers the act rather than naming the condition.** The
-    /// two status names it replaces were the longest strings on this panel and
-    /// both of them described a state; what a person does about either is one
-    /// act, and this is the word for it. The distinction the names carried is
-    /// not lost — it decides which verb, and `SessionStatus/displayName` still
-    /// spells both of them for the mark's accessibility label.
-    ///
-    /// `Read` is not a fourth state but the honest answer wherever the act is
-    /// not available: a request no connection is being held open for can only
-    /// be read here and answered in its product (§11 rule 03). Offering
-    /// `Approve` on a row that cannot approve is exactly the quiet promise that
-    /// rule forbids, which is why this is asked of the request and not of the
-    /// status alone.
-    ///
-    /// It lives here rather than in the view because it is vocabulary, it
-    /// belongs beside the three words themselves, and a private view cannot be
-    /// asked what it would say.
+    /// A verb offering the act: `Approve` for consent, `Answer` for a question, `Read` where no
+    /// connection is held open to answer it (§11 rule 03) — so it is asked of the request, not
+    /// only the status. `SessionStatus/displayName` still supplies the accessibility label.
     static func waitingMarkWord(
         for status: SessionStatus,
         canBeAnswered: Bool
@@ -1341,61 +644,28 @@ enum PanelMetrics {
         }
     }
 
-    /// What the mark says where the wait is a consent.
     static let waitingMarkApproveWord = "Approve"
-    /// And where it is a question, whose answer is words rather than consent.
     static let waitingMarkAnswerWord = "Answer"
-    /// And where it can only be read — §11, and the three are per row rather
-    /// than per product, because what a row can do is a fact about the request
-    /// it is holding.
+    /// Per row, not per product: what a row can do is a fact about its request.
     static let waitingMarkReadWord = "Read"
 
-    /// One badge's width, hugging its digits at the minimum size and growing
-    /// only when a wider count needs it.
     static func subagentBadgeWidth(_ count: Int) -> CGFloat {
         let measured = textWidth("\(count)", font: subagentBadgeFont)
             + subagentBadgeHorizontalPadding * 2
         return max(subagentBadgeMinSize, ceil(measured))
     }
 
-    /// Everything the collapsed trailing slot draws: the badges, the timer, and
-    /// the gap between them when both are present.
-    ///
-    /// **One expression for both collapsed forms.** It was two while the
-    /// notch-less pill billed the timer for a `00:00:00` slot and the notched
-    /// bar billed it for its digits; now that neither reserves, the slot is the
-    /// reading on every surface that has one, and a second expression could
-    /// only be a second answer to a question with one.
-    ///
-    /// **The reading carries its ground's room, and its ground is never
-    /// filled.** The collapsed reading is drawn one way for every state -- the
-    /// waiting flip that used to put it on white was taken out of the bar, and
-    /// only the expanded rows read their grounds against each other now. What
-    /// stays is the `.clear` ``ReadingGround`` around it, whose padding is what
-    /// ``readingGroundWidthCost`` bills for here.
-    ///
-    /// **Nothing here is held open.** The panel steps outwards when the timer
-    /// gains a digit and steps back in when it loses one. The notched bar takes that
-    /// on its trailing wing alone, and its leading edge cannot feel any of it
-    /// because ``compactTrailingWingWidth(trailing:)`` is a whole number of
-    /// points and cancels out of the sum that places it; the pill is centred,
-    /// so it takes half on each edge and glides.
-    ///
-    /// **And it leaves the reading's own leading edge standing still** in the
-    /// panel's own coordinates. Every term here is a whole number —
-    /// ``drawnCompactReadingWidth(_:)`` ceils the glyph box the way the raster
-    /// does — so the notched wing is exactly `reading + 12 + 8` with no
-    /// rounding of its own and the reading starts ``expandedNotchClearance``
-    /// past the cut-out at every length it can draw, while on the pill the
-    /// panel and the box grow by the same amount and their difference is what
-    /// places the reading. A digit therefore appears at the trailing end of the
-    /// reading and pushes the edge out in front of it, rather than sliding the
-    /// whole figure sideways.
+    /// Everything the collapsed trailing slot draws; one expression for both collapsed forms, with
+    /// nothing reserved.
+    /// - The reading carries a `.clear` ``ReadingGround``, billed by ``readingGroundWidthCost``.
+    /// - A new digit steps the panel out: the notched bar on its trailing wing only (its whole
+    ///   points cancel from the leading edge's sum), the centred pill by half on each edge.
+    /// - Every term is whole (``drawnCompactReadingWidth(_:)`` ceils like the raster), so the
+    ///   reading starts ``expandedNotchClearance`` past the cut-out at every length.
     static func drawnTrailingReadingWidth(_ trailing: CompactTrailingReading) -> CGFloat {
         let dot = trailing.drawsFinishedDot ? buriedFinishDotSize : 0
         guard let timerText = trailing.timerText else {
-            // The dot alone, with nothing for its gap to stand off: each gap on
-            // this surface exists only where content stands on both sides of it.
+            // Each gap exists only where content stands on both sides.
             return dot
         }
         guard trailing.drawsFinishedDot else {
@@ -1404,37 +674,14 @@ enum PanelMetrics {
         return dot + buriedFinishDotSpacing + drawnCompactReadingWidth(timerText)
     }
 
-    /// The finished-turn dot, and the gap it stands off the digits by.
-    ///
-    /// `4` in ~~the wing's own `#7C7C80`~~ the sessions numeral's `#C7C7CC`
-    /// (``NotchPalette/finishedDotDrawingColor``), `8` before the reading. Both
-    /// whole numbers, so the wing stays integral and the leading edge still
-    /// cannot feel anything the trailing side does
-    /// (`theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove`).
-    ///
-    /// ~~**The same two figures place a row's dot**, which is not a second
-    /// decision: a row's reading is the same `13` pt Light the wing's is, so
-    /// the mark in front of it is the same mark at the same distance.~~
-    ///
-    /// **The same two figures, and a row has to spend a third to reach them**
-    /// (2026-09-09). This `8` is what the wing *lays out*; what it *draws* is
-    /// that `8` and then the ``readingGroundPadding`` of the `.clear`
-    /// ``ReadingGround`` its reading never leaves — so the mark stands `12`
-    /// off the first digit up there. A row whose reading has no ground to
-    /// carry that padding has to carry it itself, or the same mark stands `4`
-    /// nearer the same digits on the panel than on the bar. See
-    /// ``drawnFinishDotGap``: one decision, still, and the same distance on
-    /// both surfaces.
+    /// The finished-turn dot: `4`, in ``NotchPalette/finishedDotDrawingColor``, laid out `8` before
+    /// the reading. Whole numbers keep the wing integral
+    /// (`theTrailingWingIsWholePointsSoTheLeadingEdgeCannotMove`). The wing draws it `12` off the
+    /// digits via its ground's padding; rows use ``drawnFinishDotGap`` to match.
     static let buriedFinishDotSize: CGFloat = 4
     static let buriedFinishDotSpacing: CGFloat = 8
-    /// What a person sees between the dot and the first digit, as against the
-    /// ``buriedFinishDotSpacing`` the layout is billed for.
-    ///
-    /// The difference is the ground: every surface that gives its reading one
-    /// — including the collapsed wing, whose ground is `.clear` and kept for
-    /// the width it bills — stands the digits ``readingGroundPadding`` inside
-    /// it. This is that distance named, for the one surface that has to add it
-    /// by hand.
+    /// The visible dot-to-digit distance: ``buriedFinishDotSpacing`` plus the ground padding that
+    /// every grounded reading has, for the one surface that must add it by hand.
     static var drawnFinishDotGap: CGFloat {
         buriedFinishDotSpacing + readingGroundPadding
     }
@@ -1444,58 +691,18 @@ enum PanelMetrics {
     }
 
 
-        /// Compact content trailing the notch, including its own trailing padding.
-    ///
-    /// Zero unless the collapsed surface has a reading to put there -- an
-    /// elapsed value, a subagent badge, or both. The usage ring used
-    /// to sit here unconditionally, which meant an idle notched display
-    /// rendered a blank wing that read as a second, fake notch.
+    /// Compact content trailing the notch, including its padding. Zero with no reading, so an idle
+    /// notched display draws no blank wing that reads as a second notch.
     static func compactTrailingWidth(trailing: CompactTrailingReading) -> CGFloat {
         guard !trailing.isEmpty else { return 0 }
         return drawnTrailingReadingWidth(trailing) + expandedHorizontalPadding
     }
 
-    /// How far the compact body reaches past the cut-out's trailing edge.
-    ///
-    /// A notched panel is pinned to the notch, not the screen: its right edge
-    /// sits on the cut-out's right edge, plus whatever trailing wing is drawn.
-    /// Everything that rounds -- the ceiled width, a cut-out that is not
-    /// perfectly centred -- is absorbed by the leading wing, which is padding
-    /// and can take it, rather than by the edge that has to meet the hardware.
-    ///
-    /// **With nothing to draw out there the wing is nothing**: the body's
-    /// right edge lands exactly on the reported one, whether or not the
-    /// leading wing is drawing marks.
-    ///
-    /// It used to step a little past it -- `panelHeight / 16`, `3` pt under a
-    /// `38` pt cut-out -- on the argument that `auxiliaryTopRightArea`
-    /// describes the cut-out as a rectangle while the hardware flares outward
-    /// where the glass meets the top of the display, leaving an edge on the
-    /// reported value with the top of its shoulder fillet drawn behind that
-    /// flare. **That reasoning was about the top of the shoulder and the step
-    /// moved the whole edge.** The flare is a few points tall at the very top
-    /// of the screen; the rest of the stepped-out edge -- most of the height,
-    /// the lower corner included -- is nowhere near it, and shows as a sliver
-    /// of black protruding past the notch onto the wallpaper. A hairline
-    /// clipped at the top under an optional outline is the smaller cost than a
-    /// visible nub beside the hardware, so the step is gone and the trailing
-    /// edge is the reported edge.
-    ///
-    /// **A whole number of points, and that is what holds the leading edge
-    /// still.** The panel is pinned by its trailing edge, so its leading one is
-    /// `trailingAnchor − bodyWidth` — and the body width is ceiled while the
-    /// anchor was not, so the two rounded apart and the leading edge drifted by
-    /// a fraction of a point every time this wing changed. Ceiled here, the
-    /// wing enters both sums as the same integer: `ceil(leading + occlusion +
-    /// wing)` is `ceil(leading + occlusion) + wing`, the wing cancels, and the
-    /// leading edge is a constant that no trailing reading can reach. It is
-    /// what lets `theLeadingMatrixNeverMovesWhateverTheCountsDo` assert an
-    /// exact edge across a timer arriving, rather than "within a point".
-    ///
-    /// It no longer answers to whether the surface is drawing marks, or to the
-    /// panel's height: an empty trailing reading is an empty wing on every
-    /// form, so the resting cut-out and a notch with a leading wing put their
-    /// right edge in the same place.
+    /// How far the compact body reaches past the cut-out's trailing edge. The panel is pinned to
+    /// that edge, so rounding goes to the leading wing. With nothing to draw it is exactly `0` —
+    /// no outward step for the glass flare, which showed as a black nub beside the hardware. Whole
+    /// points, so it cancels from `ceil(leading + occlusion + wing)` and the leading edge never
+    /// moves (`theLeadingMatrixNeverMovesWhateverTheCountsDo`).
     static func compactTrailingWingWidth(
         trailing: CompactTrailingReading
     ) -> CGFloat {
@@ -1504,23 +711,11 @@ enum PanelMetrics {
         return ceil(content + expandedNotchClearance)
     }
 
-    /// Leading wing on a notched display: padding, the marks, and the clearance.
-    ///
-    /// Zero marks draws nothing at all. A notched display at rest hides the
-    /// whole wing rather than parking a grey mark beside the cut-out — the
-    /// cut-out is already a shape on the screen, and a second one next to it
-    /// carries no information. A no-notch display keeps its mark instead,
-    /// because a control that vanishes from the menu bar takes its position
-    /// with it and everything to its left slides over.
-    ///
-    /// **It is a switch and not a count.** There is one mark for every product
-    /// at once, so the wing is either drawn or it is not: with `Hide the wings`
-    /// on it stays behind the cut-out until something is waiting on a person,
-    /// and comes out whole (`compact-view-v2.md` §9). What it costs is no
-    /// longer a count of products either — it is the mark, and the numerals
-    /// beside it if the list has any rows.
-    ///
-    /// `47.2` at one session digit, `53.8` at two, `36.6` with no rows at all.
+    /// Leading wing on a notched display: padding, the mark, the counts, the clearance. No mark
+    /// draws nothing — at rest a notched display hides the wing; a no-notch display keeps its mark
+    /// so the menu bar doesn't shift. With `Hide the wings` it comes out whole only when something
+    /// waits on a person (`compact-view-v2.md` §9). `47.2` at one digit, `53.8` at two, `36.6`
+    /// with no rows.
     private static func notchedLeadingWidth(
         drawsMark: Bool,
         sessionCount: Int
@@ -1531,35 +726,16 @@ enum PanelMetrics {
             + expandedNotchClearance
     }
 
-    /// The contour's upper fillet — and, because of the shape it draws, the
-    /// width of the shoulder it needs on each side of the panel.
-    ///
-    /// `PanelContour` spans its rect only along the very top edge and then
-    /// curves inward: its straight sides sit one shoulder in. So every width in
-    /// this type describes the **body** — the black surface, the thing that has
-    /// to line up with the cut-out — and the window is one shoulder wider on
-    /// each side to leave them somewhere to be drawn. Sizing the window to the
-    /// body instead was the bug: the compact panel's right edge landed a
-    /// shoulder inside the cut-out, and its bottom-right corner curve took
-    /// another radius off that, which read as a bite out of the notch.
-    ///
-    /// Both radii are shares of the panel's own height rather than constants,
-    /// because that is how the hardware behaves. The cut-out is a fixed shape
-    /// in millimetres and it shrinks in points as the display scaling coarsens
-    /// — `220 × 38` at *More Space* down to `127 × 22` at *Larger Text*. A
-    /// pinned radius is therefore right at one scaling and too round at every
-    /// other one, which is what a fixed `10` was doing on notched displays.
-    ///
-    /// `panelHeight` is ``DisplayOption/panelBandHeight``, which **is** the
-    /// cut-out's height on a notched display, so on the screens these radii
-    /// have to agree with they are shares of the very shape they trace.
+    /// The contour's upper fillet, and the shoulder the window needs each side: `PanelContour`
+    /// curves inward from the top edge, so widths here describe the body and the window is one
+    /// shoulder wider per side (sizing it to the body bit into the notch). Radii are shares of
+    /// ``DisplayOption/panelBandHeight`` because the cut-out shrinks in points with scaling
+    /// (`220 × 38` to `127 × 22`).
     static func surfaceShoulderRadius(panelHeight: CGFloat) -> CGFloat {
         max(0, panelHeight) * notchUpperRadiusRatio
     }
 
-    /// The contour's lower corners, which are the ones the eye compares with
-    /// the cut-out: the notch's own bottom corners sit under the panel, so this
-    /// curve is the only place the shape is checkable against the hardware.
+    /// The lower corners: the only part of the shape checkable against the hardware.
     static func surfaceBottomCornerRadius(panelHeight: CGFloat) -> CGFloat {
         max(0, panelHeight) * notchLowerRadiusRatio
     }
@@ -1573,15 +749,10 @@ enum PanelMetrics {
         compactHeight: CGFloat,
         status: MonitorStatus = .connected,
         matrixCount: Int = 1,
-        // Rows on the monitored list. The collapsed leading wing is billed for
-        // the numerals that counts them (`countsColumnWidth(sessionCount:)`),
-        // and for nothing per product: one mark stands for every product at
-        // once, so nothing on this form answers to how many are installed.
+        // Billed for the numerals, not per product: one mark stands for every product.
         sessionCount: Int = 0,
-        // Whether the *collapsed notched* bar draws its mark at all. False in
-        // exactly two states: a notched display resting with nothing connected,
-        // and one that has given up its wings while nothing is waiting on a
-        // person (`MonitorStore.drawsCompactMarks`).
+        // False only when resting with nothing connected, or with wings given up while nothing waits
+        // on a person (`MonitorStore.drawsCompactMarks`).
         drawsMark: Bool = true,
         expandsToPillOnly: Bool = false,
         expandedContentHeight: CGFloat = expandedContentHeight
@@ -1606,18 +777,13 @@ enum PanelMetrics {
         switch geometry {
         case .notched:
             guard centerOcclusionWidth >= 1 else {
-                // Notched display with no measurable cut-out: nothing to wrap
-                // around, so lay it out as an emulated notch instead.
+                // No measurable cut-out: lay out as an emulated notch.
                 return CGSize(
                     width: fixedCompactWidth(for: status),
                     height: compactHeight
                 )
             }
-            // A notched panel wraps the cut-out, so its width is one fixed
-            // obstacle with a wing on each side -- and each wing is exactly as
-            // wide as what it is drawing. Nothing on this form is reserved:
-            // both edges answer to their own wing's contents and to nothing
-            // else.
+            // The cut-out plus a wing each side, each exactly as wide as its contents; nothing reserved.
             let width = notchedLeadingWidth(
                 drawsMark: drawsMark,
                 sessionCount: sessionCount
@@ -1633,69 +799,25 @@ enum PanelMetrics {
         }
     }
 
-    /// What the collapsed reading draws at, ground and all.
-    ///
-    /// **One expression, because neither form holds a slot for it any more.**
-    /// The notched bar hugs its reading (``drawnTrailingReadingWidth(_:)``) and
-    /// so, now, does the notch-less pill
-    /// (``fixedCompactWidth(for:matrixCount:trailing:)``), so this is what both
-    /// are composed from and what the first-run drawing puts its pin under. The
-    /// `00:00:00` template that used to stand beside it — `timerReservationWidth`,
-    /// the Medium slot plus the ground, `65.91` — was the pill's alone and left
-    /// with the reservation it existed for.
-    ///
-    /// **Ceiled, because the raster is.** `NotchTextRaster.textSize` rounds the
-    /// glyph box up before drawing into it, so a composed width taking the bare
-    /// metric is a fraction short of the ink — invisible while a reservation
-    /// covered it, and the last digit against the panel edge once the wing
-    /// hugs. The ground's own cost is already whole.
+    /// The collapsed reading's width, ground included, used by both forms and the first-run pin.
+    /// Ceiled because `NotchTextRaster.textSize` rounds the glyph box up; a bare metric clips the
+    /// last digit.
     static func drawnCompactReadingWidth(_ text: String) -> CGFloat {
         ceil(textWidth(text, font: timerFont)) + readingGroundWidthCost
     }
 
-    /// Between two product matrices, when both are drawn.
-    ///
-    /// The expanded header alone: the collapsed forms draw one mark for every
-    /// product at once and have no pair to space.
+    /// Expanded header only; the collapsed forms draw one mark for every product.
     static let compactMatrixSpacing: CGFloat = 6
 
-    /// The notch-less pill: **one width in every connected state**.
-    ///
-    /// `230` whatever is running, whatever is waiting, however many rows are
-    /// open and however long the reading is.
-    ///
-    /// **The two forms are inverses, and this is the half that cannot move its
-    /// ends.** The notched bar has a fixed middle and moving ends: it is pinned
-    /// to the cut-out, so a wing growing pushes an edge that nothing is
-    /// measured from. The pill is centred on the display and pinned to nothing,
-    /// so every point either end took would be taken from *both* edges at once
-    /// and its whole contents would travel with them. So its ends are anchored
-    /// — the leading group at `33.8`, the trailing reading at `12` from the
-    /// trailing edge — and the middle gives way instead
-    /// (``pillMiddleWidth(trailing:)``).
-    ///
-    /// **The reservation comes back, and this time the room is not empty.**
-    /// `figma-design.md` §6.4 removed it on a finding that was correct when
-    /// made — a reservation protects a neighbour, and nothing in the menu bar
-    /// is laid out from this window — but both halves of that argument turned
-    /// on the room standing empty. It now holds the only thing on this surface
-    /// a person reads as a word, and what it protects is the pill's own
-    /// contents: the mark, the counts and the reading stand in one place in
-    /// every state, and the only thing that changes anywhere is how much of a
-    /// name fits (`compact-view-v2.md` §6.1).
-    ///
-    /// `Disconnected` is the one state still sized to itself. Nothing can
-    /// follow it and there is no product behind it, so neither `8` of clearance
-    /// applies — each exists only where content stands on both sides of it.
+    /// The notch-less pill: `230` in every connected state. Centred and pinned to nothing, so its
+    /// ends are anchored (leading group `33.8`, reading `12` from the trailing edge) and the middle
+    /// gives way (``pillMiddleWidth(trailing:)``); only how much of a name fits changes
+    /// (`compact-view-v2.md` §6.1). `Disconnected` is sized to itself: no clearance applies.
     static func fixedCompactWidth(for status: MonitorStatus) -> CGFloat {
         status == .disconnected ? disconnectedPillWidth : pillBodyWidth
     }
 
-    /// `230`, the width above.
-    ///
-    /// Stated rather than composed, because it is the *sum* that is the
-    /// contract here and the middle is what absorbs everything else. See
-    /// ``pillMiddleWidth(trailing:)``.
+    /// Stated, not composed: the sum is the contract and the middle absorbs the rest.
     static let pillBodyWidth: CGFloat = 230
 
     /// `41` — the mark, and a margin either side of it.
@@ -1703,13 +825,8 @@ enum PanelMetrics {
         ceil(expandedHorizontalPadding + statusMatrixSize + expandedHorizontalPadding)
     }
 
-    /// The middle, which is a subtraction and nothing else.
-    ///
-    /// No cap, no reservation, no constant of its own: it is whatever `250`
-    /// has left once the two anchored ends and their clearances are taken out,
-    /// so a reading gaining a digit narrows the name by exactly that digit and
-    /// moves nothing else on the surface. `176.2` with nothing being timed,
-    /// `140.2` at `1:23`, `112.2` at `10:00:00`.
+    /// Whatever ``pillBodyWidth`` leaves after the anchored ends and clearances, so a reading
+    /// gaining a digit narrows the name by exactly that digit.
     static func pillMiddleWidth(trailing: CompactTrailingReading) -> CGFloat {
         max(
             0,
@@ -1725,14 +842,8 @@ enum PanelMetrics {
 
 
 
-    /// What either surface can say while an agent is connected.
-    ///
-    /// Both read the same aggregate (`MonitorStore.status`), so this is the
-    /// collapsed pill's vocabulary and the expanded header's alike — the pill
-    /// draws the short name and the header the long one. `Disconnected` is out
-    /// of both: with nothing connected the collapsed form is the resting pill
-    /// and the expanded form is that same pill widened
-    /// (``MonitorStore/expandsToPillOnly``), and neither is sized from here.
+    /// Statuses either surface draws while connected (pill short name, header long name).
+    /// `Disconnected` is excluded: that form is the resting pill (``MonitorStore/expandsToPillOnly``).
     static let workingStatuses = MonitorStatus.collapsedReachable
         .subtracting([.disconnected])
 
@@ -1740,30 +851,18 @@ enum PanelMetrics {
         compactHeight + expandedContentHeight
     }
 
-    /// What the live list asks for, before its own viewport caps it.
-    ///
-    /// **With nothing live the list draws its own apology**, `48` in place of
-    /// the rows: what has left is not what is running, and the one line that
-    /// says nothing is running has to be sayable on its own — the Recent queue
-    /// is a section of its own now and no longer what an empty live list falls
-    /// back on.
+    /// What the live list asks for before its viewport caps it. With nothing live it draws its own
+    /// `48` empty line; the Recent queue is a separate section, not a fallback.
     static func sessionListContentHeight(
         liveRowCount: Int,
         openRowHeight: CGFloat? = nil,
         groupHeaderCount: Int = 0
     ) -> CGFloat {
-        // One of the live rows may be open, and an open row is taller than the
-        // closed height every row is billed at above. It is added as a
-        // difference rather than counted separately so that a row opening
-        // cannot also change how many rows there are.
+        // An open row is added as a difference so opening cannot change the row count.
         let opened = liveRowCount > 0 && openRowHeight != nil
             ? (openRowHeight ?? sessionRowHeight) - sessionRowHeight
             : 0
-        // The headers are counted here and again in the cap below, which is
-        // what "a header is chrome" means arithmetically: the list asks for
-        // more room and is given exactly that much more, so the number of rows
-        // on screen does not move. With nothing live there is no block to head
-        // and the apology stands alone.
+        // Headers are counted here and in the cap, so they never cost rows on screen.
         return liveRowCount > 0
             ? sessionRowHeight * CGFloat(liveRowCount)
                 + opened
@@ -1786,15 +885,8 @@ enum PanelMetrics {
         )
         let cap: CGFloat
         if groupHeaderCount > 0 {
-            // **A heading is never paid for out of rows, and it is not paid
-            // for per product any more either.** Grouped, every heading is on
-            // screen at every offset — in the flow, on the top strip or on
-            // the foot line — and the chrome is one badge line at each edge
-            // whatever the list holds (`expanded-panel-v2.md` §4.6). So the
-            // cap is a trail, four rows and a trail; it used to be three rows
-            // plus a whole bar per block. An open row un-pins both trails,
-            // and the viewport grows to fit that row under its own heading
-            // rather than leaving a rail offering `16` of travel.
+            // Grouped, the cap is a trail, four rows and a trail (`expanded-panel-v2.md` §4.6). An open
+            // row un-pins both trails and the viewport grows to fit it under its heading.
             cap = max(
                 groupedSessionViewportCap,
                 (openRowHeight ?? 0) + leadingProductGroupHeaderHeight
@@ -1805,16 +897,12 @@ enum PanelMetrics {
         return min(content, cap)
     }
 
-    /// What the Recent queue's own list asks for, before its viewport caps it.
-    /// Nothing while there are no retired rows — a seam is drawn only once
-    /// there is something behind it.
+    /// Nothing with no retired rows; a seam is drawn only with something behind it.
     static func recentContentHeight(retiredRowCount: Int) -> CGFloat {
         retiredRowHeight * CGFloat(max(retiredRowCount, 0))
     }
 
-    /// That content, capped at what the Recent viewport draws: past five
-    /// retired rows, the queue scrolls on its own rather than growing the
-    /// panel further.
+    /// Past five retired rows the queue scrolls rather than growing the panel.
     static func recentViewportHeight(retiredRowCount: Int) -> CGFloat {
         min(recentContentHeight(retiredRowCount: retiredRowCount), recentViewportCap)
     }
@@ -1833,24 +921,10 @@ enum PanelMetrics {
 
     // MARK: - The open row
 
-    /// An approval's or a plan's body: **what the four-row viewport has left
-    /// once the row's fixed parts have taken theirs**, which is `196` now, was
-    /// `124` while the viewport was three rows, and `140` before a row's air
-    /// came down.
-    ///
-    /// It has always been that subtraction rather than a chosen number —
-    /// `answer-in-notch.md` §4.1 writes it as one — and it is what makes the
-    /// tallest approval exactly the viewport it stands in, so opening one does
-    /// not resize the panel. A row's air coming down
-    /// (``sessionRowVerticalPadding``) takes `24` off the viewport and gives
-    /// `8` back to the row, so the body loses the `16` between them. Written as
-    /// the literal it would have kept, the identity would simply have become
-    /// false: a maximal approval would stand `16` taller than the viewport and
-    /// the panel would grow by that much at the moment somebody opened one.
-    ///
-    /// Questions with options are the exception and use
-    /// ``questionBodyMaximumHeight`` for readable descriptions; the live
-    /// viewport grows to fit that row, deliberately (§4.1).
+    /// An approval's or a plan's body: what the viewport leaves after the row's fixed parts
+    /// (`196`), a subtraction per `answer-in-notch.md` §4.1, so the tallest approval is exactly
+    /// the viewport and opening one does not resize the panel. Questions with options use
+    /// ``questionBodyMaximumHeight`` and grow the viewport, deliberately (§4.1).
     static var requestBodyMaximumHeight: CGFloat {
         sessionViewportCap - openRowFixedHeight
     }
@@ -1864,73 +938,28 @@ enum PanelMetrics {
     static let optionSpacing: CGFloat = 6
     static let optionDisclosureHeight: CGFloat = 22
 
-    /// The row of answers at the foot of an open row.
-    ///
-    /// ~~The waiting mark's own `16` grown by ``PanelMotion``'s slot curve as
-    /// the ground travels down the row~~ — the mark is `28` too now, so the
-    /// ground travels without resizing at all. One object moving, which is why
-    /// this is the same ground rather than a second one (`answer-in-notch.md`
-    /// §3.1), and it is ``waitingMarkHeight`` that reads this rather than the
-    /// other way round: the answer row is the control's size on this surface,
-    /// and the mark is that control in its collapsed position.
+    /// The answers' row. ``waitingMarkHeight`` reads this: the mark is the same control in its
+    /// collapsed position, so it travels down the row without resizing (`answer-in-notch.md` §3.1).
     static let answerRowHeight: CGFloat = 28
 
-    /// The corner every control on this surface takes, and the horizontal
-    /// padding around the one word it holds.
-    ///
-    /// **One pair for the mark on a row and for the answers inside it**, which
-    /// is the same argument ``answerRowHeight`` makes about the height: the
-    /// ground the pointer presses on the caption line *is* the ground that
-    /// travels down to the answer row, so a mark and an answer cut to different
-    /// corners would be two objects rather than one moving. The padding was
-    /// already `12` in both places and the corner was not — `8` on the mark and
-    /// `4` on the answers, which read as a pill above a set of tiles.
-    ///
-    /// ~~The mark stays `4` taller than the answer it becomes
-    /// (``waitingMarkHeight``); that difference is deliberate and is the one
-    /// number here settled by how it feels under the pointer.~~
-    ///
-    /// **Superseded — the height went the same way, and so did the weight.**
-    /// The mark is ``answerRowHeight`` and ``waitingMarkFont`` is the answers'
-    /// Medium, so the four properties that make a control on this surface —
-    /// height, corner, padding, weight — are now one set with one exception:
-    /// the mark reserves ``waitingMarkWidth`` for its three verbs while an
-    /// answer hugs its own word, because a mark appears once per row and must
-    /// draw a straight column down a mixed queue.
+    /// Corner and padding shared by the waiting mark and the answers, which are one object moving.
+    /// Height, corner, padding and weight are one set; only the mark's width differs
+    /// (``waitingMarkWidth``), for a straight column down a mixed queue.
     static let controlCornerRadius: CGFloat = 4
     static let controlHorizontalPadding: CGFloat = 12
 
-    /// Everything an open row is besides its body.
-    ///
-    /// `8.5 + 16 + 2 + 17 + 2` above and `10 + 28 + 8.5` below — the caption,
-    /// the title and the answer row, none of which changes with the request.
-    ///
-    /// The two `8.5`s are the closed row's own air
-    /// (``sessionRowVerticalPadding``), read from it rather than repeated:
-    /// opening a row must not move the caption and the title it already drew,
-    /// so an open row's inset is the closed row's inset by construction.
+    /// Everything an open row is besides its body: `8.5 + 16 + 2 + 17 + 2` above and
+    /// `10 + 28 + 8.5` below. The `8.5`s read ``sessionRowVerticalPadding`` so opening a row does
+    /// not move its caption and title.
     static let requestNavigationHeight: CGFloat = 24
     static let openRowFixedHeight: CGFloat = sessionRowVerticalPadding
         + sessionRowCaptionHeight
         + sessionRowLineSpacing + sessionRowTitleHeight + sessionRowLineSpacing
         + 10 + answerRowHeight + sessionRowVerticalPadding
 
-    /// The width an open row's body is *wrapped* at.
-    ///
-    /// `610 − 2 × 12`, which is also `598 − 2 × 6`: the row block inside the
-    /// list's own scroller, minus the row's own padding. It is a derived figure
-    /// and has been one since V1 — the panel does not move at any agent or
-    /// product count (`colour-v2.md` §3).
-    ///
-    /// **Less the rail's lane, unconditionally**, even though the rail is not
-    /// always there. An open row is what pushes the live list past its cap, so
-    /// the list's width would otherwise depend on a height measured at that
-    /// width — the row is only narrow because it is tall, and only tall because
-    /// it was measured wide. Wrapping at the narrower of the two settles it: the
-    /// lines are laid out once, and the row draws exactly those lines whether or
-    /// not the pass ended up with a rail. A list that does not scroll simply
-    /// leaves ``scrollRailLane`` of slack past the last glyph, which is `7`
-    /// points of empty ground nobody can see.
+    /// The width an open row's body wraps at: `610 − 2 × 12`, less ``scrollRailLane``
+    /// unconditionally. An open row is what makes the list scroll, so wrapping at the narrower
+    /// width avoids a height that depends on a width that depends on that height.
     static var requestBodyWidth: CGFloat {
         expandedBaselineWidth - expandedHorizontalPadding * 2 - scrollRailLane
     }
@@ -1947,21 +976,11 @@ enum PanelMetrics {
     static let machineTextHorizontalInset: CGFloat = 10
     static let machineTextVerticalInset: CGFloat = 8
     static let machineTextCornerRadius: CGFloat = 4
-    /// Between the question and the options under it.
-    ///
-    /// It was `4` while a `24` pt instruction line stood in this gap and did the
-    /// separating; with that line gone (`answer-in-notch.md` §5.1) `4` would
-    /// leave the question closer to the first card than the cards are to each
-    /// other, and read as the head of the list rather than the thing the list
-    /// answers. `12` is ``argumentSpacing`` — the same distance this panel
-    /// already puts between two objects — and still returns `16` pt of the `28`
-    /// the instruction occupied.
+    /// `12`, ``argumentSpacing``, so the question is not closer to the first option than the
+    /// options are to each other (`answer-in-notch.md` §5.1).
     static let optionListSpacing: CGFloat = 12
 
-    /// How tall one line of a body is, which is a fact about its setting.
-    ///
-    /// `17` for prose and `18` for machine text — the second being SF Mono's own
-    /// `12/18`, where the extra point is what keeps a wrapped command legible.
+    /// `17` for prose, `18` for machine text (SF Mono's `12/18`).
     static func requestLineHeight(for setting: AgentRequest.Setting) -> CGFloat {
         switch setting {
         case .prose: sessionRowTitleHeight
@@ -1969,21 +988,13 @@ enum PanelMetrics {
         }
     }
 
-    /// How tall an open row is, holding a body of this height.
-    ///
-    /// **Not `openRowHeight(requestLines:)`**, which `expanded-panel-v2.md` §10
-    /// still owes: that one counted lines, and §4.1 does not. The cap is the
-    /// viewport itself, so the tallest an open row can be is the whole of what
-    /// the list can show — and every height in §12 is this one arithmetic.
+    /// Capped by the viewport (§4.1), not by a line count; every height in §12 is this arithmetic.
     static func openRowHeight(bodyHeight: CGFloat) -> CGFloat {
         openRowFixedHeight + min(max(bodyHeight, 0), requestBodyMaximumHeight)
     }
 
-    /// The three sections stacked, none of them capping the others: the live
-    /// viewport (at most three rows), the Recent section (nothing, a seam, or
-    /// a seam and up to five rows of its own), and the footer (uncapped —
-    /// however tall the quota table needs to be). There is no longer a ceiling
-    /// over the sum of the three; each answers only to its own cap.
+    /// The live viewport, the Recent section and the footer stacked; each answers only to its own
+    /// cap, with no ceiling over the sum.
     static func expandedContentHeight(
         liveRowCount: Int,
         openRowHeight: CGFloat? = nil,
@@ -2004,34 +1015,11 @@ enum PanelMetrics {
             + footerHeight
     }
 
-    /// The expanded panel's width, which answers to a **count of working
-    /// agents** and to nothing that can be said in words.
-    ///
-    /// **The sentence is gone from both sides of this sum.** It used to reserve
-    /// the longest status name the aggregate could reach — `Approval needed`,
-    /// `102` at 13 pt Light — so a two-agent panel was `570` because of a
-    /// sentence while a one-agent panel was `520` because of a baseline: the
-    /// same object at two sizes depending on what happened to be open, changing
-    /// size the first time a second agent connected. The band draws no word now
-    /// (`expanded-header-v2.md` §3), and what is left on the leading side is
-    /// the collapsed bar's own group and one column of numbers per working
-    /// agent.
-    ///
-    /// **Doubled, because the panel is centred on the display** rather than
-    /// pinned to the cut-out (``MonitorStore/currentPanelTrailingAnchor`` is
-    /// nil while expanded), so the leading side can only be widened by widening
-    /// both. The trailing side wants a gear and no more, and never binds here.
-    ///
-    /// The branch is `610` at every cut-out this product meets, and now at
-    /// every agent count too: a side asks `53.8`, so the baseline is passed
-    /// only where the cut-out is wider than `610 − 107.6 = 502.4`, well past
-    /// the widest cut-out on any Mac. `expandedNotchClearance` therefore stays
-    /// as the guard that this band clears the hardware and stops being the
-    /// rule that decides a width.
-    ///
-    /// **It answers to nothing but the cut-out.** The working-agent count left
-    /// with the decomposition (`colour-v2.md` §3), which was the only term on
-    /// either side that read one — so the width series is one number.
+    /// The expanded panel's width: `610` at every cut-out a Mac has, and nothing else feeds it —
+    /// the band draws no status word (`expanded-header-v2.md` §3) and no per-agent columns
+    /// (`colour-v2.md` §3). Sides are doubled because the panel is centred while expanded
+    /// (``MonitorStore/currentPanelTrailingAnchor`` is nil). `expandedNotchClearance` guards that
+    /// the band clears the hardware, binding only past a `502.4` cut-out.
     static func expandedWidth(centerOcclusionWidth: CGFloat) -> CGFloat {
         guard centerOcclusionWidth >= 1 else {
             return expandedBaselineWidth
@@ -2081,25 +1069,15 @@ struct ConnectionStabilityGate {
         guard observedAt.timeIntervalSince(disconnectedSince) >= gracePeriod else {
             return false
         }
-        // Cleared as it publishes. Leaving it set kept ``nextPublishDeadline``
-        // reporting an instant already past until the *next* refresh observed
-        // the now-disconnected state and cleared it -- one wake-up spent
-        // rediscovering something this call already knew.
+        // Cleared as it publishes, or ``nextPublishDeadline`` reports a past instant and spends a
+        // wake-up.
         self.disconnectedSince = nil
         return true
     }
 
-    /// When a suppressed disconnect becomes publishable.
-    ///
-    /// Suppressing without arranging to be asked again is the same mistake as
-    /// dropping a refresh request: the grace period only bounds the wait if
-    /// something actually looks again when it expires. Nothing did -- the store
-    /// slept on the service's deadlines, which know nothing about this gate, so
-    /// a real disconnect could sit unpublished until the next unrelated wake-up
-    /// or the 60s heartbeat, rather than the 3s the latency budget documents.
-    ///
-    /// Always clearable: the refresh at this instant either publishes the
-    /// disconnect or observes a recovery, and both clear `disconnectedSince`.
+    /// When a suppressed disconnect becomes publishable, so the store wakes for it; otherwise a
+    /// disconnect waits for an unrelated wake-up or the 60s heartbeat instead of the 3s budget.
+    /// The refresh at this instant always clears `disconnectedSince`.
     var nextPublishDeadline: Date? {
         disconnectedSince?.addingTimeInterval(gracePeriod)
     }
@@ -2109,20 +1087,9 @@ struct ConnectionStabilityGate {
 final class MonitorStore: ObservableObject {
     static let shared = makeShared()
 
-    /// The store the product runs on, and nothing at all when this process is
-    /// only hosting the test bundle.
-    ///
-    /// **The empty branch is the point.** A unit-test bundle is injected into a
-    /// host application and this app is its own host, so `xcodebuild test`
-    /// launches the product beside the copy the developer is already running --
-    /// which then bound the same hook sockets and drew a second overlay in the
-    /// same notch (see ``AppProcess``). The services are `static let`s and
-    /// Swift builds those on first use, so a branch that never names them is a
-    /// branch in which no watcher is attached, no socket is bound, no
-    /// subprocess is started and no file of the user's is read.
-    ///
-    /// It costs the suite nothing: no test reaches for this store. Every one of
-    /// them builds a ``MonitorStore`` of its own, over paths under `/tmp`.
+    /// The store the product runs on, or an empty one when hosting tests: `xcodebuild test`
+    /// launches this app beside the running copy (see ``AppProcess``). The services are
+    /// `static let`s, so this branch binds no socket and reads no user file. No test uses it.
     private static func makeShared() -> MonitorStore {
         guard !AppProcess.isHostingTests else {
             return MonitorStore(
@@ -2131,11 +1098,8 @@ final class MonitorStore: ObservableObject {
                 preferences: .standard
             )
         }
-        // One module per registered product, and nothing here names one: a
-        // product contributes nothing until its hooks are registered (an
-        // unregistered product reports setupRequired, which loses to any
-        // product that is ready and to any product that has a row), so a user
-        // who runs one product sees exactly what they would with it alone.
+        // An unregistered product reports setupRequired, which loses to any ready product or any
+        // product with a row, so running one product looks like running it alone.
         let modules = ProductRegistry.builtIn.map { descriptor in
             (kind: descriptor.kind, module: descriptor.make())
         }
@@ -2146,8 +1110,7 @@ final class MonitorStore: ObservableObject {
             ),
             initialSnapshot: .connecting,
             preferences: .standard,
-            // Every provider's "ask me again" edges on one stream, so a late
-            // answer from any of them wakes the loop.
+            // Every provider's refresh edges on one stream, so a late answer from any wakes the loop.
             refreshEvents: DirectoryChangeWatcher.merged(
                 modules.map(\.module.service.stateChangeEvents)
             )
@@ -2157,100 +1120,55 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var displays: [DisplayOption]
     @Published private(set) var selectedDisplayID: String
     @Published private(set) var status: MonitorStatus
-    /// The products that are open *and* reachable, in display order.
-    ///
-    /// This is what the collapsed surface draws a matrix for, one each, and so
-    /// it is also what sets the pill's width. Published because a second
-    /// product connecting need not change the status — the first one may be
-    /// mid-turn throughout — and a width that changed without a publish would
-    /// leave the panel sized for the wrong number of marks.
+    /// The products open and reachable, in display order. Published because a second product
+    /// connecting may not change the status, and the pill's width depends on it.
     @Published private(set) var connectedAgents: [AgentKind] = []
-    /// What the collapsed surface draws, left to right — never empty.
-    ///
-    /// Published for the same reason `connectedAgents` is: a second product
-    /// opening, or one product's own turn starting, changes a mark without
-    /// necessarily changing the aggregate status.
+    /// What the collapsed surface draws, left to right; never empty. Published because a mark can
+    /// change without the aggregate status changing.
     @Published private(set) var presenceMarks: [PresenceMark] = [
         PresenceMark(agent: nil, status: .disconnected)
     ]
-    /// What each product's monitoring has left on disk, for the products that
-    /// leave anything. Shown in Settings; never acted on.
-    ///
-    /// Keyed only by the products that leave something: a product answering
-    /// ``AgentDiskFootprintReport/leavesNothing`` is absent, and everything
-    /// else — including a measurement still on its way — is present, because
-    /// the presence of the key is what decides whether Settings draws the row
-    /// and the row must not appear and disappear under the pointer (CC-020).
+    /// What each product's monitoring leaves on disk, shown in Settings, never acted on. A key
+    /// is absent only for ``AgentDiskFootprintReport/leavesNothing``, so a pending measurement
+    /// keeps its row from flickering (CC-020).
     @Published private(set) var diskFootprints: [AgentKind: AgentDiskFootprintReport] = [:]
     @Published private(set) var availability: MonitorAvailability
     @Published private(set) var quota: QuotaSnapshot
     @Published private(set) var sessions: [MonitoredSession] {
         didSet { updateElapsedTicking() }
     }
-    /// Advances once a second while a turn is timed; see `updateElapsedTicking`.
-    ///
-    /// Deliberately **not** `@Published`. Every publish on this store re-evaluates
-    /// the whole overlay — the `GeometryReader`, the custom panel `Shape` and both
-    /// AppKit representables — which profiles at roughly 20ms, so a readout
-    /// gaining a second used to cost about 4% of a core for as long as a turn ran
-    /// or waited on the user. The readouts subscribe to this and redraw their own
-    /// layer; nothing in the SwiftUI graph observes it.
+    /// Advances once a second while a turn is timed; see `updateElapsedTicking`. Not `@Published`:
+    /// a store publish re-evaluates the whole overlay (~20ms, ~4% of a core per second); readouts
+    /// subscribe and redraw their own layer.
     let elapsedTick: CurrentValueSubject<Date, Never>
 
-    /// Bumped when a readout's *reserved width* changes, which is the only thing
-    /// SwiftUI actually has to re-measure for.
-    ///
-    /// The readouts use tabular figures, so width follows the digit count: this
-    /// moves when a turn crosses a minute or hour boundary, not every second.
+    /// Bumped only when a readout's reserved width changes (tabular figures: a minute or hour
+    /// boundary), which is all SwiftUI has to re-measure for.
     @Published private(set) var elapsedLayoutRevision = 0
     private var elapsedLayoutSignature: [Int] = []
 
-    /// The instant the readouts are currently showing.
     var timerNow: Date { elapsedTick.value }
-    /// How far along each product's registration is.
-    ///
-    /// Published because the settings rows read it, and written only when it
-    /// actually changes -- one publish here re-evaluates the whole overlay
-    /// (`AGENTS.md` §7), and a refresh re-states the same status every second.
+    /// Written only on change: a publish re-evaluates the whole overlay (`AGENTS.md` §7), and a
+    /// refresh re-states the status every second.
     @Published private(set) var setupStatusByAgent: [AgentKind: IntegrationSetupStatus] = [:]
-    /// Where each product's switch is sitting.
-    ///
-    /// Held apart from ``setupStatusByAgent`` because the two disagree for as
-    /// long as a convergence is in flight: the switch shows where the user put
-    /// it, the status shows what the file says.
+    /// Held apart from ``setupStatusByAgent``: while a convergence is in flight the switch shows
+    /// what the user chose and the status what the file says.
     @Published private(set) var integrationSwitchIsOnByAgent: [AgentKind: Bool] = [:]
-    /// The products whose hooks are being written or removed right now.
     @Published private(set) var integrationBusyAgents: Set<AgentKind> = []
     @Published var isExpanded = false {
         didSet {
-            // **Opening the panel is a read of the queue**, and eviction is a
-            // read-time filter rather than a timer (§2.4 rule 11): a queue
-            // nobody watched for six hours is empty by the time it could be
-            // drawn, with no background work having run while the panel was
-            // shut.
+            // Opening the panel reads the queue; eviction is a read-time filter, not a timer (§2.4 rule
+            // 11).
             guard isExpanded != oldValue else { return }
-            // **A peek cannot outlive the panel it was lifting.** The control
-            // is held down, so the release is what normally ends it — and a
-            // release that lands after the panel has gone (the pointer left
-            // while the button was down, the menu bar was concealed, a
-            // navigation closed it) would otherwise leave the covers up for
-            // the next time it opens.
+            // A peek cannot outlive the panel: its release may land after the panel closed.
             if !isExpanded { isPeeking = false }
             if isExpanded { refreshRecentDepartures(at: clock.now()) }
             updateRecentTicking()
         }
     }
-    /// Whether somebody has opened what the list has let go of.
-    ///
-    /// **Named for the open state rather than the folded one**, which is the
-    /// spelling ``isQuotaExpanded`` arrived at for the same reason: folded is
-    /// what this *is*, and opening it is the thing somebody asks for. The
-    /// design calls the setting `recentFolded` (`expanded-panel-v2.md` §2.4
-    /// rule 07); the default it names — folded — is what this stores, inverted.
-    ///
-    /// Remembered across openings, and **folding it never closes the panel**:
-    /// the footer stands between this control and the bottom edge, so that edge
-    /// cannot travel past a still pointer.
+    /// Whether the Recent queue is opened; the design's `recentFolded` (`expanded-panel-v2.md`
+    /// §2.4 rule 07), inverted. Remembered; folding never closes the panel, since the footer keeps
+    /// the bottom edge from passing a still pointer.
     @Published var isRecentExpanded: Bool {
         didSet {
             preferences?.set(
@@ -2258,76 +1176,31 @@ final class MonitorStore: ObservableObject {
                 forKey: Self.recentExpandedDefaultsKey
             )
             guard isRecentExpanded != oldValue else { return }
-            // The fold decides *which* instants matter, so a wake-up parked
-            // before it moved is parked on the wrong one — see
-            // ``nextRecentReadingChange(at:)``. Cancelled rather than left to
-            // fire, because the tick is otherwise free to be wrong all the way
-            // to the next boundary. The refresh re-plans it, and also reads the
-            // ages, which are not kept up to date while nothing draws them.
+            // The fold changes which instants matter (``nextRecentReadingChange(at:)``), so cancel the
+            // parked wake-up; the refresh re-plans it and reads the ages, which are stale while hidden.
             recentTickTask?.cancel()
             recentTickTask = nil
             refreshRecentDepartures(at: clock.now())
         }
     }
-    /// What the queue holds right now, most recently departed first.
-    ///
-    /// A projection of ``departuresByThread`` past ``recentWindow``, republished
-    /// wherever that can have changed. It is a stored value rather than a
-    /// computed one because SwiftUI has to be told: a computed property reading
-    /// the clock would go stale on screen with nothing to invalidate it.
+    /// The queue now, most recently departed first: ``departuresByThread`` past ``recentWindow``.
+    /// Stored and republished, because a computed clock read would go stale on screen.
     @Published private(set) var recentDepartures: [RecentDeparture] = []
-    /// The instant the queue's ages are drawn against.
-    ///
-    /// **Not ``timerNow``**, which advances only while a Turn is being timed —
-    /// on a panel with nothing running it is frozen at whatever the last turn
-    /// left, and every age below the rule would be drawn against it. This moves
-    /// whenever the queue is republished, which includes the panel being
-    /// opened, so the ages are right at the moment somebody looks at them.
-    ///
-    /// It is published **only when a reading would actually move**, for the
-    /// reason ``publishTick`` compares widths: one publish on this store
-    /// re-evaluates the whole overlay (`AGENTS.md` §7), and the clock advances
-    /// on every refresh whether or not anything down here changes because of
-    /// it.
+    /// The instant the queue's ages are drawn against. Not ``timerNow``, which freezes when no
+    /// Turn is timed. Published only when a reading would move: a publish re-evaluates the whole
+    /// overlay (`AGENTS.md` §7).
     @Published private(set) var recentReadAt: Date
-    /// Whether somebody has opened the quota table.
-    ///
-    /// **A rename rather than a flipped boolean**, and the change is meant to
-    /// be visible in review: it was `isQuotaFolded`, defaulting to `false`,
-    /// because the footer *was* four quota rules and folding was the escape
-    /// from them. Since `quota-footer-v2.md` §8.1 the small form is what the
-    /// footer **is** — one number and a control, `22` at every product count,
-    /// every window count and every share — and the table is a thing somebody
-    /// asks for. So the default inverts with the name.
-    ///
-    /// One state for the whole footer, not one per product: the two share a
-    /// footer, and opening one product's windows while the other's stayed shut
-    /// would be a shape nothing describes. Remembered across openings, so a
-    /// user who wants the table does not re-open it every time.
+    /// Whether the quota table is opened; closed by default (`quota-footer-v2.md` §8.1). One state
+    /// for the whole footer, remembered across openings.
     @Published var isQuotaExpanded: Bool {
         didSet {
             preferences?.set(isQuotaExpanded, forKey: Self.quotaExpandedDefaultsKey)
         }
     }
-    /// The products the user has taken out of the quota table.
-    ///
-    /// **What is left out is stored, not what is kept**, so a product this app
-    /// learns to watch in a later build arrives in the table the way every
-    /// product did before this choice existed. A stored list of kept products
-    /// would hide it from everybody who ever opened the switches, including
-    /// the people who opened them and changed nothing — and a product that is
-    /// never drawn is a product nobody knows they could have drawn.
-    ///
-    /// **The table only.** Today's total at rest counts every connected
-    /// product whatever is chosen here: it is the one figure the footer always
-    /// draws, and a total that changed with a display preference would be a
-    /// different number wearing the same words (`quota-footer-v2.md` §13).
-    /// With every connected product left out there is nothing behind the
-    /// control, so the control goes and the line is the total alone
-    /// (``showsQuotaFoldControl``).
-    ///
-    /// Empty on a fresh install, and remembered across launches. A raw value
-    /// this build does not know is dropped on read rather than kept.
+    /// Products left out of the quota table. Stores what is excluded, so a product added in a
+    /// later build appears. Table only: today's total always counts every connected product
+    /// (`quota-footer-v2.md` §13); with all excluded the control goes (``showsQuotaFoldControl``).
+    /// Empty on a fresh install; unknown raw values are dropped on read.
     @Published var productsHiddenFromQuotaTable: Set<AgentKind> {
         didSet {
             guard productsHiddenFromQuotaTable != oldValue else { return }
@@ -2337,122 +1210,38 @@ final class MonitorStore: ObservableObject {
             )
         }
     }
-    /// Whether the open panel is showing the app rather than the work.
-    ///
-    /// **It outlives a collapse and it is not remembered across launches**,
-    /// and those are two different decisions.
-    ///
-    /// Surviving the collapse is what makes the mark a *mode* rather than a
-    /// peek: the panel opens on hover and shuts the moment the pointer leaves,
-    /// so a flag cleared on collapse would put the About panel out of reach of
-    /// anybody who read it, moved the pointer to think, and came back. Only
-    /// the mark that opened it closes it.
-    ///
-    /// Not persisted, because the thing it shows is read once. A user who
-    /// checked the version last week and quit does not want the app naming
-    /// itself instead of listing their sessions at the next launch — unlike
-    /// ``isQuotaExpanded``, which is a standing preference about a surface
-    /// somebody watches.
+    /// Whether the open panel shows About. Survives collapse (hover closes the panel, so only the
+    /// mark closes it), but is not persisted across launches.
     @Published private(set) var isShowingAbout = false
-    /// Whether the surface is covering every word it draws
-    /// (`cover-the-words.md`).
-    ///
-    /// **`Privacy Mode` in Settings, covering everywhere else.** The name in
-    /// the window is the one the user asked for; what the surface does is
-    /// cover, and the two words are kept apart on purpose so a comment about
-    /// drawing never has to be read as a claim about data.
-    ///
-    /// **It is not a privacy promise, and it does not reinstate the one
-    /// [`PRD.md`](doc:) §7 deleted.** That contract was about where message
-    /// text lives — process memory, disk, which socket it arrived on — and it
-    /// is void on its own terms. This is about what is *drawn on a screen
-    /// somebody else is looking at*. Nothing here constrains where text goes,
-    /// and no clause here may be cited to veto an engineering decision about
-    /// storage or transport.
-    ///
-    /// On, every name, title and line is drawn as a bar and the pill's middle
-    /// draws nothing at all; the mark, the counts, the clock, the badges and
-    /// the footer are untouched. It also stops the panel expanding on hover
-    /// (``pointerEnteredPanel()``), which is the half of it that answers the
-    /// case it exists for: the leak is a `0.15` s dwell nobody intended.
-    ///
-    /// **Remembered across launches**, and off on a fresh install. A cover
-    /// that quietly lapses is a leak; a cover somebody forgot is an annoyance,
-    /// and the first pointer pass over a covered notch does nothing, which is
-    /// noticed in seconds.
+    /// Whether every word is covered (`cover-the-words.md`); `Privacy Mode` in Settings. About
+    /// what is drawn on screen, not where text is stored — never cite it against storage or
+    /// transport decisions (`PRD.md` §7). Covers names, titles and lines; the mark, counts,
+    /// clock, badges and footer stay. Also stops hover-expansion (``pointerEnteredPanel()``):
+    /// the leak is a `0.15` s dwell. Remembered; off on a fresh install.
     @Published var privacyMode: Bool {
         didSet {
             guard privacyMode != oldValue else { return }
             preferences?.set(privacyMode, forKey: Self.privacyModeDefaultsKey)
-            // Nothing is covered any more, so nothing is being held up.
             if !privacyMode { isPeeking = false }
-            // **The hover the tracking area will not repeat.** The gesture is
-            // a press *on the component*, so the pointer is on it when the
-            // mode goes off -- and `.onHover` is an `NSTrackingArea`, which
-            // speaks only when the pointer moves. The entry that would have
-            // opened this panel was delivered while the mode was still on and
-            // declined by ``pointerEnteredPanel()``; nothing will deliver
-            // another until the pointer leaves and comes back. So the entry is
-            // offered again here, on the store's own knowledge of where the
-            // pointer is, and it goes through the ordinary dwell rather than
-            // opening flat -- one path opens this panel on hover, and this is
-            // that path being told the answer has changed.
+            // `.onHover` only speaks when the pointer moves, and the entry was declined while the mode was
+            // on, so offer it again through the ordinary dwell.
             guard !privacyMode, isPointerOnPanel, !isExpanded else { return }
             pointerEnteredPanel()
         }
     }
-    /// Whether the covers are lifted for as long as somebody is holding them
-    /// up (`cover-the-words.md` §7).
-    ///
-    /// **A momentary state, not a second mode**, which is the whole reason it
-    /// can exist at all: ``privacyMode`` is what somebody turns on before a
-    /// call and forgets, and a second switch that also hid the words would be
-    /// a second thing to forget. This one is true only while a control is held
-    /// down, and it is cleared by the panel closing (``isExpanded``) and by the
-    /// mode ending, so there is no way to leave it on.
-    ///
-    /// `@Published` because it is drawn: every covered run on the panel reads
-    /// it through ``coversWords(of:)``. That is two overlay renders per peek,
-    /// both of them things a person just did with the pointer.
+    /// Whether the covers are lifted while a control is held down (`cover-the-words.md` §7). A
+    /// momentary state, cleared by the panel closing and the mode ending, so it cannot be left on.
     @Published private(set) var isPeeking = false
-    /// Where the pointer is, as the tracking area last reported it.
-    ///
-    /// **Not `@Published`.** Nothing is drawn from it — it exists so that a
-    /// preference changing under a stationary pointer can ask a question the
-    /// tracking area cannot be asked (`AGENTS.md` §7: the overlay re-renders on
-    /// layout, and a pointer crossing the notch is not a layout change).
+    /// Not `@Published`: nothing draws it. It lets a preference change under a still pointer ask
+    /// what the tracking area cannot (`AGENTS.md` §7).
     private(set) var isPointerOnPanel = false
-    /// Whether the collapsed surface gives up its wings and leaves the cut-out
-    /// to speak for itself.
+    /// Whether the collapsed surface gives up its wings and leaves the cut-out alone
+    /// (the same form as ``drawsCompactMarks`` with nothing connected).
     ///
-    /// The resting form is not a new one: it is exactly what a notched display
-    /// already draws while nothing is connected (``drawsCompactMarks``), asked
-    /// for on purpose rather than arrived at. The cut-out is a shape the
-    /// hardware puts on the screen whatever this app does, and this is the
-    /// preference for people who want that shape and nothing beside it while
-    /// nothing is being asked of them.
-    ///
-    /// **It is quiet, not blind.** A wing that never came back would make this
-    /// a preference for turning the product off: the notch is the only thing
-    /// this app has to say anything with, and a Turn stopped on an approval is
-    /// exactly what it exists to say. So the leading wing comes out for a
-    /// product holding a Turn to attend to and goes back when that Turn is
-    /// dealt with (``compactDrawnMarks``), one matrix per product and neither
-    /// while both are merely working. **The trailing wing never comes out at
-    /// all**: the badges and the elapsed reading say how much and how long, not
-    /// that anything is wanted, and the whole point of this preference is that
-    /// a running turn is nobody's business but the agent's.
-    ///
-    /// **Collapsed only, and deliberately.** Hover still opens the panel, and
-    /// the panel still carries the marks, the rows and the gear. The cut-out is
-    /// the only entrance this product has -- an app with no menu bar item and
-    /// no Dock icon (`PRD.md` §11) -- so a preference that closed it would be a
-    /// preference for uninstalling.
-    ///
-    /// Remembered across launches, and kept even while the selected display
-    /// cannot honour it: it is a fact about what the user wants, not about
-    /// which screen happens to be plugged in this morning. See
-    /// ``canHideCompactWings``.
+    /// The leading wing still comes out for a product holding a Turn to attend to
+    /// (``compactDrawnMarks``); the trailing wing never does. Collapsed only: hover still
+    /// opens the panel, the only entrance (`PRD.md` §11). Remembered even while the selected
+    /// display cannot honour it; see ``canHideCompactWings``.
     @Published var hidesCompactWings: Bool {
         didSet {
             preferences?.set(
@@ -2461,32 +1250,12 @@ final class MonitorStore: ObservableObject {
             )
         }
     }
-    /// Whether the surface draws a hairline around its own edge.
+    /// Whether the surface draws a hairline around its own edge, so the black panel has a
+    /// shape against a dark wallpaper.
     ///
-    /// The panel is black, and on a dark wallpaper that is a shape with no
-    /// edge: the expanded panel reads as a hole rather than as an object, and
-    /// on a display with no cut-out to inherit, so does the collapsed pill.
-    /// The outline gives it one back.
-    ///
-    /// **The colour is derived, not picked**: three quarters of the grey a
-    /// running turn's timer is drawn in (``NotchPalette/surfaceEdge``). An edge is not
-    /// information -- it is there so the black has a shape against the
-    /// wallpaper -- so it sits below every mark that does carry state rather
-    /// than beside the dimmest of them.
-    ///
-    /// **The top line is not drawn.** The surface hangs from the very top of
-    /// the display, so that edge belongs to the screen and not to this panel;
-    /// a rule along it reads as a line across the menu bar. What is traced is
-    /// the two shoulders, the sides and the lower corners.
-    ///
-    /// Collapsed and expanded alike, because the reason is the wallpaper
-    /// behind it and that does not change on hover. The one form it is not
-    /// drawn on is ``givesUpCompactWings`` with no mark out, where the user has
-    /// asked for the cut-out and the surface is exactly that; see
-    /// ``showsSurfaceOutline``.
-    ///
-    /// Off by default and remembered across launches. It is a fact about the
-    /// wallpaper somebody chose, and nothing here can read that.
+    /// The colour is ``NotchPalette/surfaceEdge``, below every mark that carries state. The
+    /// top line is not drawn: that edge belongs to the screen. Collapsed and expanded alike,
+    /// except the wingless form with no mark out; see ``showsSurfaceOutline``. Off by default.
     @Published var drawsSurfaceOutline: Bool {
         didSet {
             preferences?.set(
@@ -2495,18 +1264,11 @@ final class MonitorStore: ObservableObject {
             )
         }
     }
-    /// Whether the notch-less pill names the work between its two ends.
+    /// Whether the notch-less pill names the work between its two ends. Default on.
     ///
-    /// **Default on, and notch-less only.** The pill is the one form with a
-    /// middle to give: the notched bar has a cut-out where a name would stand,
-    /// and the only way to give it one is `102` pt of black beside the hardware
-    /// for the whole of every turn — the reservation both wings spent V1 and V2
-    /// getting rid of (`compact-view-v2.md` §5.2).
-    ///
-    /// Off, the middle draws nothing and **the pill holds its `250` rather than
-    /// shrinking**: its two ends are anchored, so a width that answered to this
-    /// preference would move the mark and the reading with it, which is the one
-    /// thing this form is arranged not to do.
+    /// Notch-less only: the notched bar would need `102` pt of black beside the hardware
+    /// (`compact-view-v2.md` §5.2). Off, the pill holds its `250` so its anchored ends do not
+    /// move.
     @Published var namesWorkOnPill: Bool {
         didSet {
             preferences?.set(
@@ -2515,15 +1277,8 @@ final class MonitorStore: ObservableObject {
             )
         }
     }
-    /// Whether the live list is one block per product, or one list.
-    ///
-    /// **On, the list is `expanded-panel-v2.md` §4**: a heading per product
-    /// that has a row, every heading on screen at every offset (§4.6), and no
-    /// chip on a closed row because the heading has said the name. **Off, it
-    /// is the list §4 replaced**: rows in one order across products, each
-    /// naming its product with its own chip, under the panel's own top rule.
-    /// The Recent queue is not grouped either way (§4.1), and an open row
-    /// keeps its chip either way. Defaults on.
+    /// Whether the live list is one block per product (`expanded-panel-v2.md` §4) or one list
+    /// with a chip per row. The Recent queue is never grouped (§4.1). Defaults on.
     @Published var groupsSessionsByProduct: Bool {
         didSet {
             preferences?.set(
@@ -2546,24 +1301,15 @@ final class MonitorStore: ObservableObject {
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
     private let services: [any AgentMonitoring]
-    /// Whether this store is watching anything at all.
-    ///
-    /// Read by one test, and it is the one worth being able to ask: the shared
-    /// store is built with no services when this process is only hosting the
-    /// test bundle, and "no services" is what stops a test run from binding the
-    /// user's hook sockets and drawing a second overlay over their notch. It is
-    /// a fact about the store rather than a hook for the suite -- `services` is
-    /// private, and a decision this load-bearing should not rest on nobody
-    /// being able to see it.
+    /// Whether this store is watching anything. A test-hosting process builds the shared store
+    /// with no services, which keeps a test run off the user's hook sockets and notch.
     var isWatching: Bool { !services.isEmpty }
     private let navigator: (any AgentNavigating)?
     private func integrationService(for agent: AgentKind) -> (any AgentMonitoring)? {
         services.first { $0.agent == agent }
     }
-    /// The optional contracts, found on the product's service where it
-    /// implements them (``ProductContracts.swift``). A product that does not
-    /// conform has no switch to operate, no answer to deliver and nothing on
-    /// disk to report, and each caller reads `nil` as exactly that.
+    /// The optional contracts (``ProductContracts.swift``); `nil` means the product does not
+    /// implement that one.
     private func configurer(for agent: AgentKind) -> (any IntegrationConfiguring)? {
         integrationService(for: agent) as? any IntegrationConfiguring
     }
@@ -2573,15 +1319,13 @@ final class MonitorStore: ObservableObject {
     private func footprintReporter(for agent: AgentKind) -> (any DiskFootprintReporting)? {
         integrationService(for: agent) as? any DiskFootprintReporting
     }
-    /// Where every persisted preference is read and written. `nil` in tests,
-    /// which is what keeps them off the running user's real defaults.
+    /// `nil` in tests, which keeps them off the user's real defaults.
     private let preferences: UserDefaults?
     private let clock: any MonitorClock
     private let timing: MonitorTiming
     private var preferredDisplayID: String?
     private var pendingHoverTask: Task<Void, Never>?
-    /// The armed wake-up for the next moment output could change, re-armed at
-    /// the end of every refresh run. See ``scheduleNextWake()``.
+    /// Re-armed at the end of every refresh run. See ``scheduleNextWake()``.
     private var wakeTask: Task<Void, Never>?
     private var refreshEventTask: Task<Void, Never>?
     private var elapsedTickTask: Task<Void, Never>?
@@ -2589,60 +1333,28 @@ final class MonitorStore: ObservableObject {
     private let refreshEvents: AsyncStream<Void>?
     private var refreshGate = SingleFlightGate()
     private var refreshTask: Task<Void, Never>?
-    /// Each switch's desired state, which that product's convergence task reads
-    /// on every pass.
     private var desiredIntegrationEnabled: [AgentKind: Bool] = [:]
-    /// One convergence task per product, so a slow write on one side cannot
-    /// hold the other side's switch.
+    /// One per product, so a slow write on one side cannot hold the other side's switch.
     private var integrationTasks: [AgentKind: Task<Void, Never>] = [:]
     private var isNavigationInFlight = false
-    /// How long a row stays reachable after it leaves the list.
-    ///
-    /// **Five hours, and a constant rather than a setting** (§2.4 rule 01): a
-    /// window the user can widen is the history browser this app is not. It is
-    /// also what holds the age to two characters — nothing can ever read `5h`,
-    /// because at five hours the row is gone (§2.3).
-    ///
-    /// Not in ``MonitorTiming``, deliberately. Every window there is a
-    /// mechanism's — how stale an answer may get, how long a connection is
-    /// given to come back — and they compose into user-visible latencies. This
-    /// one composes into nothing and is answerable only from the product side.
+    /// How long a row stays reachable after it leaves the list. A constant, not a setting
+    /// (§2.4 rule 01); it also keeps the age to two characters (§2.3).
     static let recentWindow: TimeInterval = 5 * 60 * 60
-    /// A ceiling on the queue's size, behind the window rather than in front
-    /// of it.
-    ///
-    /// **The rule anybody can see is still five hours** (§8.5 question 08).
-    /// This exists only so an unbounded store cannot grow without limit: fifty
-    /// is far past what the viewport can draw and far past a plausible five
-    /// hours, and if it ever binds, the count on the seam said so long before.
-    /// What it must never become is the visible rule — that is the "last N"
-    /// this design has just finished banning.
+    /// A size bound behind the five-hour window, never the visible rule (§8.5 question 08).
     static let recentCeiling = 50
-    /// Every row that has left the list, keyed by Thread.
-    ///
-    /// Keyed by Thread rather than by Turn for the reason on
-    /// ``RecentDeparture/key(for:)``, and unbounded in count within its window:
-    /// membership is the window, and ``recentCeiling`` stands behind it rather
-    /// than beside it.
+    /// Every row that has left the list, keyed by Thread (see ``RecentDeparture/key(for:)``).
     private var departuresByThread: [String: RecentDeparture] = [:]
-    /// The Turns the user has taken off the list, kept per product.
-    ///
-    /// Per product because forgetting one is decided against that product's own
-    /// state: a dismissal may only be dropped on evidence from the product it
-    /// came from, and the other product's health says nothing about it.
+    /// The Turns the user has taken off the list, per product: a dismissal may only be dropped
+    /// on evidence from the product it came from.
     private var dismissedSessionIDsByAgent: [AgentKind: Set<String>] = [:]
-    /// The latest answer from each product, kept so the merge can be recomputed
-    /// without asking anyone again. One product answering must never discard
-    /// what another already said.
+    /// The latest answer from each product, so the merge can be recomputed. One product
+    /// answering must never discard what another already said.
     private var latestByAgent: [AgentKind: AgentSnapshot] = [:]
-    /// One gate per product. Sharing one made a Codex blip suppress a Claude
-    /// Code publish, and made the grace period's wake-up a shared resource.
+    /// One gate per product. Sharing one made a Codex blip suppress a Claude Code publish.
     private var stabilityGates: [AgentKind: ConnectionStabilityGate] = [:]
     private var diskFootprintTask: Task<Void, Never>?
-    /// Deadlines a provider reported and then failed to clear. A provider that
-    /// keeps naming the same overdue instant is not going to advance it, and
-    /// letting it into the shared `min` would drag every other provider down to
-    /// the refresh floor with it.
+    /// Deadlines a provider reported and failed to clear, kept out of the shared `min` so they
+    /// cannot drag every other provider down to the refresh floor.
     private var stuckDeadlines: [AgentKind: Date] = [:]
 
     init(
@@ -2650,13 +1362,7 @@ final class MonitorStore: ObservableObject {
         services: [any AgentMonitoring] = [],
         navigator: (any AgentNavigating)? = nil,
         initialSnapshot: AgentSnapshot? = nil,
-        /// Every product's opening answer, where more than one is wanted.
-        ///
-        /// ``initialSnapshot`` seeds one product, which is all a live store
-        /// ever needs -- the services publish the rest. A drawing that has to
-        /// show both products at once has no services to wait for, so it hands
-        /// the whole set in here and the merge runs over it exactly as it does
-        /// on every refresh. See ``NotchSpecimen``.
+        /// Every product's opening answer, for a drawing with no services (``NotchSpecimen``).
         initialSnapshots: [AgentSnapshot]? = nil,
         preferences: UserDefaults? = nil,
         refreshEvents: AsyncStream<Void>? = nil,
@@ -2695,17 +1401,8 @@ final class MonitorStore: ObservableObject {
         self.status = merged.status
         self.connectedAgents = merged.connectedAgents
         self.presenceMarks = merged.presenceMarks
-        // Through the injected store, not `.standard`. These used to read
-        // `.standard` directly while only the display preference was injected,
-        // so a `MonitorStore` built in a test inherited whoever was running it:
-        // an attribution test failed on any machine whose owner had chosen
-        // `Badge` in the picker that used to be in Settings, and passed on
-        // every other, which is a test reporting on the developer rather than
-        // on the code.
-        //
-        // `object(forKey:)` rather than `bool(forKey:)` so an install that has
-        // never opened the table is told apart from one that opened and shut
-        // it — the two agree today, and would not if this default ever moved.
+        // Through the injected store, not `.standard`, so a test does not inherit the developer's
+        // defaults. `object(forKey:)` tells a never-opened install from one that opened and shut it.
         self.isQuotaExpanded = preferences?.object(
             forKey: Self.quotaExpandedDefaultsKey
         ) as? Bool ?? false
@@ -2714,9 +1411,7 @@ final class MonitorStore: ObservableObject {
                 forKey: Self.quotaHiddenProductsDefaultsKey
             ) ?? []).compactMap(AgentKind.init(rawValue:))
         )
-        // `object(forKey:)` for the reason the quota's uses it: this defaults
-        // to folded, and `bool` cannot tell an install that has never opened
-        // the queue from one that opened and shut it.
+        // `object(forKey:)`: defaults to folded; `bool` cannot tell never-opened from shut.
         self.isRecentExpanded = preferences?.object(
             forKey: Self.recentExpandedDefaultsKey
         ) as? Bool ?? false
@@ -2729,13 +1424,10 @@ final class MonitorStore: ObservableObject {
         self.drawsSurfaceOutline = preferences?.bool(
             forKey: Self.drawsSurfaceOutlineDefaultsKey
         ) ?? false
-        // `object(forKey:)` rather than `bool(forKey:)`: this one defaults to
-        // *on*, and `bool` cannot tell an install that has never seen the
-        // switch from one that has turned it off.
+        // `object(forKey:)`: defaults to on; `bool` cannot tell never-seen from turned off.
         self.namesWorkOnPill = preferences?.object(
             forKey: Self.namesWorkOnPillDefaultsKey
         ) as? Bool ?? true
-        // Defaults on, for the same reason and by the same means.
         self.groupsSessionsByProduct = preferences?.object(
             forKey: Self.groupsSessionsByProductDefaultsKey
         ) as? Bool ?? true
@@ -2766,14 +1458,9 @@ final class MonitorStore: ObservableObject {
 
     /// Advances the elapsed readout once a second while a turn is being timed.
     ///
-    /// The tick still lives here rather than in a view-local timer, because it is
-    /// a timing decision and belongs on ``MonitorClock`` like every other window.
-    /// What changed is how it leaves: a tick is sent on ``elapsedTick``, which no
-    /// SwiftUI view observes, and only a change in the readouts' *reserved width*
-    /// bumps ``elapsedLayoutRevision`` and asks SwiftUI to re-measure.
+    /// Ticks go out on ``elapsedTick``, which no SwiftUI view observes; only a change in the
+    /// readouts' reserved width bumps ``elapsedLayoutRevision``.
     private func updateElapsedTicking() {
-        // Nothing being timed: stop entirely rather than wake once a second to
-        // discover there is no work.
         guard longestRunningSessionStart != nil else {
             elapsedTickTask?.cancel()
             elapsedTickTask = nil
@@ -2781,19 +1468,15 @@ final class MonitorStore: ObservableObject {
         }
         guard elapsedTickTask == nil else { return }
 
-        // The tick has been frozen since the last turn finished, so it is older
-        // than the turn that just started. Left stale, the first second of that
-        // turn reads as a negative duration -- which the formatter reports as
-        // "not timed" -- and the row renders blank until the first tick.
+        // The tick is older than the new turn; left stale, its first second reads as negative
+        // ("not timed") and the row renders blank until the first tick.
         publishTick(clock.now())
 
         elapsedTickTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
                 guard let start = self.longestRunningSessionStart else {
-                    // The last timed turn finished between ticks. `sessions`
-                    // will have cancelled this task already; clearing the handle
-                    // keeps a later turn able to start a new one.
+                    // `sessions` has cancelled this task; clearing the handle lets a later turn start one.
                     self.elapsedTickTask = nil
                     return
                 }
@@ -2809,24 +1492,13 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Sends a tick to the readouts, and asks SwiftUI to re-measure only if one
-    /// of them changed width.
+    /// Sends a tick, and asks SwiftUI to re-measure only if a readout changed width.
     ///
-    /// The formatter emits digits and colons in tabular figures, so a string's
-    /// character count *is* its rendered width; comparing counts is comparing
-    /// widths without measuring text once a second. The badge counts are
-    /// included directly, rather than measured, for the same reason: a count
-    /// changing is a width-affecting event whether or not its digit count
-    /// happens to change too. Each badge's flip goes in beside its count
-    /// because a badge that changes ground without changing width still has
-    /// to redraw.
+    /// The formatter uses tabular figures, so character count is width. Badge counts and flips
+    /// go in directly: either can change what must be drawn without a digit-count change.
     private func publishTick(_ now: Date) {
         elapsedTick.send(now)
 
-        // **The counts go in beside the reading.** A numeral gaining a digit
-        // widens the leading wing exactly as a digit widens the trailing one,
-        // and the collapsed bar is composed from both -- so a tick that finds
-        // either changed is a tick the panel has to be re-measured for.
         var signature = [aggregateSessionCount, aggregateSubagentCount]
         signature.append(compactTimerText?.count ?? -1)
         signature.append(buriesAFinishedTurn ? 1 : 0)
@@ -2836,12 +1508,8 @@ final class MonitorStore: ObservableObject {
         elapsedLayoutRevision &+= 1
     }
 
-    /// Time until the timed turn's next whole second.
-    ///
-    /// Sleeping a flat second drifts, and a drifting tick eventually crosses two
-    /// boundaries in one wake-up and visibly skips a digit. Landing on the turn's
-    /// own boundary keeps the ticks a true second apart, so every row -- whatever
-    /// its own sub-second phase -- advances exactly once per tick.
+    /// Time until the timed turn's next whole second. A flat one-second sleep drifts and
+    /// eventually skips a digit.
     nonisolated private static func secondsUntilNextTick(
         after start: Date,
         now: Date
@@ -2855,14 +1523,8 @@ final class MonitorStore: ObservableObject {
         displays.first { $0.id == selectedDisplayID } ?? displays.first
     }
 
-    /// The chosen display as AppKit's own object, for the windows that have to
-    /// land on the screen the component is on.
-    ///
-    /// Matched by identifier, not by frame: a frame is not an identity — two
-    /// displays swap origins the moment the user rearranges them in System
-    /// Settings — and the identifier is the same string the preference is
-    /// stored under. `nil` only while that display is gone and
-    /// ``refreshDisplays()`` has not caught up with it yet.
+    /// The chosen display as an `NSScreen`, matched by identifier (frames swap when displays
+    /// are rearranged). `nil` only until ``refreshDisplays()`` catches up with a removed display.
     var selectedScreen: NSScreen? {
         guard let id = selectedDisplay?.id else { return nil }
         return NSScreen.screens.first { DisplayOption.identifier(for: $0) == id }
@@ -2872,35 +1534,18 @@ final class MonitorStore: ObservableObject {
         selectedDisplay?.geometry ?? .noNotch
     }
 
-    /// The collapsed panel's height on the selected display, and the figure
-    /// both corner radii and the wingless step are shares of.
-    ///
-    /// ``DisplayOption/panelBandHeight``: the cut-out on a notched display,
-    /// the menu bar band on every other one.
+    /// The collapsed panel's height on the selected display, which both corner radii and the
+    /// wingless step are shares of. See ``DisplayOption/panelBandHeight``.
     var compactHeight: CGFloat {
         selectedDisplay?.panelBandHeight ?? PanelMetrics.referenceCompactHeight
     }
 
 
-    /// Whether this surface draws the name of the work between its two ends.
+    /// Whether this surface draws the name of the work: the notch-less pill, collapsed, with
+    /// something to name.
     ///
-    /// **The notch-less pill, collapsed, with something to name.** The notched
-    /// bar has no middle — the cut-out is where one would stand — and the
-    /// expanded panel names every Project in the rows below.
-    ///
-    /// **``privacyMode`` silences it outright rather than covering it**, and
-    /// that is the one place the cover does not draw a bar. A bar in the
-    /// middle would be the state announcing itself on the one collapsed form
-    /// able to announce it — and the notched bar, which draws no words, could
-    /// not match it however much it wanted to. One rule for both forms is
-    /// worth more than an indicator on one of them: the pill goes as quiet as
-    /// `Name the work` off, which is a drawing this surface already has.
-    /// ``privacyMode`` does not write that preference and turning it off
-    /// uncovers nothing else.
-    ///
-    /// The width does not move either way — the middle is a subtraction and
-    /// both ends are anchored — so this changes what is in the pill and never
-    /// how big it is.
+    /// ``privacyMode`` silences it rather than drawing a cover bar, so both collapsed forms
+    /// behave alike; it does not write ``namesWorkOnPill``. The width never changes.
     var drawsCompactMiddle: Bool {
         namesWorkOnPill
             && !privacyMode
@@ -2909,43 +1554,18 @@ final class MonitorStore: ObservableObject {
             && !compactProjectNames.isEmpty
     }
 
-    /// Whether this row's words are covered right now.
-    ///
-    /// **The cover silences what is drawn unasked; it does not silence what
-    /// you ask for.** Opening a row is as deliberate as a gesture on this
-    /// surface gets, so an open row draws its Project, its title, its preview
-    /// and its question body normally, and re-covers the moment it closes. A
-    /// covered panel nobody can answer a question in is a panel people would
-    /// simply switch back off.
+    /// Whether this row's words are covered. An open row is uncovered, so a question can still
+    /// be answered in privacy mode.
     func coversWords(of session: MonitoredSession) -> Bool {
         privacyMode && !isPeeking && openRowID != session.id
     }
 
-    /// Whether the band keeps the peek's box, drawn or not.
+    /// Whether the band keeps the peek's box, drawn or not: ``hasCoveredRows`` minus the mode.
     ///
-    /// **Everything ``hasCoveredRows`` asks except the mode itself**, and it
-    /// exists so the control can arrive and leave as a drawing rather than as a
-    /// layout. The box is mounted for as long as a peek could be offered at
-    /// all, and ``hasCoveredRows`` decides whether its three bars are drawn in
-    /// it — which is what lets them draw themselves on and retract when the
-    /// mode is switched, instead of a glyph blinking into existence at full
-    /// ink. It is the same trick ``FoldSeamRule`` uses for the rule it grows
-    /// out of the label's edge: keep the room, animate the mark.
-    ///
-    /// **The room is free here and nowhere else on this surface.** The peek
-    /// grows into the slack between the counts and the trailing pair
-    /// (`cover-the-words.md` §7), so an empty box in it moves nothing and costs
-    /// no width — which is exactly why this could not be done by reserving a
-    /// third box in ``PanelMetrics/expandedTrailingSideWidth``.
-    ///
-    /// What it answers to: a covered panel with no rows on it is a band, a seam
-    /// and a footer, none of which this covers, so a control offering to
-    /// uncover them would be offering nothing. The About panel replaces the
-    /// body outright and is not covered either. **Nor is the resting pill**,
-    /// which draws no body at all — it is also the one form whose width is
-    /// composed to exactly two control boxes
-    /// (``PanelMetrics/restingExpandedWidth``), so a third standing in it would
-    /// push the pair the panel was measured for.
+    /// Keeping the box mounted lets its bars animate on and off rather than a layout change
+    /// (as ``FoldSeamRule`` does). The box grows into slack between the counts and the trailing
+    /// pair (`cover-the-words.md` §7), so it costs no width. Not on the resting pill, whose
+    /// width is exactly two control boxes (``PanelMetrics/restingExpandedWidth``).
     var keepsPeekRoom: Bool {
         isExpanded
             && !isShowingAbout
@@ -2953,18 +1573,12 @@ final class MonitorStore: ObservableObject {
             && !(sessions.isEmpty && recentDepartures.isEmpty)
     }
 
-    /// Whether the panel has anything for a peek to lift — the drawn state of
-    /// the control ``keepsPeekRoom`` keeps the room for.
     var hasCoveredRows: Bool {
         privacyMode && keepsPeekRoom
     }
 
-    /// Lift the covers, and put them back.
-    ///
-    /// Separate calls rather than one toggle because the pointer drives them
-    /// from two different events — a press and a release — and a toggle would
-    /// turn a repeated press into a latch the moment one release went missing.
-    /// ``togglePeek()`` is the keyboard's, where there is no press to hold.
+    /// Lift the covers, and put them back. Separate calls because a press and a release drive
+    /// them; a toggle would latch when a release went missing. ``togglePeek()`` is the keyboard's.
     func beginPeek() {
         guard privacyMode, isExpanded else { return }
         isPeeking = true
@@ -2974,49 +1588,26 @@ final class MonitorStore: ObservableObject {
         isPeeking = false
     }
 
-    /// What VoiceOver's activation does, where a press cannot be held.
-    ///
-    /// **The one latching path, and it is bounded by the panel.** A held
-    /// control has no keyboard equivalent, and "you may not read this list
-    /// without a mouse" is not an answer — so activation latches instead, and
-    /// the latch dies when the panel closes like any other peek. The label
-    /// says which way the next activation goes.
+    /// VoiceOver activation, where a press cannot be held: the one latching path, ended when
+    /// the panel closes.
     func togglePeek() {
         guard privacyMode, isExpanded else { return }
         isPeeking.toggle()
     }
 
-    /// The gesture: a secondary press on the component that is not a row.
-    ///
-    /// Rows keep the secondary click they already have — `dismiss` on a live
-    /// one, `removeFromRecent` on a retired one — so this is claimed on the
-    /// band, which is the one region every state draws and the whole of the
-    /// collapsed surface.
+    /// Triggered by a secondary press on the band; rows keep their own secondary click
+    /// (`dismiss`, `removeFromRecent`).
     func togglePrivacyMode() {
         privacyMode.toggle()
     }
 
-    /// Whether ``namesWorkOnPill`` is something the selected display could
-    /// honour — which is what the row's caption reports, and nothing else.
-    ///
-    /// **The mirror image of ``canHideCompactWings``.** That preference needs a
-    /// cut-out to shrink onto; this one needs the absence of one, because the
-    /// notched bar has no middle to name anything in. Both rows stay visible
-    /// *and settable* on both kinds of display: a switch that appears only on
-    /// one kind is one nobody finds, and one that is greyed on the other is one
-    /// nobody can answer — the screen a preference cannot be honoured on is
-    /// exactly the screen somebody is sitting at when they decide what they
-    /// want. This gates the drawing, never the setting.
+    /// Whether the selected display could honour ``namesWorkOnPill`` (it needs no cut-out).
+    /// Gates the drawing, never the setting: both rows stay settable on every display.
     var canNameWorkOnPill: Bool { geometry == .noNotch }
 
-    /// Whether the collapsed surface draws its mark at all, which is the
-    /// question the leading wing's existence turns on.
-    ///
-    /// **One mark for every product at once**, so this is a switch rather than
-    /// a count: the wing is whole or it is absent. It is off in exactly two
-    /// states, both of them notched and collapsed — nothing connected, and
-    /// `Hide the wings` with nothing waiting on a person
-    /// (`compact-view-v2.md` §9).
+    /// Whether the collapsed surface draws its mark, which decides whether the leading wing
+    /// exists. Off only when notched and collapsed with nothing connected, or `Hide the wings`
+    /// with nothing waiting on a person (`compact-view-v2.md` §9).
     var drawsCompactMarks: Bool {
         guard !isExpanded, geometry == .notched else { return true }
         guard !isRestingOnly else { return false }
@@ -3024,114 +1615,50 @@ final class MonitorStore: ObservableObject {
         return presenceMarks.contains(where: \.hasATurnToAttendTo)
     }
 
-    /// Whether ``hidesCompactWings`` is something the selected display could
-    /// honour -- which is what the row's caption reports, and nothing else.
+    /// Whether the selected display could honour ``hidesCompactWings``; it needs a measured
+    /// cut-out.
     ///
-    /// **The condition is a measured cut-out, not a reported one.** Giving up
-    /// the wings means shrinking the collapsed body onto the hardware's own
-    /// shape, so this app has to know exactly where that shape is and how wide
-    /// it is; there is nothing else left on screen to place. Two displays fail
-    /// that, for the same reason stated twice:
+    /// - No notch: hiding the pill would slide the menu bar icons and leave nothing to hover.
+    /// - A notch with no gap between auxiliary areas is laid out as an emulated notch
+    ///   (`PanelMetrics.size`); shrinking onto it would leave a zero-width panel.
     ///
-    /// - A display without a notch has no such shape at all. Hiding the pill
-    ///   would take its position in the menu bar with it and slide every icon
-    ///   to its left across, and leave nothing to hover.
-    /// - A display that reports a notch but no gap between its auxiliary areas
-    ///   has a shape this app cannot locate. It is already laid out as an
-    ///   *emulated* notch for exactly that reason (see `PanelMetrics.size`),
-    ///   and shrinking onto a cut-out whose width reads as zero would leave a
-    ///   zero-width panel: nothing drawn, and nothing to hover.
-    ///
-    /// The preference itself is untouched by either -- it survives unplugging
-    /// the display that could not honour it, and can be set on one. The switch
-    /// is not greyed here: this answers what the display can draw, not what the
-    /// user is allowed to ask for.
+    /// Does not grey the switch or touch the preference.
     var canHideCompactWings: Bool {
         guard geometry == .notched else { return false }
         return (selectedDisplay?.centerOcclusionWidth ?? 0) >= 1
     }
 
-    /// Whether the collapsed surface has given up its wings: the preference,
-    /// on a display that can honour it.
-    ///
-    /// **Not "drawing nothing at all", which is what this used to say.** The
-    /// trailing wing does go entirely, and so does the leading one for as long
-    /// as neither product is waiting on the user — but a Turn stopped on an
-    /// approval, a question or an unread answer brings its own matrix out
-    /// (``compactDrawnMarks``), so this answers what the preference is doing
-    /// rather than what is left on screen. ``drawsCompactMarks`` is the second
-    /// question, and it is asked separately.
-    ///
-    /// Says nothing about hover: every reader of this is already collapsed-only
-    /// (the drawn marks guard on it, and the trailing reading is drawn only
-    /// while collapsed), and scoping it here as well would make the answer
-    /// change under the pointer for no drawn difference.
+    /// Whether the preference is in effect on a display that can honour it. A Turn waiting on
+    /// the user still brings its matrix out (``compactDrawnMarks``); ask ``drawsCompactMarks``
+    /// for what is on screen. Not scoped to hover: every reader is already collapsed-only.
     var givesUpCompactWings: Bool {
         hidesCompactWings && canHideCompactWings
     }
 
-    /// Whether the outline is actually drawn, which is the preference minus the
-    /// one form that has no edge of its own to trace.
-    ///
-    /// A collapsed surface that has given up its wings *and is drawing no mark*
-    /// **is** the cut-out: its body is exactly the occlusion, and the only part
-    /// of the contour still on lit pixels is the pair of shoulders curving back
-    /// to the menu bar. Outlining those draws two grey hooks either side of the
-    /// notch -- marks, on the one form whose whole point is that there are
-    /// none. So the two preferences do not fight: the outline stands down while
-    /// that form is on screen, and comes back the moment the panel drops.
-    ///
-    /// **A wing coming out gives it an edge back, and the outline returns with
-    /// it.** Once a matrix is standing past the cut-out the body is no longer
-    /// the occlusion, so the leading side and its lower corner are on lit pixels
-    /// like any other collapsed bar's -- and this preference is about a black
-    /// panel needing a boundary against a black wallpaper, which is as true of
-    /// a one-matrix bar as of a full one. The added clause is an *or* rather
-    /// than a replacement, which leaves the resting notched form exactly where
-    /// it was: it draws no mark either, and it has always been outlined, hooks
-    /// and all. The difference is that nobody asked for the cut-out there.
-    ///
-    /// Scoped to the collapsed state here rather than in ``givesUpCompactWings``
-    /// for the reason given there: that property answers about the collapsed
-    /// form and each reader says when it is asking.
+    /// The preference minus the wingless form drawing no mark: that body is the cut-out, and
+    /// outlining it draws two grey hooks beside the notch. A wing coming out restores the
+    /// outline. Scoped to collapsed here, not in ``givesUpCompactWings``.
     var showsSurfaceOutline: Bool {
         guard drawsSurfaceOutline else { return false }
         return isExpanded || !givesUpCompactWings || drawsCompactMarks
     }
 
-    /// Nothing is connected, so the only mark is the grey one.
     var isRestingOnly: Bool {
         presenceMarks.allSatisfy(\.isResting)
     }
 
-    /// Hovering grows the pill sideways instead of dropping the panel.
-    ///
-    /// True when nothing is connected. The panel would have nothing in it, and
-    /// the one thing the user might want — why nothing is connected — is in
-    /// Settings, which the gear reaches in one action.
-    ///
-    /// **Unless the mark has been asked for**, in which case there is a body
-    /// after all and it is the one body on this surface that does not need an
-    /// agent to have something in it (``isShowingAbout``). The pill drops into
-    /// a panel of the About height, at the full expanded width, and folds back
-    /// to a pill when the mark is clicked again.
+    /// Hovering grows the pill sideways instead of dropping the panel: true when nothing is
+    /// connected, unless the About panel is showing (``isShowingAbout``).
     var expandsToPillOnly: Bool {
         isRestingOnly && !isShowingAbout
     }
 
-    /// The name both collapsed forms and the panel read, since there is only
-    /// one of them (``MonitorStatus/displayName``).
     var statusDisplayName: String {
         status.displayName
     }
 
-    /// The turn the notch is timing.
-    ///
-    /// A single readout can only speak for one turn, so it follows the
-    /// longest-running one — the oldest is the one worth surfacing. Every state
-    /// but `completed` is eligible: a turn that has been parked on an approval
-    /// for ten minutes is precisely the one the user needs to see, so filtering
-    /// this to `running` would hide the timer exactly when it starts to matter.
+    /// The turn the notch is timing: the longest-running one. Every state but `completed` is
+    /// eligible, so a turn parked on an approval keeps its timer.
     var longestRunningSessionStart: Date? {
         sessions
             .filter { $0.status.keepsTiming }
@@ -3140,12 +1667,8 @@ final class MonitorStore: ObservableObject {
     }
 
     var compactTimerText: String? {
-        // The drawn reading, measured. `Hide the wings` is answered by the span
-        // below rather than here, so the width composed from this string and the
-        // figure drawn from that span cannot disagree about whether there is a
-        // reading at all. Every reader is the collapsed surface or its width:
-        // the header, the two width compositions below, and the tick's own
-        // re-measure signature.
+        // `Hide the wings` is answered by ``compactReadingSpan``, so the composed width and the
+        // drawn figure cannot disagree about whether there is a reading.
         guard let span = compactReadingSpan else { return nil }
         return SessionElapsedFormatter.elapsed(
             since: span.start,
@@ -3153,39 +1676,15 @@ final class MonitorStore: ObservableObject {
         )
     }
 
-    /// The two instants the collapsed reading is drawn between: a turn's start,
-    /// and its end where it has one.
+    /// The two instants the collapsed reading is drawn between: a turn's start, and its end
+    /// where it has one.
     ///
-    /// **A stopped reading does not leave.** While something is unfinished this
-    /// is the longest of those turns and the second stamp is absent, so the
-    /// figure is advanced by the tick. When the last one ends the reading
-    /// freezes on the turn it was timing rather than going away: the digits
-    /// hold at that turn's own length, measured between its two stamps, and the
-    /// panel's edge does not move at that instant
-    /// (`compact-view-v2.md` §4.2).
-    ///
-    /// **Which finished turn**, when more than one has: the earliest-started of
-    /// them, which is the same rule the live reading follows and therefore the
-    /// same turn it was counting a moment ago. The doc leaves this open; it is
-    /// decided here because "the last value the timer showed" has to name a
-    /// row, and any other choice would let the figure jump when a row it was
-    /// never drawing ages out.
-    ///
-    /// **Nil while the wings are given up**, which is where that preference is
-    /// answered for the whole trailing slot. The collapsed body is composed from
-    /// ``compactTimerText`` and drawn from this, and the gate used to stand on
-    /// the string alone: the slot was then billed at zero while the view still
-    /// had a span to draw into it, and a zero-width frame does not clip --
-    /// ``ElapsedReadout`` paints its own raster from its leading edge whatever
-    /// width it is offered. The figure ran out through the cut-out's trailing
-    /// edge and was cut off by the window bound one shoulder past it, which is
-    /// `12 + 4.75` pt of timer standing on a bar whose whole point is that there
-    /// is nothing there. One answer, and it is this one, because everything the
-    /// slot draws is derived from it.
-    ///
-    /// The dot beside it is untouched: it comes out from behind a hidden wing on
-    /// its own account, billed for and drawn (`compact-view-v2.md` §9 -- the
-    /// reading never comes out, the dot does).
+    /// - When the last turn ends the reading freezes on that turn's own length rather than
+    ///   leaving, so the panel edge does not move (`compact-view-v2.md` §4.2). Among finished
+    ///   turns it is the earliest-started, the same turn the live reading was counting.
+    /// - Nil while the wings are given up, for the whole trailing slot: a zero-width frame
+    ///   does not clip ``ElapsedReadout``, and gating only the string drew `12 + 4.75` pt of
+    ///   timer past the cut-out. The dot still comes out (`compact-view-v2.md` §9).
     var compactReadingSpan: (start: Date, end: Date?)? {
         guard !givesUpCompactWings else { return nil }
         if let start = longestRunningSessionStart { return (start, nil) }
@@ -3196,15 +1695,9 @@ final class MonitorStore: ObservableObject {
         return finished.map { ($0.start, $0.end) }
     }
 
-    /// Whether the list holds a finished, unread turn that the aggregate mark
-    /// is not drawing — the dot's own condition.
-    ///
-    /// **The aggregate's question, not each product's.** `PresenceMark`'s own
-    /// flag answers it per product, and the case this surface now has to draw
-    /// is one no product's flag can see: Codex holding nothing but a finished
-    /// row while Claude Code runs is a buried finish for the *bar*, and false
-    /// for both marks in it. So it is asked here, of the one list and the one
-    /// mark that stand for all of them.
+    /// Whether the list holds a finished, unread turn the aggregate mark is not drawing: the
+    /// dot's condition. Asked of the aggregate, because a finished Codex row under a running
+    /// Claude Code row is buried for the bar and false for each product's own flag.
     var buriesAFinishedTurn: Bool {
         guard status != .completed else { return false }
         return sessions.contains {
@@ -3213,65 +1706,35 @@ final class MonitorStore: ObservableObject {
     }
 
 
-    /// Every subagent still in flight across every listed row, both products
-    /// together. Kept for VoiceOver's total and for callers that only need to
-    /// know whether the collapsed surface has anything to say here.
+    /// Every subagent still in flight across listed rows, both products; for VoiceOver's total.
     var compactRunningSubagentCount: Int {
         givesUpCompactWings ? 0 : aggregateSubagentCount
     }
 
-    /// Everything the collapsed surface draws in the slot after the notch: a
-    /// one subagent badge per product, the elapsed timer, or both sharing the slot.
-    ///
-    /// One value rather than two views, because it is one reading: the panel
-    /// width is measured from it, and the elapsed half redraws itself once a
-    /// second inside its own raster instead of laying out a stack every tick.
+    /// Everything the collapsed surface draws after the notch: subagent badges, the elapsed
+    /// timer, or both. One value because the panel width is measured from it.
     var compactTrailingReading: CompactTrailingReading {
         CompactTrailingReading(
             timerText: compactTimerText,
             isFrozen: compactReadingSpan?.end != nil,
-            // The reading still never comes out from behind a hidden wing; the
-            // dot does, because a finished turn nobody has read is precisely a
-            // thing that wants a person (`compact-view-v2.md` §9).
+            // The reading stays hidden behind a hidden wing; the unread dot does not
+            // (`compact-view-v2.md` §9).
             buriesAFinishedTurn: buriesAFinishedTurn
         )
     }
 
-    /// The large numeral: **rows on the monitored list**.
-    ///
-    /// Finished-but-not-yet-aged-out included, because it counts the same set
-    /// the panel below it draws (`compact-view-v2.md` §3.3). It does not fall
-    /// to zero the moment work stops; it falls when the row leaves, on the same
-    /// clock that governs how long a stopped reading holds.
-    ///
-    /// **Ungated by `Hide the wings`.** That preference decides whether the
-    /// leading wing is drawn; it never decides what the numerals count. A
-    /// figure that meant the whole list under one display preference and the
-    /// waiting subset under another would mean neither (§9).
+    /// The large numeral: rows on the monitored list, finished ones included
+    /// (`compact-view-v2.md` §3.3). Ungated by `Hide the wings` (§9).
     var aggregateSessionCount: Int { sessions.count }
 
-    /// The small numeral: every subagent in flight, both products together.
-    ///
-    /// Summed off ``presenceMarks`` rather than re-derived, so the two ends of
-    /// one bar cannot disagree about the same list. Ungated, for the reason
-    /// above.
+    /// The small numeral: every subagent in flight, summed off ``presenceMarks`` so both ends
+    /// of the bar agree. Ungated.
     var aggregateSubagentCount: Int {
         presenceMarks.reduce(0) { $0 + $1.subagents.count }
     }
 
-    /// Every Project with an active row, in the panel's own order,
-    /// deduplicated, first occurrence winning — the roster the pill's middle
-    /// names in turn.
-    ///
-    /// **A Project name is the opposite of a product name.** The collapsed
-    /// surface dropped hue and the matrix pair on the argument that a product
-    /// name is a colour rather than a row, and that was right; this is the one
-    /// fact the mark, the numerals and the clock all leave unanswered, and with
-    /// several checkouts open it is the one that decides whether the user
-    /// interrupts themselves (`compact-view-v2.md` §6.2).
-    ///
-    /// Ordered by ``sessions``, which is already the panel's own row order, so
-    /// the roster and the list under it cannot disagree about what is first.
+    /// Every Project with an active row, deduplicated in ``sessions`` order: the roster the
+    /// pill's middle names in turn (`compact-view-v2.md` §6.2).
     var compactProjectNames: [String] {
         var seen: Set<String> = []
         return sessions.map(\.projectName).filter { seen.insert($0).inserted }
@@ -3284,19 +1747,12 @@ final class MonitorStore: ObservableObject {
     }
 
 
-    /// The leading group at the width it is drawing, for the view that has to
-    /// draw it into exactly the room the panel was sized for.
     var compactDrawnLeadingGroupWidth: CGFloat {
         PanelMetrics.drawnLeadingGroupWidth(sessionCount: aggregateSessionCount)
     }
 
-    /// The trailing reading at the width the collapsed surface bills it for,
-    /// which since the pill stopped reserving is both collapsed forms.
-    ///
-    /// The view frames the reading to this and lets its glyphs sit at the
-    /// leading edge of it, so the box and the panel edge open together and the
-    /// figure's own leading edge stands still while a digit arrives at the far
-    /// end. Zero on an empty reading, which is a slot that is not drawn at all.
+    /// The trailing reading's billed width on both collapsed forms. The glyphs sit at its
+    /// leading edge so the figure stands still while a digit arrives. Zero on an empty reading.
     var compactDrawnTrailingReadingWidth: CGFloat {
         PanelMetrics.drawnTrailingReadingWidth(compactTrailingReading)
     }
@@ -3304,15 +1760,8 @@ final class MonitorStore: ObservableObject {
 
 
 
-    /// The counts column, in words.
-    ///
-    /// **What the numerals say, on the terms they say it.** Two figures with no
-    /// product in either of them, so this names neither: hierarchy on that
-    /// column is size and brightness, and the spoken form has neither channel —
-    /// what it has instead is the two words the numerals cannot draw.
-    ///
-    /// **Ungated by `Hide the wings`**, like the numerals themselves: that
-    /// preference decides whether the wing is drawn, never what it counts.
+    /// The counts column, in words. Names no product, like the numerals; ungated by
+    /// `Hide the wings`.
     var spokenCollapsedCountsText: String? {
         guard aggregateSessionCount > 0 else { return nil }
         let sessions = aggregateSessionCount == 1
@@ -3325,24 +1774,11 @@ final class MonitorStore: ObservableObject {
         return "\(sessions), \(subagents)"
     }
 
-    /// What a breathing column is saying, in words.
-    ///
-    /// A movement cannot be spoken, and `figma-design.md` §10 forbids saying
-    /// anything on this surface through one channel alone. It speaks on exactly
-    /// the terms the column moves on (``PresenceMark/buriesAFinishedTurn``), so
-    /// it stays quiet when every turn has finished — the status name already
-    /// reads `Completed` there, and saying it again would be reading one fact
-    /// twice.
-    ///
-    /// It does say **how many**, which the breath never does. That difference
-    /// is kept rather than levelled: the number is already known, a reader who
-    /// cannot see the column has no cheap way to ask for it, and nothing about
-    /// the drawing has to change to hand it over.
+    /// What a breathing column says, in words (`figma-design.md` §10: no single channel).
+    /// Speaks on ``PresenceMark/buriesAFinishedTurn``'s terms and adds how many.
     var spokenBuriedCompletionText: String? {
-        // **On the aggregate, like the dot it speaks for.** It used to fold
-        // each product's own flag, which cannot see a finished row on one
-        // product buried under another product's running one -- the exact case
-        // the one mark and the one dot now have to answer for.
+        // On the aggregate: a product's own flag cannot see its finished row buried under another
+        // product's running one.
         guard buriesAFinishedTurn else { return nil }
         let count = sessions.filter { session in
             MonitorAggregation.effectiveStatus(of: session) == .completed
@@ -3353,14 +1789,8 @@ final class MonitorStore: ObservableObject {
             : "\(count) turns finished and unread"
     }
 
-    /// The instant the compact readout counts from, or nil when there is nothing
-    /// to draw. The readout advances itself from ``elapsedTick``, so it needs the
-    /// start rather than a string that would go stale between re-renders.
-    ///
-    /// **Only while the figure is still moving.** A frozen reading is drawn
-    /// between two stamps and ignores the tick, so it is
-    /// ``compactReadingSpan`` that the view reads; this stays the question
-    /// "is something being counted", which is what the tick itself answers to.
+    /// The instant the compact readout counts from while the figure is moving, or nil. A frozen
+    /// reading is drawn from ``compactReadingSpan`` instead.
     var compactTimerStart: Date? {
         guard compactTimerText != nil else { return nil }
         return longestRunningSessionStart
@@ -3395,17 +1825,9 @@ final class MonitorStore: ObservableObject {
         )
     }
 
-    /// What a finished row's slot draws: the length of the turn that ended.
-    ///
-    /// **A reading that has stopped, not one that is paused.** It is measured
-    /// between the turn's own two stamps and never against the tick, so it is
-    /// the same figure on every refresh for as long as the row is listed --
-    /// which is the whole of what makes it read as a record rather than as a
-    /// clock somebody forgot to restart.
-    ///
-    /// `nil` on a row that is still timing (its live reading is
-    /// ``elapsedText(for:)``) and on one whose end was never observed, where a
-    /// duration would have to be invented.
+    /// What a finished row's slot draws: the length of the turn that ended, measured between
+    /// its own two stamps. `nil` on a row still timing (see ``elapsedText(for:)``) or one whose
+    /// end was never observed.
     func finishedElapsed(for session: MonitoredSession) -> (start: Date, end: Date)? {
         guard !session.status.keepsTiming,
               let startedAt = session.startedAt,
@@ -3415,158 +1837,63 @@ final class MonitorStore: ObservableObject {
         return (startedAt, finishedAt)
     }
 
-    /// ``finishedElapsed(for:)`` as the row draws it.
     func finishedElapsedText(for session: MonitoredSession) -> String? {
         guard let span = finishedElapsed(for: session) else { return nil }
         return SessionElapsedFormatter.elapsed(since: span.start, now: span.end)
     }
 
-    /// ``finishedElapsed(for:)`` as VoiceOver has to hear it.
     func spokenFinishedElapsedText(for session: MonitoredSession) -> String? {
         guard let span = finishedElapsed(for: session) else { return nil }
         return SessionElapsedFormatter.spokenElapsed(since: span.start, now: span.end)
     }
 
-    /// Whether a row's body line carries the searchlight.
-    ///
-    /// **The row's own turn is the only input.** A finished turn's body is the
-    /// answer it produced, and it does not sweep even while subagents it
-    /// started are still working: the text the band would cross is that turn's
-    /// own final output, and the badge in the slot is what speaks for what is
-    /// still in flight.
-    ///
-    /// Motion answers *live or finished*, which is the one thing here that can
-    /// be read without looking straight at the panel. The reading's ground says
-    /// the state on its own rather than lean on this.
+    /// Whether a row's body line carries the searchlight: only while the row's own turn keeps
+    /// timing, even if its subagents are still working.
     func sweepsBody(for session: MonitoredSession) -> Bool {
         session.status.keepsTiming
     }
 
     /// The instant a readout is drawn at, never earlier than the turn it draws.
     ///
-    /// **A tick that has not caught up is not an untimed turn.** ``elapsedTick``
-    /// only advances once a second, so between a turn starting and the next tick
-    /// the shared instant is behind that turn's start by up to a second, and
-    /// ``SessionElapsedFormatter`` answers `nil` — its contract, and the right
-    /// one, because for it a start in the future is clock skew.
-    ///
-    /// Here it is not skew: both stamps come from ``MonitorClock``, so the only
-    /// way the start can lead is that the tick has not arrived yet, and the
-    /// honest reading at a turn's own start instant is `0:00`. Nothing is
-    /// invented — the turn is running and its start is known.
-    ///
-    /// **What the `nil` cost was.** It does not just blank the readout for a
-    /// beat; it takes the readout off screen and leaves it off. `nil` makes the
-    /// row draw the untimed dot instead of ``ElapsedReadout``, and only a
-    /// re-render puts the readout back — while the once-a-second re-measure is
-    /// gated on the readouts' *width* (`AGENTS.md` §7), and `0:09` → nil →
-    /// `0:00` is the same width throughout, so no re-render is ever asked for.
-    /// Measured on a Release build 2026-08-24: a running row lost its timer for
-    /// good, the collapsed pill went on counting because its own readout stayed
-    /// mounted, and hovering the panel was what brought the row's back.
+    /// Between a turn starting and the next once-a-second tick, the tick trails the start and
+    /// ``SessionElapsedFormatter`` answers `nil`. Both stamps come from ``MonitorClock``, so this
+    /// is not skew. `nil` swaps in the untimed dot, and the width-gated re-measure
+    /// (`AGENTS.md` §7) never asks for a re-render: measured on Release 2026-08-24, a running
+    /// row lost its timer for good.
     nonisolated private static func readableNow(_ now: Date, forStart start: Date?) -> Date {
         guard let start else { return now }
         return max(now, start)
     }
 
-    /// The live list as blocks: one per product that has a row, always.
+    /// The live list as blocks: one per product that has a row, whenever
+    /// ``groupsSessionsByProduct`` is on (no presence gate, 2026-09-09).
     ///
-    /// **There is no gate on this, and that is the decision** (2026-09-09).
-    /// The list used to be grouped only while more than one product was
-    /// connected — `groupsSessionsByProduct`, keyed to presence — so a machine
-    /// running one product drew a flat list its rows named themselves on, and
-    /// the whole structure arrived at the moment a second product connected.
-    /// That made one product a form of its own rather than the general form
-    /// with one block in it, and the two forms disagreed about where the
-    /// product's name is written, whether the panel draws its own top rule, and
-    /// how tall the list is.
-    ///
-    /// **One product is the degenerate case, not a special case.** One block,
-    /// one heading, and every other rule below it unchanged: rows keep
-    /// ``MonitorAggregation/rowOrder`` inside their block, the heading names
-    /// the product for every row under it, and nothing on the panel has to ask
-    /// how many products there are to know what it is drawing.
-    ///
-    /// **What the presence rule was protecting is protected by construction
-    /// now.** Written as a gate on `Set(sessions.map(\.agent)).count > 1` the
-    /// structure came and went while both products stayed open: Claude Code
-    /// finishing its last row collapsed every Codex row back into a flat list,
-    /// and the heading returned on the next Claude Code turn — motion the user
-    /// cannot account for. Keying the gate to presence answered that, and
-    /// removing the gate answers it completely: a list that is always grouped
-    /// cannot stop being grouped. What still follows the rows is only *how
-    /// many* blocks there are, which is `expanded-panel-v2.md` §4.3 rule 04 —
-    /// a product with no rows draws no heading, because nothing is drawn while
-    /// it has nothing to say.
-    ///
-    /// **The Recent queue is not grouped and keeps its chip** — see
-    /// ``MonitorAggregation/SessionGroup``. Below the seam the reading is an
-    /// age and the ages are one descent; that column is the queue's whole
-    /// value and a header would restart it at every block.
-    ///
-    /// **Empty while ``groupsSessionsByProduct`` is off**, which is the one
-    /// case the view draws the flat list: rows in ``MonitorAggregation/rowOrder``
-    /// across every product, each with its own chip.
+    /// One product is one block. A gate on connected products made headings come and go while
+    /// both stayed open. A product with no rows draws no heading (`expanded-panel-v2.md` §4.3
+    /// rule 04). The Recent queue is not grouped (``MonitorAggregation/SessionGroup``). Empty
+    /// while the preference is off: the view draws rows in ``MonitorAggregation/rowOrder``.
     var sessionGroups: [MonitorAggregation.SessionGroup] {
         groupsSessionsByProduct ? MonitorAggregation.groups(of: sessions) : []
     }
 
-    /// How many headers the live list draws, without building the blocks.
-    ///
-    /// Read by three height accessors on every pass the panel is sized on, so
-    /// it counts the products rather than allocating a row array per product
-    /// and asking how many survived. Zero with nothing live, which is what
-    /// keeps a heading from ever standing over the apology.
+    /// How many headers the live list draws, counted without building the blocks (read on every
+    /// sizing pass). Zero with nothing live.
     var sessionGroupHeaderCount: Int {
         groupsSessionsByProduct ? Set(sessions.map(\.agent)).count : 0
     }
 
-    /// Whether the first thing under the band is a block's heading rather than
-    /// a row or the apology.
-    ///
-    /// **The panel's own top hairline is drawn on the negation of this, and on
-    /// nothing else.** That rule and a block heading's rule are the same `1` pt
-    /// of white at `15%` between the same two `x` values; drawn together they
-    /// were two lines `24` apart with nothing said between them, which is a
-    /// boundary drawn twice (`panel-v2.md` §3.4). One of them has to go, and it
-    /// is the panel's: the heading's carries a name, and a rule that carries a
-    /// name is the more useful of two identical rules.
-    ///
-    /// So the heading takes the job over, and takes the position with it —
-    /// ``PanelMetrics/leadingProductGroupHeaderHeight`` is the other half of
-    /// this answer. ~~With nothing live the apology is what stands there, and
-    /// with one product connected the list is flat: neither draws a rule of its
-    /// own, so the panel keeps drawing its own.~~ **There is one case left**
-    /// (2026-09-09): nothing live, where the apology stands under the band and
-    /// draws no rule of its own, so the panel keeps drawing its own. A list
-    /// with rows on it always leads with a heading, whatever is connected.
+    /// Whether the first thing under the band is a block's heading. The panel's own top hairline
+    /// is drawn on the negation of this only, so the two identical rules are never drawn `24`
+    /// apart (`panel-v2.md` §3.4); see ``PanelMetrics/leadingProductGroupHeaderHeight``.
     var listLeadsWithABlockHeading: Bool { sessionGroupHeaderCount > 0 }
 
-    /// One group per connected product, in Settings' order, each holding its
-    /// own windows in the order the product published them.
+    /// One group per connected product, in Settings' order, each with its windows in published
+    /// order (`quota-footer-v2.md` §5).
     ///
-    /// Exactly as many groups as the notch has marks: the footer reports on the
-    /// products that are there. **A product with no limits keeps its group**
-    /// and draws no inner lines — its spend is attributed, and the absence says
-    /// there is nothing to report. That is also how a connected product this
-    /// app does not yet read quota for appears: present and counted, with
-    /// nothing claimed about it (`quota-footer-v2.md` §5).
-    ///
-    /// **Nothing on this list is sorted, at either level.** Products keep
-    /// Settings' order and windows keep the reader's — `Current session:` as
-    /// `5 h` before `Current week (all models):` as `7 d` — so this accessor
-    /// maps `snapshot.quota.windows` straight through. A sort by share was
-    /// written and then overruled: the objection is not that an order indicates
-    /// something, it is that it **moves**, and a share crossing another share
-    /// would have re-ordered two rows for a reason nobody asked about. It also
-    /// keeps one list to one order — `Quota.remainingPercent` reads
-    /// `windows.first`, so a sort here would have made the table's first inner
-    /// row a different window from the one every single-rule surface calls
-    /// first.
-    ///
-    /// **Only the products the user keeps in the table**
-    /// (``productsHiddenFromQuotaTable``). Leaving one out removes its group
-    /// and moves nothing else: the rest keep Settings' order.
+    /// - A product with no limits keeps its group and draws no inner lines.
+    /// - Nothing is sorted: a share sort would re-order rows as shares cross, and
+    ///   `Quota.remainingPercent` reads `windows.first`.
+    /// - Excludes ``productsHiddenFromQuotaTable``.
     var footerRules: [FooterRule] {
         let now = clock.now()
         return quotaTableProducts.map { agent, quota in
@@ -3578,34 +1905,23 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Every connected product this app has a reading for, in Settings' order.
-    ///
-    /// **The footer's shape without the footer's strings.** Building a
-    /// `FooterRule` formats a countdown and a spoken date per window, and the
-    /// panel asks the footer three questions on every render that only need the
-    /// *shape*: is there a control, how tall is the box, and what has been spent
-    /// today. Those read this instead, so the formatting is paid once, by the
-    /// table, and only while somebody has it open (`AGENTS.md` §7 — a re-render
-    /// costs what the whole overlay costs, so what a render does at rest is the
-    /// number that matters).
+    /// Every connected product with a reading, in Settings' order: the footer's shape without
+    /// formatting its strings, so the per-render questions stay cheap (`AGENTS.md` §7).
     private var quotaProducts: [(agent: AgentKind, quota: QuotaSnapshot)] {
         connectedAgents.compactMap { agent in
             latestByAgent[agent].map { (agent, $0.quota) }
         }
     }
 
-    /// The same, less the products the user has taken out of the table. The
-    /// table and its height read this; today's total never does.
+    /// Less the products taken out of the table. Today's total never reads this.
     private var quotaTableProducts: [(agent: AgentKind, quota: QuotaSnapshot)] {
         quotaProducts.filter { !productsHiddenFromQuotaTable.contains($0.agent) }
     }
 
-    /// Whether `agent` has a group in the quota table when it is connected.
     func showsInQuotaTable(_ agent: AgentKind) -> Bool {
         !productsHiddenFromQuotaTable.contains(agent)
     }
 
-    /// Keep `agent` in the quota table, or take it out.
     func setShowsInQuotaTable(_ shows: Bool, for agent: AgentKind) {
         if shows {
             productsHiddenFromQuotaTable.remove(agent)
@@ -3614,13 +1930,8 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// One window's line: its name, its share, and the countdown to its reset.
-    ///
-    /// **`Resets in` came back.** It went out on the argument that the words
-    /// were repeated once a window down a column of countdowns; what put them
-    /// back is that the column beside this one now carries the window's own
-    /// name, and a bare `4h` next to a `5h limit` reads as the same kind of
-    /// thing. See ``UsageSummaryFormatter/resetText(resetsAt:remainingPercent:now:calendar:)``.
+    /// One window's line: name, share, and `Resets in` countdown. See
+    /// ``UsageSummaryFormatter/resetText(resetsAt:remainingPercent:now:calendar:)``.
     private static func footerWindow(
         for window: QuotaWindow,
         now: Date
@@ -3643,21 +1954,9 @@ final class MonitorStore: ObservableObject {
         )
     }
 
-    /// The footer's one line at rest: every connected product's tokens for
-    /// today, as a whole.
-    ///
-    /// **Whatever the table is showing.** A product taken out of the table is
-    /// still counted here: the choice is about how long the table is, and the
-    /// total is not a view of the table (``productsHiddenFromQuotaTable``).
-    ///
-    /// **It is not broken into products here.** The word that says whose a
-    /// number is costs width on this line and costs nothing in the table, where
-    /// every figure sits beside its own product's name — so the parts that used
-    /// to trail this line moved to the table's outer rows, and the collapsed
-    /// footer names nobody (§3).
-    ///
-    /// Unreadable, it draws `-- today` in the place `518.7M today` would have
-    /// had, and nothing else on the panel changes (§8.3).
+    /// The footer's one line at rest: every connected product's tokens for today, including
+    /// products hidden from the table, not broken into products (§3). Unreadable, it draws
+    /// `-- today` (§8.3).
     var footerToday: SpendReading {
         let totals = quotaProducts.compactMap(\.quota.todayTokens)
         guard !totals.isEmpty else {
@@ -3666,48 +1965,26 @@ final class MonitorStore: ObservableObject {
         return UsageSummaryFormatter.today(tokens: totals.reduce(0, +))
     }
 
-    /// Whether the footer is drawn at all: at least one connected product.
-    ///
-    /// With nothing connected there is no footer — no products, no windows and
-    /// no tokens is nothing to say (§8.5 question 07).
+    /// Whether the footer is drawn: at least one connected product (§8.5 question 07).
     var showsQuotaFooter: Bool { !quotaProducts.isEmpty }
 
-    /// The control is drawn whenever the table would have a group in it.
-    ///
-    /// It does not wait for anything to be close: a control that appeared only
-    /// in trouble would be one nobody had used at the moment they first needed
-    /// it (§8.5 question 06). **It does wait for the table to have something
-    /// in it.** With every connected product taken out of the table the line
-    /// is today's total alone, and a chevron there would open onto nothing —
-    /// which covers both the user choosing no product and choosing only
-    /// products that are not connected right now (§13).
+    /// Drawn whenever the table would have a group, not only near a limit (§8.5 question 06).
+    /// With every connected product taken out, a chevron would open onto nothing (§13).
     var showsQuotaFoldControl: Bool { !quotaTableProducts.isEmpty }
 
-    /// Whether the table is drawn: somebody opened it, and it has a group.
-    ///
-    /// ``isQuotaExpanded`` is kept as it was while the table is empty, so
-    /// putting a product back brings the table back the way the user left it.
+    /// ``isQuotaExpanded`` survives an empty table, so putting a product back restores it.
     var showsQuotaTable: Bool { isQuotaExpanded && showsQuotaFoldControl }
 
-    /// Open the table, or shut it.
-    ///
-    /// **Shutting it cannot strand the pointer.** The control rides the spend
-    /// line, which is the footer's first line and is always drawn, so the table
-    /// opens *beneath* it and closing removes rows below a pointer sitting `6`
-    /// to `22` above the folded bottom edge — inside it. The old footer folded
-    /// the rules away *above* the line the chevron was on, which lifted the
-    /// panel's bottom edge past the pointer that had just clicked.
+    /// The table opens beneath the always-drawn spend line, so closing it cannot strand the
+    /// pointer below the panel's bottom edge.
     func toggleQuotaTable() { isQuotaExpanded.toggle() }
 
-    /// The mark on the band, both ways: it opens the About panel and it is the
-    /// only thing that closes it (``isShowingAbout``).
+    /// The band's mark: it opens the About panel and is the only thing that closes it.
     func toggleAbout() { isShowingAbout.toggle() }
 
     var expandedFooterHeight: CGFloat {
         guard showsQuotaFooter else { return 0 }
-        // The resting line is one height whoever is in the table, so it is
-        // asked of the footer's presence rather than of the table's groups —
-        // a table with every product taken out still has a total to draw.
+        // A table with every product taken out still has a total to draw.
         guard showsQuotaTable else { return PanelMetrics.restingFooterHeight }
         let table = quotaTableProducts
         return PanelMetrics.footerHeight(
@@ -3722,10 +1999,7 @@ final class MonitorStore: ObservableObject {
     }
 
     var expandedContentHeight: CGFloat {
-        // The About panel replaces the body rather than standing on top of it,
-        // so it replaces the arithmetic too: nothing below is asked, and the
-        // list, the queue and the footer stop deciding how tall the panel is
-        // for as long as the mark is lit.
+        // The About panel replaces the body, so it replaces the height arithmetic too.
         guard !isShowingAbout else { return PanelMetrics.aboutPanelHeight }
         return PanelMetrics.expandedContentHeight(
             liveRowCount: sessions.count,
@@ -3737,14 +2011,8 @@ final class MonitorStore: ObservableObject {
         )
     }
 
-    /// What the live list asks for, and the room it is drawn in.
-    ///
-    /// **Both are read here rather than measured again in the view.** They are
-    /// the same two calls ``expandedContentHeight`` above is sized from, and
-    /// the panel is only as tall as it is because of them: a list that reaches
-    /// for `PanelMetrics` on its own arguments is free to disagree with the
-    /// window it is standing in, and it did — an open question got a panel
-    /// sized for its `400` pt row and a viewport still capped at `240`.
+    /// What the live list asks for, and the room it is drawn in. Read here, from the same calls
+    /// ``expandedContentHeight`` uses: measuring in the view gave a `400` pt row a `240` viewport.
     var sessionListContentHeight: CGFloat {
         PanelMetrics.sessionListContentHeight(
             liveRowCount: sessions.count,
@@ -3763,36 +2031,20 @@ final class MonitorStore: ObservableObject {
 
     // MARK: - The open row
 
-    /// The row whose request is open, if one is.
-    ///
-    /// **One at a time** (`answer-in-notch.md` §8.2): an open row is the
-    /// subject, and two of them would be two subjects. Not persisted — §10 says
-    /// text and part-answered sets stay with a row *for as long as that row
-    /// lives*, and `artifacts.md` records that no hook payload ever reaches
-    /// disk, which this is one of.
+    /// The row whose request is open; one at a time (`answer-in-notch.md` §8.2). Not persisted:
+    /// hook payloads never reach disk (`artifacts.md`).
     @Published private(set) var openRowID: String?
 
-    /// The session that row belongs to, if it is still on the list.
-    ///
-    /// Reading it through the list rather than holding the row is what makes
-    /// §8's *settled elsewhere* free: when the request goes, the row goes with
-    /// it and there is nothing to reconcile.
+    /// Read through the list, so a request settled elsewhere closes the row with nothing to
+    /// reconcile (§8).
     var openSession: MonitoredSession? {
         guard let openRowID else { return nil }
         return sessions.first { $0.id == openRowID }
     }
 
-    /// The request the open row is showing.
-    ///
-    /// **Pinned to the one the person is reading** (package 2, 2026-09-12): a
-    /// row can hold several requests and the product selects which it opens
-    /// first (``MonitoredSession/requests``), but a selection that moved under
-    /// a reader's eye -- a newer, higher-ranked arrival, or an answer of this
-    /// one from here that leaves it readable but no longer first -- would put
-    /// a different body where the one being read was. So while the request
-    /// the drafts belong to is still among the row's live requests it is the
-    /// one shown; only its resolution moves the row on, to whichever the
-    /// product now puts first.
+    /// The request the open row is showing, pinned to the one being read (package 2,
+    /// 2026-09-12): while the drafts' request is still live it stays shown, even if the product
+    /// now ranks another first (``MonitoredSession/requests``). Only its resolution moves on.
     var openRequest: AgentRequest? {
         guard let openRowID, let session = openSession else { return nil }
         if let asked = answerProgress[openRowID]?.request,
@@ -3821,49 +2073,21 @@ final class MonitorStore: ObservableObject {
         answerRevision &+= 1
     }
 
-    /// The last body laid out, and what it was laid out from.
-    ///
-    /// Keyed on its inputs rather than invalidated by hand. The three of them
-    /// are the whole of what ``openRowBody`` is a function of, the width is a
-    /// constant, and a cache that re-derives its own key cannot be left stale
-    /// by a route somebody forgot — which a `didSet` on four separate
-    /// mutations would be.
+    /// The last body laid out, keyed on its inputs so no mutation route can leave it stale.
     private var laidOutBody: (key: RequestBodyKey, layout: RequestBodyLayout?)?
 
-    /// Everything ``openRowBody`` is a function of.
-    ///
-    /// Comparing it is a string compare against storage the row is still
-    /// holding, so a hit costs a pointer test rather than a measurement.
     private struct RequestBodyKey: Equatable {
         let request: AgentRequest
         let question: Int
         let expandedOptions: Set<Int>
     }
 
-    /// How many bodies this store has actually laid out.
-    ///
-    /// Not diagnostics: it is the only way to state ``openRowBody``'s invariant
-    /// as a test, because a cached layout and a recomputed one are the same
-    /// value and differ only in what they cost. Never published — reading a
-    /// body must not invalidate the panel that is reading it.
+    /// How many bodies this store has laid out, so a test can assert ``openRowBody``'s caching.
+    /// Never published: reading a body must not invalidate the panel reading it.
     private(set) var bodyLayoutCount = 0
 
-    /// What the open row's body is, laid out at the width it draws in.
-    ///
-    /// One question of a set at a time (§5.3), which is why the count on the
-    /// caption line is a drawn element rather than an ornament: an answer that
-    /// appears to do nothing looks like a failure without it.
-    ///
-    /// **Laid out once per change, not once per read** — the layout is text
-    /// measurement and it is the most expensive thing this store does, so a
-    /// property that ran it on every access was a property nobody could afford
-    /// to read twice. Everything that draws an open row reads it, and so does
-    /// every height the panel is sized by (``openRowHeight``,
-    /// ``sessionListContentHeight``, ``sessionViewportHeight``,
-    /// ``expandedContentHeight``): **48** full layouts for one open, **26** for
-    /// one option click, **one per keystroke**, and **24** over a second of
-    /// scrolling the list past an open row — measured on Release, 2026-09-07,
-    /// at `14 ms` each.
+    /// The open row's body at its drawn width, laid out once per change: every height accessor
+    /// reads it, and uncached it ran 48 layouts per open at `14 ms` each (Release, 2026-09-07).
     var openRowBody: RequestBodyLayout? {
         guard let request = openRequest else { return nil }
         let key = RequestBodyKey(
@@ -3880,36 +2104,25 @@ final class MonitorStore: ObservableObject {
         return layout
     }
 
-    /// Which question of a set the body is showing, from the top.
     var openQuestionIndex: Int {
         guard let openRowID else { return 0 }
         return answerProgress[openRowID]?.questionIndex ?? 0
     }
 
-    /// What the open row's answers say, in the position the body is showing.
-    ///
-    /// **The one place the drawn words come from**, for the same reason
-    /// ``openRowBody`` is the one place the drawn body comes from: the
-    /// affirmative on a set is `Next` or `Submit` by where the set stands
-    /// (§5.8), and a view reading the shape off the request without the index
-    /// would draw `Next` on the question the set leaves from.
+    /// The open row's answer words at the body's position: `Next` or `Submit` depends on the
+    /// index (§5.8), so views must not read the shape off the request alone.
     var openAnswerRow: AnswerRowShape? {
         openRequest?.answerRow(showing: openQuestionIndex)
     }
 
-    /// How tall the open row is, or nil where no row is open.
     var openRowHeight: CGFloat? {
         guard openSession != nil else { return nil }
         return PanelMetrics.openRowFixedHeight + (openRowBody?.drawnHeight ?? 0)
             + (openRequestCount > 1 ? PanelMetrics.requestNavigationHeight + PanelMetrics.sessionRowLineSpacing : 0)
     }
 
-    /// Opens this row's request, or closes it if it is the one already open.
-    ///
-    /// **A row with nothing to show does not open.** The mark is a second target
-    /// only where there is a second thing to reach; a row whose payload carried
-    /// nothing readable stays what it has always been — one target, leading to
-    /// the product (`answer-in-notch.md` §3).
+    /// Opens this row's request, or closes it if already open. A row with no request does not
+    /// open (`answer-in-notch.md` §3).
     func toggleOpenRow(_ session: MonitoredSession) {
         guard session.request != nil else { return }
         if openRowID == session.id {
@@ -3919,46 +2132,26 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Whether the panel is holding the keyboard for a row.
-    ///
-    /// Hover browses and cannot latch, however long it lasts; only a click on a
-    /// mark makes this panel key (§9.4).
+    /// Whether the panel holds the keyboard for a row. Only a click on a mark latches; hover
+    /// never does (§9.4).
     var isLatched: Bool { openRowID != nil }
 
-    /// Collapses the open row, sending nothing and keeping the row where it was.
-    ///
-    /// The chevron's own action, and `⎋`'s. **What was typed is kept** — §10:
-    /// text and any part-answered set stay with their row for as long as that
-    /// row lives, so reopening resumes exactly where it stopped.
+    /// Collapses the open row without sending; the chevron's action and `⎋`'s. What was typed is
+    /// kept for the row's lifetime (§10).
     func closeOpenRow() {
         guard openRowID != nil else { return }
         openRowID = nil
         armingTask?.cancel()
         armingTask = nil
         isAffirmativeArmed = false
-        // ``isAnswerInFlight`` is deliberately left alone: it says an answer is
-        // still on its way to a product, which is a fact about this app rather
-        // than about the row it was typed into. Clearing it here would let the
-        // same ticket be answered twice by closing the row and opening it again
-        // mid-flight, and it is cleared where it becomes untrue — on landing.
+        // ``isAnswerInFlight`` stays set: clearing it would let a ticket be answered twice by
+        // closing and reopening the row mid-flight. It clears on landing.
     }
 
     // MARK: - Answering
 
-    /// What has been typed into one row's field, and what part of its set has
-    /// been answered.
-    ///
-    /// **Keyed by row and kept for the row's lifetime** (§10): closing sends
-    /// nothing and keeps what was typed, so reopening resumes rather than
-    /// starting again. It goes when the row goes, and it never reaches disk —
-    /// a note about a request is the request's (ADR 0015).
-    ///
-    /// **Not published, and that is a rendering decision rather than an
-    /// oversight.** The field is an AppKit text view drawing its own glyphs
-    /// (§13.2), so a keystroke is not a layout change and must not invalidate a
-    /// panel that measures text on every pass (`AGENTS.md` §7). What SwiftUI
-    /// needs to know about typing is only ``answerGround``, which is published
-    /// and changes at most once per row.
+    /// Typed text and set progress per row, kept for the row's lifetime, never on disk (§10,
+    /// ADR 0015). Not published: a keystroke must not re-render the panel (`AGENTS.md` §7).
     private var answerProgress: [String: AnswerProgress] = [:]
     /// Drafts for other live requests on the same row. Pruned on each snapshot.
     private var savedAnswerProgress: [String: [AnswerProgress]] = [:]
@@ -3978,121 +2171,54 @@ final class MonitorStore: ObservableObject {
         answerDraftGeneration &+= 1
     }
 
-    /// Every handle an answer has been sent on, whatever came back.
-    ///
-    /// **One attempt per handle, decided here as well as at the channel**
-    /// (`answer-in-notch.md` §8). ``isAnswerInFlight`` stops a second click
-    /// while the first is on its way; this stops one after it has landed,
-    /// because an answer that may have arrived -- an uncertain write, a peer
-    /// that went away mid-body -- must not be sent twice, and a row whose
-    /// product still publishes the handle would otherwise offer exactly that.
-    /// The one outcome that does not spend a handle is an operation the
-    /// channel does not carry, which wrote nothing. Pruned with the rows.
+    /// Every handle an answer has been sent on: one attempt per handle (`answer-in-notch.md` §8),
+    /// except an unsupported operation, which wrote nothing. Pruned with the rows.
     private var spentAnswerHandles: Set<AnswerHandle> = []
 
-    /// Which answer the white ground is on — and so what `⏎` will do.
-    ///
-    /// **Recomputed from what has been typed, never set from anywhere else.**
-    /// §6: it begins on the affirmative, and exactly one force moves it in this
-    /// version — the person's own typing, onto the answer that carries text,
-    /// because a note cannot travel with a yes. Deriving it is what makes the
-    /// drawing and the return key incapable of disagreeing: there is no second
-    /// state to keep in step, which is §6.1's *the ground is the state* taken
-    /// literally. The arrows are the second force (§9.3), and they are what will
-    /// make this a value somebody sets.
+    /// Which answer the white ground is on, and so what `⏎` does. Derived from what has been
+    /// typed, never set, so the drawing and the return key cannot disagree (§6, §6.1).
     @Published private(set) var answerGround: AnswerGround = .affirmative
 
-    /// What has changed about the open row that its identity cannot say.
-    ///
-    /// **A revision rather than the state itself.** The state is
-    /// ``answerProgress``, which the field writes into on every keystroke —
-    /// publishing it would re-render the whole panel per character, which is
-    /// exactly the cost `AGENTS.md` §7 exists to keep off this surface. This is
-    /// bumped only when something *drawn* moves: the question of a set on
-    /// screen, which changes the row's height and so the window's, and a tick.
+    /// Bumped only when something drawn changes (the question on screen, and so the height);
+    /// publishing ``answerProgress`` would re-render per keystroke (`AGENTS.md` §7).
     @Published private(set) var answerRevision = 0
 
-    /// How many times the store has replaced the field's text itself.
-    ///
-    /// **The field is an AppKit text view that owns its own string**, and it is
-    /// refilled only when this or the row changes — refilling it on every pass
-    /// would put the caret back to the start under somebody's hands. So the two
-    /// places where the *store* decides what the field holds have to say so:
-    /// an answer that landed clears it, and the next question of a set starts
-    /// empty. Measured before this existed: a row answered and then re-opened
-    /// by the advance came back holding the note that had already been sent.
+    /// Bumped when the store replaces the field's text (an answer landed, a new question). The
+    /// AppKit field refills only on this or a row change, or the caret would reset.
     @Published private(set) var answerDraftGeneration = 0
 
-    /// Whether an answer is on its way to the product (§8 state 01).
-    ///
-    /// The field and both controls drop to `45%` and stop taking keys while it
-    /// is true. Nothing resizes and nothing new is drawn: the wait is a few
-    /// hundred milliseconds, and anything drawn to fill it would outlive the
-    /// thing it described.
+    /// Whether an answer is on its way to the product (§8 state 01). The field and controls drop
+    /// to `45%` and stop taking keys; nothing resizes.
     @Published private(set) var isAnswerInFlight = false
 
-    /// Whether the affirmative has finished arriving, and may be taken (§6.3).
-    ///
-    /// **A ground that has not finished arriving is not a key and not a
-    /// target.** Answering one request opens the next row (§8.2), which puts
-    /// something the reader has never seen under a pointer that is already
-    /// there — and the affirmative that arrives lands exactly where the
-    /// affirmative just clicked was, so a pointer has to do nothing at all to
-    /// answer twice. The ground is armed by the arrival it already animates
-    /// rather than by a delay of its own: nothing is drawn that was not being
-    /// drawn, and nothing is delayed that the eye was not already waiting for.
-    ///
-    /// It gates **every** answer rather than the affirmative alone, because the
-    /// row that arrives is what the pointer is over: on a question the control
-    /// under it is `Next` or `Submit`, and on an approval it may be either.
-    /// Refusing is the
-    /// cheap direction (§6.4) and costs nothing by waiting `200` ms for a row
-    /// nobody has read yet.
+    /// Whether the affirmative has finished arriving and may be taken (§6.3). Answering opens
+    /// the next row under the same pointer (§8.2), so every answer waits for the arrival.
     @Published private(set) var isAffirmativeArmed = false
     private var armingTask: Task<Void, Never>?
 
-    /// What a row's preview line says instead of its own preview, once an
-    /// answer has left it.
-    ///
-    /// **§8's states 02 and 03 are one mechanism.** Either way the row goes back
-    /// to `80` and says one thing on the line it already draws: what was sent,
-    /// or that it was not. In the preview's **own ink** — this app has no
-    /// failure ink, and inventing one for a transport error would make it louder
-    /// than a Turn that genuinely failed, which is drawn as ordinary preview
-    /// text under an unchanged marker.
-    ///
-    /// It stands only until the product says something newer, which is what
-    /// ``forgetNoticesTheProductHasOvertaken()`` is for.
+    /// What a row's preview line says instead of its preview once an answer has left it (§8
+    /// states 02 and 03), in the preview's own ink: there is no failure ink. Stands until
+    /// ``forgetNoticesTheProductHasOvertaken()`` clears it.
     @Published private(set) var answerNotices: [String: AnswerNotice] = [:]
 
-    /// What one row's preview line draws: the last thing this app said about
-    /// it, the product's own preview, or ``RowContentFallback/liveProgress``
-    /// when neither exists — so the line is never empty on a row that draws
-    /// one at all.
+    /// The row's notice, the product's preview, or ``RowContentFallback/liveProgress``: never
+    /// empty.
     func previewLine(for session: MonitoredSession) -> String {
         answerNotices[session.id]?.text ?? session.preview ?? RowContentFallback.liveProgress
     }
 
-    /// What is in the open row's field, for the view that draws it.
     var answerDraft: String {
         guard let openRowID else { return "" }
         return answerProgress[openRowID]?.draft ?? ""
     }
 
-    /// The field reporting what it now holds.
-    ///
-    /// The text view owns the text; this owns what the text *means* for the
-    /// ground. Called on every edit, and cheap by construction — the published
-    /// value changes only when the field stops or starts being
-    /// empty.
+    /// The field reporting what it now holds, on every edit; the published value changes only
+    /// at the empty/non-empty boundary.
     func answerDraftChanged(to text: String) {
         guard let openRowID else { return }
         let wasTyped = questionUsesTypedAnswer
         answerProgress[openRowID, default: AnswerProgress()].draft = text
         refreshAnswerGround()
-        // Only the empty/non-empty boundary changes whether the affirmative
-        // is available on a question with nothing ticked. AppKit continues to own
-        // per-character drawing.
         if wasTyped != questionUsesTypedAnswer { answerRevision &+= 1 }
     }
 
@@ -4108,9 +2234,7 @@ final class MonitorStore: ObservableObject {
 
         switch ground {
         case .affirmative where shape.refusal == nil:
-            // A question's one control answers rather than grants: what it
-            // sends is what the person put in — the field's words, or the
-            // options they ticked.
+            // A question's control sends what the person put in: the field's words or ticked options.
             answerTheQuestion(
                 request,
                 of: session,
@@ -4120,8 +2244,7 @@ final class MonitorStore: ObservableObject {
         case .affirmative:
             send(.grant, to: request, for: session, on: ticket, saying: shape.affirmativeNotice)
         case .refusal:
-            // A form with no refusal has no refusal to take, and one whose
-            // refusal takes no words draws no field to have typed into.
+            // No refusal to take; and a refusal with no placeholder draws no field to read.
             guard shape.refusal != nil else { return }
             let note = shape.placeholder == nil
                 ? "" : answerDraft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -4138,16 +2261,8 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// The option at that position in the question showing, ticked as a click
-    /// ticks it. Selection never submits.
-    ///
-    /// **Neither an empty field nor a single choice is a condition on it any
-    /// more** (§9.2). Both were: the digit reached the store out of the field's
-    /// own `keyDown`, so it had to give the key back whenever the field might
-    /// want it — which is *any* multiple-choice question, and any question at
-    /// all once a character had been typed. The digit now arrives only when
-    /// nothing holds the caret, so there is nothing to give it back to, and it
-    /// ticks on `multiSelect` exactly as a click does (§5.5).
+    /// Ticks the option at that position in the question showing, as a click does
+    /// (`multiSelect`, §5.5). Never submits. Keys arrive only when nothing holds the caret (§9.2).
     @discardableResult
     func takeNumberedOption(_ number: Int) -> Bool {
         guard !isAnswerInFlight, isAffirmativeArmed else { return false }
@@ -4157,16 +2272,11 @@ final class MonitorStore: ObservableObject {
         return true
     }
 
-    /// A key the panel took because nothing in it holds the caret (§9.2).
+    /// A key the panel took because nothing in it holds the caret (§9.2); the one place the
+    /// unfocused keyboard is decided.
     ///
-    /// **The one place the unfocused keyboard is decided**, so the window that
-    /// receives the key decodes an `NSEvent` and nothing more: what each key
-    /// means is here, where it can be asked without one.
-    ///
-    /// - Returns: whether anything happened. The window does not act on it —
-    ///   every key stops at ``OverlayPanel/keyDown(with:)`` either way, because
-    ///   past there is a beep — but it is what makes the whole of this panel's
-    ///   keyboard assertable without an `NSEvent`.
+    /// - Returns: whether anything happened, for tests. Every key stops at
+    ///   ``OverlayPanel/keyDown(with:)`` either way.
     @discardableResult
     func takeKey(_ key: PanelKey) -> Bool {
         guard !isAnswerInFlight else { return false }
@@ -4186,26 +2296,15 @@ final class MonitorStore: ObservableObject {
 
     // MARK: - Walking a set backwards
 
-    /// Whether the body can step back to the question before the one showing.
-    ///
-    /// **The one control that is always there while there is a question behind
-    /// this one** (§5.7). It is not gated on ``isAffirmativeArmed``: that arms
-    /// a *ground*, and going back neither holds one nor sends anything, so the
-    /// arrival §6.3 guards — something nobody has read appearing under a
-    /// pointer already on it — is not the arrival this is.
+    /// Whether the body can step back a question (§5.7). Not gated on ``isAffirmativeArmed``:
+    /// going back sends nothing.
     var canGoBackAQuestion: Bool {
         guard !isAnswerInFlight, openRequest?.askedQuestions.isEmpty == false else { return false }
         return openQuestionIndex > 0
     }
 
-    /// Whether the body can step forward again to a question already reached.
-    ///
-    /// Answerable sets revisit only reached questions (§5.7); reading-only
-    /// sets may reach every question without filling or submitting an answer.
-    /// It returns to one the set has already drawn, which is why it needs no
-    /// answer of its own to be safe — and it still asks for one, on the same
-    /// gate the affirmative uses, because leaving a question unanswered is what would
-    /// let a short set go back to the product.
+    /// Whether the body can step forward to a question already reached (§5.7). Answerable sets
+    /// also need the affirmative's gate, so a short set cannot go back to the product.
     var canGoForwardAQuestion: Bool {
         guard !isAnswerInFlight, let request = openRequest,
               let openRowID, let progress = answerProgress[openRowID] else { return false }
@@ -4220,22 +2319,13 @@ final class MonitorStore: ObservableObject {
         drawQuestion(openQuestionIndex - 1)
     }
 
-    /// Draws the next question when the reading or answering rules permit it.
     func goForwardAQuestion() {
         guard canGoForwardAQuestion else { return }
         drawQuestion(openQuestionIndex + 1)
     }
 
-    /// `←` and `→` walk the set, while nothing holds the caret.
-    ///
-    /// **The digits' own rule, on the digits' own reasoning** (§9.2): a key is
-    /// the field's for as long as the field has the caret, and the panel's when
-    /// it does not. It used to be conditioned on the field being *empty*
-    /// instead, which took `←` off a person editing what they had typed — the
-    /// one state in which an arrow most obviously means the caret.
-    ///
-    /// `Back` remains the control that works whatever has focus; the arrow is a
-    /// shortcut over it and never the only way.
+    /// `←` and `→` walk the set while nothing holds the caret (§9.2). `Back` works whatever has
+    /// focus.
     ///
     /// - Returns: whether the set actually moved.
     @discardableResult
@@ -4251,13 +2341,8 @@ final class MonitorStore: ObservableObject {
         return true
     }
 
-    /// Puts another question of the set on screen, keeping every draft.
-    ///
-    /// Nothing is cleared and nothing is recorded: the drafts are the answers
-    /// (§5.7), so a step is only a change of which one is drawn. It does not
-    /// re-arm the affirmative — ``armTheAffirmativeOnArrival(of:)`` exists for a
-    /// question a person has not asked for and has never seen, and this is the
-    /// opposite of both.
+    /// Puts another question of the set on screen, keeping every draft (§5.7). Does not re-arm
+    /// the affirmative: the person asked for this question.
     private func drawQuestion(_ index: Int) {
         guard let openRowID,
               let questions = openRequest?.askedQuestions,
@@ -4266,12 +2351,10 @@ final class MonitorStore: ObservableObject {
               progress.questionIndex != index else { return }
         progress.questionIndex = index
         answerProgress[openRowID] = progress
-        // The field holds the question that was on screen, and the store is now
-        // the one deciding what it holds instead.
+        // The store now decides what the field holds.
         answerDraftGeneration &+= 1
         refreshAnswerGround()
-        // A different question is a different height, so the row and the window
-        // it stands in are both remeasured.
+        // A different question is a different height.
         answerRevision &+= 1
     }
 
@@ -4285,8 +2368,8 @@ final class MonitorStore: ObservableObject {
         !answerDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
-    /// Whether the question showing has an option ticked, which is what makes
-    /// the text in the field beside it moot (§5.4).
+    /// Whether the question showing has an option ticked, which makes the field's text moot
+    /// (§5.4).
     var questionHasASelection: Bool {
         openRowBody?.options.contains { isOptionTicked($0.id) } ?? false
     }
@@ -4296,9 +2379,7 @@ final class MonitorStore: ObservableObject {
         let questions = request.askedQuestions
         guard !questions.isEmpty else { return true }
         guard let openRowID else { return false }
-        // The same gate that decides what finally goes back (§5.7 rule 06),
-        // asked of the question on screen: words count only where the
-        // question takes them, and a tick only on an option it still offers.
+        // The same gate as the final answer (§5.7 rule 06).
         let position = min(max(openQuestionIndex, 0), questions.count - 1)
         return Self.answer(
             to: questions[position],
@@ -4330,22 +2411,9 @@ final class MonitorStore: ObservableObject {
         answerRevision &+= 1
     }
 
-    /// Answers the question on screen, and either draws the next or sends the
-    /// set.
-    ///
-    /// **Answering one question of a set sends nothing** (§5.3): the set goes
-    /// back as one `updatedInput`, so `⏎` on question two draws question three
-    /// — the body alone changes, the head and the answer row stand still — and
-    /// the count is what makes that legible.
-    ///
-    /// Non-whitespace text replaces every selected label. Clearing it restores
-    /// the selection; neither path creates an annotation on a chosen answer.
-    ///
-    /// **The answers are read out of the drafts at the moment the set leaves**,
-    /// never snapshotted question by question on the way past (§5.7). While
-    /// nobody goes back the two are the same value; when somebody does, a
-    /// snapshot would be the older of the two answers to a question they
-    /// deliberately came back to change.
+    /// Answers the question on screen, then draws the next or sends the set as one
+    /// `updatedInput` (§5.3). Text replaces selected labels. Answers are read from the drafts
+    /// when the set leaves, so a revisited answer wins (§5.7).
     private func answerTheQuestion(
         _ request: AgentRequest,
         of session: MonitoredSession,
@@ -4364,23 +2432,15 @@ final class MonitorStore: ObservableObject {
 
         if position + 1 < questions.count {
             progress.questionIndex = position + 1
-            // The frontier only ever moves forward, and only here: `Next` is
-            // the one act that reaches a question for the first time (§5.7).
+            // The frontier moves forward only here: `Next` reaches a question first (§5.7).
             progress.furthestQuestionReached = max(
                 progress.furthestQuestionReached, position + 1
             )
             answerProgress[openRowID] = progress
-            // The field holds the question that was on screen; the one arriving
-            // has a draft of its own, which is empty until it has been reached
-            // before.
             answerDraftGeneration &+= 1
             refreshAnswerGround()
-            // The body is a question taller or shorter than the one it
-            // replaces, and the window has to be remeasured for it.
             answerRevision &+= 1
-            // The next question arrives on the same curve a row does, and its
-            // affirmative is armed by that arrival rather than by a delay of its
-            // own (§6.3).
+            // Armed by the arrival, not a delay of its own (§6.3).
             armTheAffirmativeOnArrival(of: openRowID)
             return
         }
@@ -4399,32 +2459,9 @@ final class MonitorStore: ObservableObject {
         )
     }
 
-    /// What one question's draft answers, or `nil` while it answers nothing.
-    ///
-    /// The single place a draft becomes an answer, so the gate on leaving a
-    /// question and the value that finally goes back cannot disagree — which is
-    /// what keeps a set that walks backwards from sending a short one: a
-    /// question emptied after being answered stops being passable at exactly
-    /// the moment it stops being answered.
-    ///
-    /// **A chosen option is the answer, and typed text is what stands in when
-    /// nothing was chosen** (§5.4). The priority is that way round because a
-    /// selection is an unambiguous act on an option the product itself offered,
-    /// and text left in the field is as often a half-written thought as an
-    /// answer — the person who ticks a box after writing one has decided, and
-    /// the tick is the decision.
-    ///
-    /// **What travels is what was done, not how the product spells it**: the
-    /// chosen options by their identity in the set, in the order the product
-    /// listed them (§5.5), or the words typed. The product's own encoder joins
-    /// labels or keys by text (``ClaudeCodeRequestAnswering``), so an option
-    /// labelled `A, B`, two options wearing one label, and a person typing a
-    /// label rather than choosing it are all told apart until the last moment
-    /// the product's format allows.
-    ///
-    /// A tick on an option this question no longer offers is not an answer --
-    /// it was taken on a different set -- and words on a question that takes
-    /// none are not either. Neither can leave this function.
+    /// What one question's draft answers, or `nil`; the single place a draft becomes an answer.
+    /// A chosen option wins over text (§5.4); options travel by identity in listed order (§5.5)
+    /// until ``ClaudeCodeRequestAnswering`` encodes them. Stale ticks never leave.
     private static func answer(
         to question: AgentQuestion,
         from draft: AnswerProgress.Draft
@@ -4447,29 +2484,23 @@ final class MonitorStore: ObservableObject {
         on ticket: AnswerHandle,
         saying notice: String
     ) {
-        // What the row offers is derived from these operations, so this is
-        // ordinarily already true; it is checked here so that no caller of
-        // this method -- a key, a click, a specimen -- can send what the
-        // connection was never declared for. The boundary checks it again.
+        // Checked here too so no caller (key, click, specimen) can send an undeclared operation.
+        // The boundary checks it again.
         guard request.operations.permits(answer),
               // And once per handle, whatever comes back.
               spentAnswerHandles.insert(ticket).inserted else { return }
         isAnswerInFlight = true
         let agent = session.agent
         let rowID = session.id
-        // What was answered, stripped of its connection, so a result landing
-        // on a row that another request has since taken annotates nothing.
+        // Stripped of its connection, so a result landing on a row another request has since taken
+        // annotates nothing.
         let asked = request.asked
         let previewWhenWritten = session.preview
         Task { [weak self] in
-            // A product with no channel answers nothing, which is what a
-            // handle nobody holds says.
             let outcome = await self?.answerer(for: agent)?
                 .answer(answer, on: ticket) ?? .expired(.notHeld)
-            // The store is `@MainActor` and this task body is not: under
-            // `SWIFT_APPROACHABLE_CONCURRENCY` the hop back is elided, and a
-            // panel property written off the main actor is drawn one publish
-            // stale (`AGENTS.md` §7).
+            // Hop back explicitly: under `SWIFT_APPROACHABLE_CONCURRENCY` it is elided, and a panel
+            // property written off the main actor draws one publish stale (`AGENTS.md` §7).
             await MainActor.run { [weak self] in
                 self?.answerLanded(
                     outcome,
@@ -4484,24 +2515,9 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// What the row becomes once the answer has either arrived or not (§8).
-    ///
-    /// **The panel does not close** (§8.3): closing on send would shut it in
-    /// front of a second request nobody had seen. With nothing left waiting it
-    /// unlatches instead — hands the keyboard back and starts answering the
-    /// pointer again — and that release is how it says you are finished.
-    ///
-    /// **The outcome is what the channel proved and the row says exactly
-    /// that** (``AnswerOutcome``): an answer that arrived says what was sent,
-    /// and every way it did not says which way, in the preview's own ink.
-    /// None of them moves the status -- native evidence alone does that
-    /// (§8.1) -- and none of them sends again.
-    ///
-    /// **A result for a request the row no longer holds annotates nothing.**
-    /// The row is `agent:threadID:turnID`, and while an answer was on its way
-    /// the product may have replaced the request on it; a notice about the
-    /// old one under the new one's words, or the new one's draft cleared for
-    /// the old one's success, would each be a sentence about the wrong thing.
+    /// What the row becomes once the answer has arrived or not (§8). The panel does not close
+    /// (§8.3); the row says what ``AnswerOutcome`` proved without moving status (§8.1); a result
+    /// for a request the row no longer holds annotates nothing.
     private func answerLanded(
         _ outcome: AnswerOutcome,
         rowID: String,
@@ -4512,8 +2528,7 @@ final class MonitorStore: ObservableObject {
         product: AgentKind
     ) {
         isAnswerInFlight = false
-        // Nothing was written and nothing spent; the channel may still take
-        // what it does carry.
+        // Nothing was written; the channel may still take what it does carry.
         if outcome == .unsupportedOperation { spentAnswerHandles.remove(handle) }
         guard let current = sessions.first(where: { $0.id == rowID }),
               current.requests.contains(where: { $0.asked == asked }) else {
@@ -4531,16 +2546,8 @@ final class MonitorStore: ObservableObject {
             previewWhenWritten: previewWhenWritten
         )
         if openRowID == rowID { closeOpenRow() }
-        // **The next request opens itself** (§8.2), with its affirmative
-        // unarmed — which is what stops the click that answered this one from
-        // answering that one. The advance is the whole notification: there is
-        // another, and here it is, already open and already legible.
-        //
-        // Only on an answer that arrived. Advancing past a row that has just
-        // said `Not sent` would hide the one line explaining why, and there is
-        // nothing to advance *from*: nothing was answered. The next may be on
-        // this same row: another request the product put behind the one just
-        // answered, which the row now opens to.
+        // The next request opens itself, unarmed, so the answering click cannot answer it (§8.2).
+        // Only on an answer that arrived, so `Not sent` stays visible. It may be on this same row.
         if arrived, let next = sessions.lazy.compactMap({ session -> (row: String, request: AgentRequest?)? in
             if session.id == rowID {
                 guard let other = session.requests.first(where: { $0.asked != asked && $0.canBeAnswered }) else {
@@ -4552,21 +2559,14 @@ final class MonitorStore: ObservableObject {
         }).first {
             openRow(next.row, showing: next.request)
         }
-        // The ticket has been spent either way, so what the mark says about this
-        // row is now out of date by one publish. Asking for the refresh is
-        // cheaper than teaching the projection to notice a connection closing.
+        // The ticket is spent, so the mark is one publish stale; refresh rather than teach the
+        // projection to notice a connection closing.
         requestRefresh()
     }
 
-    /// What the preview line says for an answer that did not arrive, in the
-    /// preview's own ink and the channel's own certainty (§8 state 03).
-    ///
-    /// Each sentence claims only what its outcome proved: a peer that went
-    /// away, a window that ran out, a handle nothing holds, a product's own
-    /// refusal in its own words, an operation the channel does not carry, or
-    /// a write nobody can vouch for -- which is the one that sends the person
-    /// to the product to look, because sending again is the one thing it
-    /// must not do.
+    /// The preview line for an answer that did not arrive (§8 state 03). Each sentence claims
+    /// only what its outcome proved; an uncertain write sends the person to the product rather
+    /// than inviting a resend.
     private static func noticeText(for outcome: AnswerOutcome, product: AgentKind) -> String {
         switch outcome {
         case .accepted, .sent:
@@ -4587,12 +2587,10 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Opens one row, and starts the arrival its affirmative is armed by.
+    /// Opens one row and starts the arrival that arms its affirmative.
     ///
-    /// - Parameter request: which of the row's requests to open, where the
-    ///   caller knows better than the product's own first -- the next one on
-    ///   a row whose first was just answered from here. The default is the
-    ///   product's first.
+    /// - Parameter request: which request to open, when the caller knows better than the
+    ///   product's first (the next one after an answer from here). Defaults to the first.
     private func openRow(_ id: String, showing request: AgentRequest? = nil) {
         selectProgress(for: id, request: request ?? sessions.first(where: { $0.id == id })?.request)
         openRowID = id
@@ -4605,11 +2603,8 @@ final class MonitorStore: ObservableObject {
         isAffirmativeArmed = false
         armingTask?.cancel()
         armingTask = Task { [weak self] in
-            // ``PanelMotion/duration`` rather than the injected clock, and
-            // `Task.sleep` rather than ``MonitorClock/sleep(seconds:)``: this
-            // is the length of a drawing, not a monitoring window, and it has
-            // to end when the animation the eye is following ends. A clock a
-            // test never advanced would leave an affirmative armed by nothing.
+            // ``PanelMotion/duration`` with `Task.sleep`, not the injected clock: this is the length of a
+            // drawing, and a clock a test never advanced would leave the affirmative unarmed.
             try? await Task.sleep(for: .seconds(PanelMotion.duration))
             guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
@@ -4619,7 +2614,6 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Puts the ground where what has been typed says it is.
     private func refreshAnswerGround() {
         let ground = AnswerGround.where(
             openRequest,
@@ -4628,38 +2622,20 @@ final class MonitorStore: ObservableObject {
         if answerGround != ground { answerGround = ground }
     }
 
-    /// Closes a row whose request has been settled somewhere else (§8 state 04).
+    /// Closes a row whose request was settled elsewhere, within one publish (§8 state 04),
+    /// discarding what was typed.
     ///
-    /// Granted in the product, cancelled, or the Thread gone: the row closes
-    /// **within one publish** and becomes whatever it now is. This is the one
-    /// close the user did not ask for, which is why it is the row changing state
-    /// rather than a message about a row — and what was typed goes with it,
-    /// because there is nothing left to send it to.
-    ///
-    /// The row that stayed and stopped asking, **and the row that left the list
-    /// altogether**.
-    ///
-    /// The second used to be skipped, on the reasoning that ``openSession``
-    /// reads through the list so a departed row already draws nothing. That is
-    /// true of the drawing and false of the latch: ``isLatched`` reads
-    /// ``openRowID`` itself, and a row that left without being closed keeps the
-    /// panel holding the keyboard over nothing at all -- measured on Release,
-    /// with the pointer well off the panel and the row's Thread gone, the panel
-    /// stayed expanded over an empty list; and with the product quit, it
-    /// collapsed to the pill and *still* held the keyboard, so keystrokes went
-    /// on reaching this app with nothing on screen to say why (§8 state 04).
+    /// Also a row that left the list: ``isLatched`` reads ``openRowID`` directly, and skipping it
+    /// kept the panel holding the keyboard over nothing, even collapsed (measured on Release).
     private func closeARowWhoseRequestHasGone() {
         guard let openRowID, !isAnswerInFlight else { return }
         if let session = sessions.first(where: { $0.id == openRowID }), let request = session.request {
-            // The request being read is still among the row's, so it stays
-            // on screen whatever the product now puts first (``openRequest``).
+            // The request being read is still live, so it stays on screen (``openRequest``).
             if let asked = answerProgress[openRowID]?.request,
                session.requests.contains(where: { $0.asked == asked }) {
                 return
             }
-            // Otherwise the row moves on to the product's first: the same id
-            // wearing another body is another request, and a tick taken on
-            // the old set does not travel onto the new one.
+            // Otherwise move to the product's first; ticks on the old set do not travel.
             if answerProgress[openRowID]?.request != request.asked {
                 selectProgress(for: openRowID, request: request)
                 answerRevision &+= 1
@@ -4673,12 +2649,7 @@ final class MonitorStore: ObservableObject {
         closeOpenRow()
     }
 
-    /// Drops every notice the product has since spoken over, and every notice
-    /// whose row has gone.
-    ///
-    /// A notice is the last thing *this app* said about a row; the product
-    /// saying anything at all is newer than that, and a row that has left takes
-    /// its notice with it.
+    /// Drops every notice the product has since spoken over, and every notice whose row has gone.
     private func forgetNoticesTheProductHasOvertaken() {
         var previews: [String: String?] = [:]
         for session in sessions { previews[session.id] = session.preview }
@@ -4696,8 +2667,7 @@ final class MonitorStore: ObservableObject {
             } ?? []
             savedAnswerProgress[id] = live.isEmpty ? nil : live
         }
-        // A spent handle is remembered for as long as some row still offers
-        // it; once no product publishes it, nothing could send on it again.
+        // Remembered while some row still offers the handle.
         spentAnswerHandles = spentAnswerHandles.filter { handle in
             sessions.contains { $0.requests.contains { $0.answerHandle == handle } }
         }
@@ -4712,11 +2682,8 @@ final class MonitorStore: ObservableObject {
             centerOcclusionWidth: selectedDisplay?.centerOcclusionWidth ?? 0,
             compactHeight: compactHeight,
             status: status,
-            // Every mark the surface *could* draw. The resting mark counts as
-            // one, because it takes the single slot rather than adding one
-            // beside it. What the collapsed notched bar is actually drawing is
-            // `drawnMarkCount` below -- the two differ only where the wings
-            // have been given up.
+            // Every mark the surface could draw (resting counts as one); `drawnMarkCount` is what the
+            // notched bar draws, which differs only with the wings given up.
             matrixCount: presenceMarks.count,
             sessionCount: aggregateSessionCount,
             drawsMark: drawsCompactMarks,
@@ -4725,12 +2692,8 @@ final class MonitorStore: ObservableObject {
         )
     }
 
-    /// Where the panel body's trailing edge has to land, in screen coordinates.
-    ///
-    /// Non-`nil` only for a notched compact panel, which is pinned to the
-    /// cut-out. Everything else is centred on the display: an expanded panel is
-    /// far wider than the cut-out and reads as a sheet under the menu bar, not
-    /// as an extension of the notch.
+    /// Where the panel body's trailing edge lands, in screen coordinates. Non-`nil` only for a
+    /// notched compact panel pinned to the cut-out; everything else is centred.
     var currentPanelTrailingAnchor: CGFloat? {
         guard !isExpanded,
               let occlusionMaxX = selectedDisplay?.centerOcclusionMaxX else {
@@ -4743,13 +2706,12 @@ final class MonitorStore: ObservableObject {
             )
     }
 
-    /// The contour's upper fillet on the selected display, which is also the
-    /// shoulder the window has to leave outside the body on each side.
+    /// The contour's upper fillet, which is also the shoulder the window leaves outside the body
+    /// on each side.
     var surfaceShoulderRadius: CGFloat {
         PanelMetrics.surfaceShoulderRadius(panelHeight: compactHeight)
     }
 
-    /// The contour's lower corners on the selected display.
     var surfaceBottomCornerRadius: CGFloat {
         PanelMetrics.surfaceBottomCornerRadius(panelHeight: compactHeight)
     }
@@ -4787,33 +2749,16 @@ final class MonitorStore: ObservableObject {
         selectedDisplayID = nextSelection
     }
 
-    /// **Covered, the panel waits for a click** (`cover-the-words.md` §6).
-    ///
-    /// This is the half of ``privacyMode`` that answers the case it exists
-    /// for, and it costs no pixels. The component stands over the cut-out and
-    /// both shoulders, so a pointer on its way to a right-hand menu bar item
-    /// rests there several times an hour — and ``MonitorTiming/hoverExpandDelay``
-    /// is `0.15` s. What unfurls is the prompt somebody typed and the model's
-    /// live answer to it. Covered, that crossing does nothing at all, and
-    /// ``openFromCollapsed()`` is the only way in.
-    ///
-    /// **Only the opening is gated.** ``pointerExitedPanel()`` is untouched:
-    /// a panel opened by a press still closes when the pointer leaves, and
-    /// still refuses to close over a row somebody is reading.
+    /// Covered, hovering does not open the panel (`cover-the-words.md` §6): a pointer crossing
+    /// to the menu bar would unfurl the prompt after `0.15` s
+    /// (``MonitorTiming/hoverExpandDelay``). ``openFromCollapsed()`` is the only way in. Closing
+    /// via ``pointerExitedPanel()`` is unchanged.
     func pointerEnteredPanel() {
         isPointerOnPanel = true
         guard !privacyMode else {
-            // **An entry still answers a pending exit**, and skipping this is
-            // a bug rather than a saving. Expanding writes a bigger window,
-            // and SwiftUI rebuilds the tracking area around it: measured on
-            // the real panel, that delivers a spurious `exit` about `105 ms`
-            // after the resize and the matching `enter` about `112 ms` after
-            // that. On the ordinary path the entry cancels the exit's pending
-            // collapse for free, because ``scheduleHoverAction(after:action:)``
-            // begins by cancelling. Returning early here left the collapse
-            // standing, so a panel opened by a press shut itself a quarter of
-            // a second later — with the pointer still on it, and nothing to
-            // deliver another entry.
+            // An entry must still cancel a pending exit: expanding rebuilds the tracking area, which
+            // delivers a spurious `exit` ~`105 ms` after the resize and `enter` ~`112 ms` later
+            // (measured). Returning early shut a press-opened panel under a still pointer.
             cancelPendingHoverAction()
             return
         }
@@ -4822,13 +2767,8 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// The press that opens a covered panel, and nothing else.
-    ///
-    /// Guarded on both sides rather than left to the caller: it is a no-op
-    /// while the panel is already open, so a press landing on the band of an
-    /// expanded panel cannot re-assert a state it is already in, and a no-op
-    /// while nothing is covered, so the hover path stays the only way in
-    /// there. That keeps "how does this panel open" answerable in one place.
+    /// The press that opens a covered panel. A no-op when already open or not covered, so the
+    /// opening paths stay decided in one place.
     func openFromCollapsed() {
         guard privacyMode, !isExpanded else { return }
         cancelPendingHoverAction()
@@ -4837,44 +2777,16 @@ final class MonitorStore: ObservableObject {
 
     func pointerExitedPanel() {
         isPointerOnPanel = false
-        // **A row somebody is reading does not close because their pointer
-        // drifted** (`answer-in-notch.md` §10). A body of `140` points is read
-        // rather than glanced at, and moving to the keyboard is not a pointer
-        // movement while any drift is one. This holds even where there is
-        // nothing to type: a row that can only be read is the state a person
-        // spends longest on.
+        // A row somebody is reading does not close on pointer drift (`answer-in-notch.md` §10).
         guard openRowID == nil else { return }
         scheduleHoverAction(after: timing.hoverCollapseDelay) { store in
             store.isExpanded = false
         }
     }
 
-    /// Re-check the pointer against a panel that has just been resized.
-    ///
-    /// Hover reaches this store from an `NSTrackingArea`, and a tracking area
-    /// only speaks when the pointer *moves*. Shrink the window away from a
-    /// pointer that is standing still and no exit is ever delivered — and
-    /// because the pointer is outside the window by then, moving it away
-    /// afterwards delivers nothing either. The panel stays expanded until the
-    /// pointer next enters and leaves, which is the same failure
-    /// `OverlayPanelController.orderPanelToMatchConcealment` avoids by
-    /// collapsing on the way out.
-    ///
-    /// **Shutting the quota table no longer reaches this**, and that is a
-    /// property of the new footer rather than a case removed: the control rides
-    /// the spend line, which is the footer's first line, so the table opens
-    /// *beneath* the chevron and closing leaves the pointer `6` to `22` above
-    /// the panel's new bottom edge — inside it (`quota-footer-v2.md` §5). The
-    /// old footer folded the rules away *above* the line the chevron was on and
-    /// took 56pt out from under a pointer that was still by definition, which
-    /// is the trap this correction was written for.
-    ///
-    /// Only the leaving direction is corrected. A pointer that the panel has
-    /// *grown* under has not asked for anything, and re-expanding on it would
-    /// undo ``collapse()``, which is a decision taken for a reason the pointer
-    /// knows nothing about: the concealment watcher closes the panel when the
-    /// menu bar goes, and a pointer left resting on the notch by that must not
-    /// reopen what was just closed over a full-screen window.
+    /// Re-check the pointer after a resize: a tracking area reports only movement, so shrinking
+    /// away from a still pointer delivers no exit. Only leaving is corrected; re-expanding would
+    /// undo a ``collapse()`` such as the concealment watcher's.
     func panelResized(to windowFrame: NSRect, pointerAt pointer: NSPoint) {
         guard isExpanded else { return }
         guard !OverlayPanelLayout.bodyContainsPointer(
@@ -4883,18 +2795,13 @@ final class MonitorStore: ObservableObject {
             surfaceShoulder: surfaceShoulderRadius
         ) else { return }
 
-        // The ordinary dwell, not an immediate collapse: a pointer that moves
-        // back onto the panel while it is still animating cancels this the
-        // same way it cancels an exit the tracking area reported.
+        // The ordinary dwell, so a pointer moving back during the animation cancels it.
         pointerExitedPanel()
     }
 
     func collapse() {
         cancelPendingHoverAction()
-        // A panel that is closing cannot be holding a row open behind it, and
-        // the keyboard goes back with it -- `⎋` twice, a click outside, a
-        // navigation, the menu bar being concealed. The row keeps its place on
-        // the list; only its openness ends.
+        // Closing the panel ends the open row and returns the keyboard; the row keeps its place.
         openRowID = nil
         isExpanded = false
     }
@@ -4935,79 +2842,25 @@ final class MonitorStore: ObservableObject {
         requestRefresh()
     }
 
-    /// Takes one row off the list, at the user's asking.
+    /// Takes one row off the list at the user's asking, in any status: a Turn stuck open by a
+    /// defect is never Completed (``HookTurnState/heldTurnStart``).
     ///
-    /// **Any status, and it used to be Completed only.** The argument for the
-    /// restriction was that a running Turn has not told the user anything yet,
-    /// so a row dismissed by accident is one they cannot get back until it
-    /// ends — true, and the wrong thing to weigh it against. What it was
-    /// actually weighed against turned out to be a row that could not be got
-    /// rid of *at all*: a Turn stuck open by a defect is by definition never
-    /// Completed, so the one gesture that removes a row was unavailable in
-    /// exactly the state where a user most needs it, and the only way out was
-    /// to quit the app (a nested agent taking a thread's Turn over,
-    /// ``HookTurnState/heldTurnStart``). A control that works only when the app
-    /// is behaving is not an escape hatch.
-    ///
-    /// So the cost is accepted rather than argued away: dismissing a running
-    /// row does throw away a notice that has not arrived yet, and it is the
-    /// user's to throw. It is one right-click on a row they are looking at,
-    /// it names the Turn rather than the thread, and the thread's next Turn
-    /// draws a new row — so what an accident costs is one Turn's notice, and
-    /// the answer itself is still in the product, one click away on the same
-    /// row's thread.
-    ///
-    /// **What it does not do.** Nothing is deleted, in either product: the
-    /// thread, its Turn and its transcript are untouched. Nor is it a claim
-    /// that the user read the answer — the read routes decide that from the products' own
-    /// evidence, and this one is the user saying they are done with the row,
-    /// which needs no evidence beyond their having asked.
-    ///
-    /// **It ends this Turn's row, not the session's.** The dismissed set is
-    /// keyed by ``MonitoredSession/id``, which carries the Turn id, so the next
-    /// Turn on the same thread arrives as a new row and lists normally. The
-    /// entry is dropped once that product reports the Turn gone while we can
-    /// still see the product — see ``forgetDismissalsProvenGone(in:)``.
-    ///
-    /// **The product is told.** Filtering here alone left the row listed by its
-    /// provider, and a listed finished row is one the provider's terminal gate
-    /// keeps asking about — a read-state sample a second, for a row that had
-    /// stopped being drawn (CR-Fable-003). The record stays here, because only
-    /// this layer can tell a removal from a Turn ending; what goes down with
-    /// each snapshot request is which rows it covers.
-    ///
-    /// **It is not a stop button and must not be read as one.** Nothing is sent
-    /// to either product, and the Turn behind a dismissed running row goes on
-    /// exactly as it was — this removes the app's report of it, which is all
-    /// this app has ever done to a Turn.
-    ///
-    /// This is the only way a user can take a terminal Claude Code row off the
-    /// list: read state is not a question those rows can be asked (see
-    /// [ADR 0012](../../docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)),
-    /// so what is left to them otherwise is the next prompt or the session
-    /// ending. It used to have company — a `Clear the session list` button in
-    /// Settings that dismissed every row at once — and that is gone: it acted
-    /// on rows the user was not looking at, from a window they had to open
-    /// first, to do in bulk what this does in place.
+    /// - Keyed by ``MonitoredSession/id`` (the Turn), so the thread's next Turn lists normally;
+    ///   dropped via ``forgetDismissalsProvenGone(in:)``.
+    /// - Deletes nothing, marks nothing read, and does not stop the Turn.
+    /// - The provider is told on each snapshot request, or it keeps sampling read state
+    ///   (CR-Fable-003).
+    /// - The only way to remove a terminal Claude Code row
+    ///   ([ADR 0012](../../docs/adr/0012-read-state-is-answered-per-product-or-not-at-all.md)).
     @discardableResult
     func dismiss(_ session: MonitoredSession) -> Bool {
         guard !isDismissed(session) else { return false }
 
         dismissedSessionIDsByAgent[session.agent, default: []].insert(session.id)
-        // Republished through the merge rather than by striking the row out of
-        // `sessions` here. The list is not the only thing that has to change:
-        // the summary status and the product marks are both derived from the
-        // rows that are showing, and `apply` is where all three are kept in
-        // agreement. Editing the array alone would leave a dismissed row still
-        // lighting its product's mark.
+        // Through the merge, not by editing `sessions`: `apply` keeps the list, summary status and
+        // product marks in agreement, so a dismissed row cannot light its mark.
         apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
-        // And the product it belongs to is told, by being asked again now. Its
-        // terminal gate is still holding this row as something waiting to be
-        // read, which books a re-check every second -- so until the next
-        // refresh carries the removal down, the app goes on sampling read state
-        // for a row nobody can see (CR-Fable-003). The row's own re-check would
-        // deliver it within the second either way; a row that books nothing
-        // would have waited for the heartbeat.
+        // Refresh now so the provider stops re-checking read state for the hidden row (CR-Fable-003).
         requestRefresh()
         return true
     }
@@ -5022,21 +2875,10 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Records where the user wants one product's integration, and converges to
-    /// it.
+    /// Records the desired integration state for one product and converges to it.
     ///
-    /// The switch used to read its own guard flags before the task that sets
-    /// them had started, so flipping it twice quickly could queue an install
-    /// and a removal that then completed in whichever order they happened to
-    /// finish in -- not the order the user asked for, and not necessarily
-    /// ending where they left the switch (CR-017).
-    ///
-    /// Intent and execution are now separate. This records the desired state
-    /// and returns; a single convergence task per product applies it, re-reading
-    /// the desired state after each step so the last flip is the one that
-    /// decides where things end up. Intermediate flips are collapsed rather than
-    /// replayed -- nobody wants three installs because the switch was tapped
-    /// three times.
+    /// One convergence task per product re-reads the desired state after each step, so the last
+    /// flip wins and intermediate flips are collapsed (CR-017).
     func setIntegrationEnabled(_ isEnabled: Bool, for agent: AgentKind) {
         guard isEnabled != desiredIntegrationEnabled[agent]
             ?? integrationSwitchIsOn(for: agent) else {
@@ -5048,7 +2890,6 @@ final class MonitorStore: ObservableObject {
         startIntegrationConvergenceIfNeeded(for: agent)
     }
 
-    /// Applies the desired integration state, and waits for it to settle.
     @discardableResult
     func setIntegrationEnabledAndWait(_ isEnabled: Bool, for agent: AgentKind) async -> Bool {
         setIntegrationEnabled(isEnabled, for: agent)
@@ -5056,17 +2897,9 @@ final class MonitorStore: ObservableObject {
         return integrationSwitchIsOn(for: agent) == isEnabled
     }
 
-    /// Starts one product's convergence loop unless one is already running.
-    ///
-    /// No revision gate here on purpose. ``desiredIntegrationEnabled`` already
-    /// records that work is outstanding -- the loop runs until that product's
-    /// entry is gone -- so a gate alongside it would be a second, redundant copy
-    /// of the same fact, and two sources of truth for "is more work pending" is
-    /// worse than one.
-    ///
-    /// A plain task handle is safe because both the check and the clear happen
-    /// on the main actor with no suspension between the loop's last read of
-    /// the desired state and the handle being released.
+    /// Starts one product's convergence loop unless one is already running. The loop runs until
+    /// the ``desiredIntegrationEnabled`` entry is gone; check and clear share the main actor with
+    /// no suspension between them.
     private func startIntegrationConvergenceIfNeeded(for agent: AgentKind) {
         guard configurer(for: agent) != nil,
               integrationTasks[agent] == nil else {
@@ -5088,14 +2921,12 @@ final class MonitorStore: ObservableObject {
             ? await installIntegrationHooksAndWait(for: agent)
             : await removeIntegrationAndWait(for: agent)
 
-        // Someone flipped it again while this was running; that flip owns the
-        // switch now, so this outcome must not write over it.
+        // A newer flip owns the switch; do not write over it.
         guard desiredIntegrationEnabled[agent] == desired else { return }
         desiredIntegrationEnabled.removeValue(forKey: agent)
 
         if succeeded {
-            // Re-read health rather than trusting the requested value: the
-            // install may have landed in reviewRequired rather than active.
+            // Re-read health: the install may have landed in reviewRequired rather than active.
             if let configurer = configurer(for: agent) {
                 let status = await configurer.setupStatus()
                 setSetupStatus(status, for: agent)
@@ -5145,18 +2976,9 @@ final class MonitorStore: ObservableObject {
 
         do {
             try await configurer.removeIntegration()
-            // Only this product's half of the merge is dropped. It used to be
-            // the whole of it -- sessions, quota and availability cleared
-            // outright -- which was harmless while one product had a switch and
-            // is not now that both do: turning Claude Code off would have taken
-            // Codex's rows off the notch with it.
-            //
-            // Replaced rather than removed, and with exactly what that product
-            // will report on its own next refresh: an unregistered product
-            // answers `setupRequired` with no rows and nothing to say about
-            // quota. Removing the key instead would let a store with one
-            // product fall through to `disconnected`, which is not what
-            // "you just switched this off" means.
+            // Drop only this product's half of the merge, replaced with what it would report itself
+            // (`setupRequired`, no rows, no quota). Removing the key would let a one-product store fall
+            // through to `disconnected`.
             record(
                 AgentSnapshot(
                     agent: agent,
@@ -5195,22 +3017,18 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Runs one refresh cycle and waits for every product to answer.
     func refreshAndWaitForTesting() async {
         await refreshAndWait()
     }
 
-    /// The instant the store would next wake for, or nil when only the
-    /// heartbeat is left. Exposed so the deadline arithmetic is assertable
-    /// without arming a real wake-up.
+    /// The instant the store would next wake for, or nil when only the heartbeat is left.
     func nextWakeUpForTesting() async -> Date? {
         (
             await providerDeadlines() + stabilityGates.values.map(\.nextPublishDeadline)
         ).compactMap { $0 }.min()
     }
 
-    /// Feeds one product's answer through the same path a refresh uses, so a
-    /// test exercises the merge rather than bypassing it.
+    /// Feeds one product's answer through the refresh path, so a test exercises the merge.
     func applyForTesting(
         _ snapshot: AgentSnapshot,
         observedAt: Date? = nil
@@ -5228,26 +3046,9 @@ final class MonitorStore: ObservableObject {
             guard let self else { return }
             try? await clock.sleep(seconds: delay)
             guard !Task.isCancelled else { return }
-            // `MainActor.run`, not a bare `action(self)`, and the reason is not
-            // style. `action` is `@MainActor`, this store is `@MainActor`, and
-            // the task was started from a `@MainActor` method -- and none of
-            // that puts the resumption back on the main thread. Under
-            // `SWIFT_APPROACHABLE_CONCURRENCY` the task body is
-            // `nonisolated(nonsending)`, so its isolation is carried
-            // dynamically rather than in its type, and the hop back after
-            // `clock.sleep` is elided; measured in Release, `action` ran on a
-            // cooperative-pool thread every time.
-            //
-            // What that costs is not a theoretical race. Writing `isExpanded`
-            // off the main thread fires `objectWillChange` from that thread,
-            // SwiftUI wakes the main thread to re-render, and the render can
-            // read the property *before* the background thread has stored it --
-            // between `willSet` and `didSet`. The body then draws the previous
-            // expansion state and nothing invalidates it again, so the
-            // collapsed notch keeps the expanded header's gear where its timer
-            // belongs until some unrelated publish repairs it. Measured in
-            // Release: three failures in ten hover bursts before this hop, none
-            // in a hundred and twenty after it.
+            // `MainActor.run`: under `SWIFT_APPROACHABLE_CONCURRENCY` the hop back after `clock.sleep` is
+            // elided (Release). `isExpanded` written off main drew stale state: 3 failures in 10 hover
+            // bursts before, none in 120 after.
             await MainActor.run { action(self) }
         }
     }
@@ -5264,57 +3065,33 @@ final class MonitorStore: ObservableObject {
             refreshEventTask = Task { [weak self] in
                 for await _ in refreshEvents {
                     guard !Task.isCancelled else { return }
-                    // A watcher signal only has to converge, so it does not
-                    // wait -- but it must not be dropped either, which is what
-                    // the gate guarantees.
+                    // A watcher signal does not wait, but the gate guarantees it is not dropped.
                     self?.requestRefresh()
                 }
             }
         }
 
-        // Refreshes are driven by the watchers above. The only other trigger is
-        // the wake-up ``scheduleNextWake`` arms whenever a refresh run finishes;
-        // this first request is what starts that chain. Nothing samples on a
-        // cadence.
+        // Watchers drive refreshes; otherwise only ``scheduleNextWake`` re-arms after each run, and
+        // this first request starts that chain. Nothing samples on a cadence.
         requestRefresh()
     }
 
-    /// Arms the next wake-up from the state a refresh has just left behind.
-    ///
-    /// This has to hang off the *end of a refresh run*, not off an iteration of
-    /// a loop of its own, and that distinction was the whole of the bug. A
-    /// provider books its re-check during a refresh; most refreshes are driven
-    /// by a watcher edge, not by the store. So a loop that computed the deadline
-    /// only after its own `refreshAndWait` armed itself from state in which the
-    /// row that now needs re-checking did not yet exist -- for the heartbeat --
-    /// and then slept through the deadline the edge-driven refresh had just
-    /// booked. A finished Turn waiting on the user asked to be looked at in a
-    /// second and was looked at in up to a minute; the same missed re-arm
-    /// delayed the disconnect grace re-examination and the usage retry.
-    ///
-    /// Every path into a refresh goes through ``startRefreshRunIfNeeded``, so
-    /// arming here covers the watchers, Recheck, and the heartbeat alike. The
-    /// wake-up is a task rather than an awaited sleep because the run that
-    /// schedules it must be able to finish -- ``refreshAndWait`` is waiting on
-    /// exactly that.
+    /// Arms the next wake-up; must run at the end of every refresh run
+    /// (``startRefreshRunIfNeeded``), or re-checks booked by watcher-driven refreshes are slept
+    /// through (a one-second re-check took up to a minute). A task, so ``refreshAndWait`` can end.
     private func scheduleNextWake() {
         wakeTask?.cancel()
         wakeTask = Task { [weak self] in
             guard let self else { return }
             let heartbeat = self.timing.heartbeatInterval
-            // The gates' own deadlines count: a suppressed disconnect has to be
-            // re-examined when its grace expires, not whenever some provider
-            // happens to want attention next.
+            // Gate deadlines count: a suppressed disconnect is re-examined when its grace expires.
             let deadline = (
                 await self.providerDeadlines()
                     + self.stabilityGates.values.map(\.nextPublishDeadline)
             ).compactMap { $0 }.min()
             guard !Task.isCancelled else { return }
-            // An overdue deadline is clamped up to the floor, never down to
-            // zero. Sleeping zero here re-runs a full snapshot -- a
-            // LaunchServices round trip on the main thread and several stat
-            // calls -- against a deadline the refresh cannot move, which is
-            // a busy loop, not a catch-up.
+            // Clamp an overdue deadline up to the floor: sleeping zero re-runs a full snapshot
+            // (a main-thread LaunchServices round trip) in a busy loop.
             let untilDeadline = deadline.map {
                 max(
                     self.timing.minimumRefreshInterval,
@@ -5327,19 +3104,8 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Re-stage a drawing's fixed answers, on a store that draws rather than
-    /// watches.
-    ///
-    /// The first-run specimens are stores with no services (``NotchSpecimen``),
-    /// so after `init` nothing will ever publish to them again -- and their
-    /// reading is a clock, counting on from the moment the window opened. Handing
-    /// the same rows back with a fresh start is what wraps it, and it goes
-    /// through the ordinary merge, so a re-staged drawing is still only what a
-    /// refresh could have produced.
-    ///
-    /// Refused on a watching store. Nothing outside a provider may put rows in
-    /// front of the user; a caller that got this wrong would be publishing
-    /// fiction to the notch.
+    /// Re-stage a specimen store's fixed answers (``NotchSpecimen``) with a fresh start, so its
+    /// clock wraps, through the ordinary merge. Refused on a watching store.
     func restageSpecimen(_ snapshots: [AgentSnapshot]) {
         guard services.isEmpty else { return }
         for snapshot in snapshots {
@@ -5348,14 +3114,9 @@ final class MonitorStore: ObservableObject {
         apply(AgentSnapshotMerge.merge(Array(latestByAgent.values)))
     }
 
-    /// Show a completed draft in a non-watching tutorial store. No action is
-    /// dispatched and a store connected to a product refuses the fixture.
-    /// - Parameter index: which question of a set the body is showing. Calling
-    ///   this once per question walks a specimen through a set exactly as
-    ///   answering it does, because it keeps the progress it already has: the
-    ///   drafts are per question (``AnswerProgress/Draft``), and the frontier
-    ///   only moves forward. `Back` therefore appears on any question but the
-    ///   first, on ``canGoBackAQuestion``'s own terms.
+    /// Show a completed draft in a non-watching tutorial store; a connected store refuses.
+    /// - Parameter index: which question of a set is showing. Progress is kept, so calling this
+    ///   per question walks a set as answering does.
     func stageSpecimenAnswer(
         selectedOptions: Set<Int>,
         draft: String = "",
@@ -5363,8 +3124,7 @@ final class MonitorStore: ObservableObject {
     ) {
         guard services.isEmpty, let openRowID,
               let request = openRequest else { return }
-        // A form that is not a question is a set of one living at `0`, which is
-        // what ``AnswerProgress/showing`` already assumes.
+        // A non-question form is a set of one at `0` (``AnswerProgress/showing``).
         let questions = request.askedQuestions
         let position = min(max(index, 0), max(questions.count - 1, 0))
 
@@ -5382,14 +3142,8 @@ final class MonitorStore: ObservableObject {
         progress.draft = draft
         answerProgress[openRowID] = progress
 
-        // **And the affirmative is armed.** §6.3 holds it unarmed for
-        // `PanelMotion.duration` after a row arrives, on a task of its own; a
-        // specimen is a still, and a still taken before that lands draws every
-        // control at the `45%` a row wears while it is still coming up — a
-        // state that exists for two hundred milliseconds and is not what a
-        // drawing of this row is for. Taken here rather than waited for,
-        // because a wait is a wait on an executor a caller may not be able to
-        // turn.
+        // Arm the affirmative now: a still taken during the §6.3 `PanelMotion.duration` delay draws
+        // every control at `45%`, and a caller may not be able to turn the executor to wait.
         armingTask?.cancel()
         armingTask = nil
         isAffirmativeArmed = true
@@ -5399,21 +3153,8 @@ final class MonitorStore: ObservableObject {
         refreshAnswerGround()
     }
 
-    /// Put a drawing's Recent queue in front of it, at ages of its own
-    /// choosing. Refused on a watching store, on ``restageSpecimen(_:)``'s
-    /// terms and for its reason.
-    ///
-    /// **The one thing a specimen cannot reach through the ordinary arrow.** A
-    /// row departs when a merge finds it gone, and the queue stamps it with the
-    /// clock — so a drawing staged through that path gets a queue whose rows all
-    /// left at the same instant and all read the same age. The onboarding queue
-    /// exists to show that a queue is a *sequence* — `2m`, `18m`, `1h`, five
-    /// hours and gone — which is exactly the one fact that staging cannot say.
-    ///
-    /// It writes the queue and nothing else: the window, the ceiling, the order
-    /// and the eviction are `refreshRecentDepartures(at:)`'s as always, so a
-    /// staged queue obeys every rule a real one does, including a staged age
-    /// past the window simply not being drawn.
+    /// Put a specimen's Recent queue in front of it at chosen ages (a merge stamps every
+    /// departure with one instant). Refused on a watching store.
     func stageSpecimenQueue(_ departures: [RecentDeparture]) {
         guard services.isEmpty else { return }
         departuresByThread = Dictionary(
@@ -5428,17 +3169,13 @@ final class MonitorStore: ObservableObject {
         forgetDismissalsProvenGone(in: snapshot)
         let undismissedSessions = snapshot.sessions.filter { !isDismissed($0) }
         let visibleSessions = undismissedSessions
-        // Before `sessions` moves, because what left is the difference between
-        // the two. This is the one funnel every row leaves through -- a
-        // dismissal republishes through here as well -- so it is the only place
-        // the queue has to be fed from.
+        // Before `sessions` moves: every departure, dismissals included, leaves through here.
         recordDepartures(
             leaving: visibleSessions,
             connectedAgents: Set(snapshot.connectedAgents),
             at: now
         )
-        // Re-aggregated rather than taken from the snapshot: a dismissed row
-        // must stop counting towards the summary the moment it stops showing.
+        // Re-aggregated so a dismissed row stops counting towards the summary immediately.
         let aggregateStatus = MonitorAggregation.status(
             agents: snapshot.agents,
             sessions: undismissedSessions
@@ -5462,9 +3199,7 @@ final class MonitorStore: ObservableObject {
         if connectedAgents != snapshot.connectedAgents {
             connectedAgents = snapshot.connectedAgents
         }
-        // Rebuilt from the visible rows, not taken from the snapshot: a
-        // dismissed row must stop lighting its product's mark the moment it
-        // stops showing, exactly as it stops counting towards the summary.
+        // Rebuilt from visible rows so a dismissed row stops lighting its product's mark.
         let marks = MonitorAggregation.marks(
             agents: snapshot.agents,
             sessions: undismissedSessions
@@ -5478,14 +3213,8 @@ final class MonitorStore: ObservableObject {
         refreshRecentDepartures(at: now)
     }
 
-    /// Archives what this app watched finish, and takes out what has come back.
-    ///
-    /// **The whole of this is Notchline's own lifecycle.** Nothing here asks a
-    /// product what threads it has, or has had: the queue is a record of what
-    /// *this list* drew and then let go of, which is what makes it memory
-    /// rather than history (`PRD.md` §2 goal 9). The only two facts it reads
-    /// are the row's last state as this app observed it and whether its product
-    /// is present -- both already on the surface.
+    /// Archives what this app watched finish and takes out what has come back: Notchline's own
+    /// lifecycle, not product history (`PRD.md` §2 goal 9).
     ///
     /// ```text
     /// nothing → Running → Completed ─read→ archived ─┐
@@ -5494,25 +3223,8 @@ final class MonitorStore: ObservableObject {
     ///                                 archived ─expire/dismiss→ nothing
     /// ```
     ///
-    /// **Leaving the list is the timing; finishing is the reason.** A row that
-    /// disappears while this app last saw it working did not complete -- it
-    /// vanished -- and vanishing is not archiving. That is what keeps the queue
-    /// out of every ordinary way a product stops reporting rows that are very
-    /// much alive (`tech-design.md` §15.1), and it is also the honest answer
-    /// for a session killed under a connected product, which App Server
-    /// membership correction retires with its Turn still open.
-    ///
-    /// A dismissal is the other way in, and it is the user's own gesture rather
-    /// than a transition: the product goes on listing a dismissed Turn, so the
-    /// dismissed set is what answers there and the row's state only decides
-    /// which of the two dismissals it was.
-    ///
-    /// **The last loop is the return arrow**, and it doubles as the repair for
-    /// the one case presence cannot refuse: Codex Desktop quitting empties its
-    /// list *before* availability catches up, because presence is a kernel fact
-    /// and precedes any message about Turns, so its finished rows are archived
-    /// a moment early. Their Thread coming back takes them straight out again,
-    /// because a Thread cannot be live and archived at once (§5).
+    /// A row that vanishes while last seen working is not archived (`tech-design.md` §15.1). The
+    /// return loop also repairs Codex Desktop quitting before presence catches up (§5).
     private func recordDepartures(
         leaving visibleSessions: [MonitoredSession],
         connectedAgents: Set<AgentKind>,
@@ -5532,49 +3244,36 @@ final class MonitorStore: ObservableObject {
             )
         }
 
-        // The membrane, in both directions: a Thread that submits again leaves
-        // the queue and reappears above the seam as the same row.
+        // A Thread that submits again leaves the queue and reappears above the seam.
         for row in visibleSessions {
             departuresByThread.removeValue(forKey: RecentDeparture.key(for: row))
         }
     }
 
-    /// Which arrow into the queue this row just took, or `nil` for a row that
-    /// left the list without ending -- which is not an arrow at all.
+    /// Which arrow into the queue this row took, or `nil` for a row that left without ending.
     private func departureReason(
         for row: MonitoredSession,
         connectedAgents: Set<AgentKind>
     ) -> RecentDeparture.Reason? {
         if isDismissed(row) {
-            // The reading below the rule is an age either way, so it stays
-            // honest on a Turn that never finished (§2.4 rule 05).
+            // The reading is an age, so it stays honest on an unfinished Turn (§2.4 rule 05).
             return row.status.keepsTiming ? .dismissedWhileRunning : .dismissed
         }
-        // The lifecycle's own arrow, and this app's own observation of it: the
-        // Turn was terminal when it was last drawn, and then the list stopped
-        // reporting it -- which is the membership gate saying its product has
-        // recorded the Thread as read (`tech-design.md` §12).
+        // Terminal when last drawn, then unlisted: the membership gate saying the product recorded
+        // the Thread as read (`tech-design.md` §12).
         guard !row.status.keepsTiming else { return nil }
-        // And a product going dark takes its rows off the surface without
-        // ending anything. Presence, not its list: what this asks is whether
-        // the product was there to have read it.
+        // A product going dark ends nothing: presence decides whether it was there to read it.
         guard connectedAgents.contains(row.agent) else { return nil }
         return .read
     }
 
-    /// Republishes the queue as of `now`, dropping whatever has aged out.
-    ///
-    /// **Eviction is a filter, not a timer** (§10). A queue nobody watched for
-    /// six hours is empty the moment it is read, and nothing had to run while
-    /// the panel was shut to make that true; a tick only makes the change
-    /// visible to somebody already watching.
+    /// Republishes the queue as of `now`, dropping whatever has aged out. Eviction is a filter,
+    /// not a timer (§10).
     private func refreshRecentDepartures(at now: Date) {
         var kept = departuresByThread.filter {
             $0.value.age(at: now) < Self.recentWindow
         }
-        // Most recently departed first, with the key breaking a tie: several
-        // rows can leave in one pass and share an instant exactly, and an order
-        // that depends on dictionary iteration would flap between publishes.
+        // Key breaks ties: rows leaving in one pass share an instant, and dictionary order flaps.
         var ordered = kept.values.sorted {
             $0.departedAt == $1.departedAt
                 ? $0.id < $1.id
@@ -5587,15 +3286,8 @@ final class MonitorStore: ObservableObject {
         if kept.count != departuresByThread.count {
             departuresByThread = kept
         }
-        // **Only while the ages are on screen.** This is published, and one
-        // publish re-renders the whole overlay (`AGENTS.md` §7) — so a queue
-        // held across a boundary with the panel shut, or with the queue folded,
-        // would buy a re-render a minute for a reading nobody is drawing. Both
-        // states re-read on the way back in: opening either calls this.
-        //
-        // Ordered before the readings are compared, so a member added in this
-        // pass is measured against its own arrival rather than against whenever
-        // the clock was last consulted.
+        // Publish only while ages are on screen (panel open, queue unfolded): a publish re-renders
+        // the overlay (`AGENTS.md` §7).
         if isExpanded, isRecentExpanded, ordered.contains(where: {
             $0.ageText(at: now) != $0.ageText(at: recentReadAt)
         }) {
@@ -5607,30 +3299,9 @@ final class MonitorStore: ObservableObject {
         updateRecentTicking()
     }
 
-    /// Moves the queue's ages while somebody is looking at them.
-    ///
-    /// **This is the visible half only, and it is the smaller one.** Eviction
-    /// and the readings are both correct without it, because
-    /// ``refreshRecentDepartures(at:)`` is a filter as of `now` and opening the
-    /// panel is a read -- so a queue nobody watched for six hours is empty
-    /// before it is drawn, and every age is right at the instant somebody
-    /// looks. What this adds is the one case that read cannot cover: a panel
-    /// held open across a boundary, where `9m` has to become `10m` under a
-    /// pointer that has not moved.
-    ///
-    /// **It runs only while the panel is open and the queue has members**, so
-    /// on the overwhelming majority of this app's life it does not exist. The
-    /// panel is a hover surface: it is open for seconds at a time, and most
-    /// openings will not cross a boundary at all.
-    ///
-    /// It sleeps to the **next boundary any member actually crosses**, not to a
-    /// flat minute. A flat minute would drift into crossing two boundaries in
-    /// one wake-up and visibly skip a reading -- the fault
-    /// ``secondsUntilNextTick(after:now:)`` exists to avoid one rule up -- and
-    /// it would also wake up to change nothing at all for a queue whose members
-    /// all departed within the same few seconds.
+    /// Moves the queue's ages while the panel is open with members, sleeping to the next boundary
+    /// any member crosses (a flat minute drifts and skips a reading).
     private func updateRecentTicking() {
-        // Nothing to move: stop entirely rather than wake to discover it.
         guard isExpanded, !recentDepartures.isEmpty else {
             recentTickTask?.cancel()
             recentTickTask = nil
@@ -5648,13 +3319,7 @@ final class MonitorStore: ObservableObject {
                     seconds: max(deadline.timeIntervalSince(self.clock.now()), 0)
                 )
                 guard !Task.isCancelled else { return }
-                // `MainActor.run`, not a bare call, for the reason
-                // ``scheduleHoverAction(after:action:)`` spells out: the task
-                // body is `nonisolated(nonsending)` under
-                // `SWIFT_APPROACHABLE_CONCURRENCY`, so resuming from a
-                // suspension does not put this back on the main thread, and
-                // every property the overlay renders from must be written there
-                // (`AGENTS.md` §7).
+                // `MainActor.run`: see ``scheduleHoverAction(after:action:)`` (`AGENTS.md` §7).
                 await MainActor.run {
                     self.refreshRecentDepartures(at: self.clock.now())
                 }
@@ -5662,20 +3327,8 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// When the first thing the panel is drawing changes, or `nil` if nothing
-    /// can.
-    ///
-    /// **Which instants matter depends on the fold**, because that decides what
-    /// is on screen. Open, every age is drawn, and a member reads in whole
-    /// minutes below an hour and whole hours above one — so its next change is
-    /// its own next such boundary measured from when it left. Folded, no age is
-    /// drawn at all and the only thing that moves is the seam's own count, so
-    /// the one instant worth waking for is the member's expiry. A folded queue
-    /// therefore wakes at most once per member however long it is held open.
-    ///
-    /// **The eviction needs no term of its own in the open case.** A member can
-    /// only reach five hours by passing four, so the hour boundary that would
-    /// have drawn `5h` is exactly the instant the row is dropped instead.
+    /// When the queue's drawn reading next changes, or `nil`: each member's next age boundary when
+    /// open, only its expiry when folded.
     private func nextRecentReadingChange(at now: Date) -> Date? {
         recentDepartures.map { departure in
             guard isRecentExpanded else {
@@ -5688,17 +3341,8 @@ final class MonitorStore: ObservableObject {
         }.min()
     }
 
-    /// Takes one row out of the queue, at the user's asking (§2.4 rule 09).
-    ///
-    /// The live row's own secondary click, meaning the same thing one rule
-    /// down, and the only way out that anybody performs -- the other is the
-    /// window closing behind the row.
-    ///
-    /// **Nothing is remembered about the removal**, and it needs no equivalent
-    /// of ``dismissedSessionIDsByAgent``. A row taken out here can only come
-    /// back by its Thread departing again, which means it was on the live list
-    /// in between -- so there is no re-entry to suppress and nothing to forget
-    /// later.
+    /// Takes one row out of the queue at the user's asking (§2.4 rule 09). Nothing is remembered:
+    /// the row can only return by departing the live list again.
     @discardableResult
     func removeFromRecent(_ departure: RecentDeparture) -> Bool {
         guard departuresByThread.removeValue(forKey: departure.id) != nil else {
@@ -5708,33 +3352,15 @@ final class MonitorStore: ObservableObject {
         return true
     }
 
-    /// Opens or folds what the list has let go of.
     func toggleRecent() { isRecentExpanded.toggle() }
 
     private func isDismissed(_ session: MonitoredSession) -> Bool {
         dismissedSessionIDsByAgent[session.agent]?.contains(session.id) ?? false
     }
 
-    /// Drops the dismissals whose Turn its own product has stopped listing
-    /// *while we could see that product*.
-    ///
-    /// The set has to be bounded — a dismissal the app never forgets is a leak
-    /// — but "absent from this snapshot" is not the same fact as "gone", and
-    /// reading it that way put dismissed rows back on the notch (CR-Fable-004).
-    /// A product stops listing its rows for ordinary reasons that leave the
-    /// Turn very much alive and about to be republished: Codex Desktop quits,
-    /// its App Server blips for longer than the grace period, Claude Code has
-    /// no open window and so withholds its rows rather than discarding them
-    /// (`tech-design.md` §15.1). Any of those used to erase that product's
-    /// dismissals, and the next hook event brought the row the user had just
-    /// waved away straight back.
-    ///
-    /// So the evidence required is the product itself being observable — open
-    /// *and* answering — and the Turn not being in what it listed. A product we
-    /// cannot see is not a witness to anything, and its dismissals are kept
-    /// untouched until it can speak for them again. Each product answers only
-    /// for its own: one being unreachable must not pin the other's set, and
-    /// one being healthy must not clear the other's.
+    /// Drops dismissals whose Turn its own product stopped listing while observable (open and
+    /// answering). Mere absence (Desktop quit, App Server blip, Claude Code with no window,
+    /// `tech-design.md` §15.1) put dismissed rows back (CR-Fable-004).
     private func forgetDismissalsProvenGone(in snapshot: MonitorSnapshot) {
         for agentSnapshot in snapshot.agents where agentSnapshot.isConnected {
             guard var dismissed = dismissedSessionIDsByAgent[agentSnapshot.agent],
@@ -5746,12 +3372,8 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Records one product's answer and republishes the merge.
-    ///
-    /// Each product is gated against its *own* previous availability, so a blip
-    /// on one cannot suppress another's publish, and a product that is
-    /// suppressed keeps its last trusted answer rather than dropping out of the
-    /// merge entirely — its rows stay where they were.
+    /// Records one product's answer and republishes the merge. Gated per product; a suppressed
+    /// product keeps its last trusted answer.
     private func record(_ snapshot: AgentSnapshot, observedAt: Date) {
         let agent = snapshot.agent
         var gate = stabilityGates[agent] ?? ConnectionStabilityGate(
@@ -5785,26 +3407,21 @@ final class MonitorStore: ObservableObject {
         latestByAgent[agent]?.availability
     }
 
-    /// How far along a product's registration is.
     func setupStatus(for agent: AgentKind) -> IntegrationSetupStatus {
         setupStatusByAgent[agent] ?? .notInstalled
     }
 
-    /// Where one product's switch is sitting.
     func integrationSwitchIsOn(for agent: AgentKind) -> Bool {
         integrationSwitchIsOnByAgent[agent] ?? false
     }
 
-    /// Whether that product's hooks are being written or removed right now, and
-    /// therefore whether its switch should refuse a second answer.
+    /// Whether that product's hooks are being written or removed, so its switch refuses input.
     func isIntegrationBusy(for agent: AgentKind) -> Bool {
         integrationBusyAgents.contains(agent)
     }
 
-    /// Both writes go through here so the published dictionaries move only when
-    /// the value in them actually changes. A refresh restates the same status
-    /// every second, and one publish on this store re-evaluates the whole
-    /// overlay (`AGENTS.md` §7).
+    /// Publishes only on a real change: a refresh restates the status every second and each
+    /// publish re-evaluates the overlay (`AGENTS.md` §7).
     private func setSetupStatus(_ status: IntegrationSetupStatus, for agent: AgentKind) {
         guard setupStatusByAgent[agent] != status else { return }
         setupStatusByAgent[agent] = status
@@ -5815,24 +3432,13 @@ final class MonitorStore: ObservableObject {
         integrationSwitchIsOnByAgent[agent] = isOn
     }
 
-    /// What went wrong on this product's side, if anything did.
-    ///
-    /// Read off the same stored answer as ``agentAvailability(for:)`` rather
-    /// than published on its own: the two are shown on the same line of the
-    /// same card, and a second `@Published` would republish the whole store --
-    /// the overlay included -- for a caption in a window that is usually shut
-    /// (`AGENTS.md` §7). This is the reading end of the chain CR-029 found
-    /// computed and never shown.
+    /// What went wrong on this product's side. Read off the stored answer, not its own
+    /// `@Published` (`AGENTS.md` §7; CR-029).
     func diagnostic(for agent: AgentKind) -> String? {
         latestByAgent[agent]?.diagnostic
     }
 
-    /// Re-reads what a product has left on disk when it answers.
-    ///
-    /// Off the refresh for the same reason the instructions are: it lists a
-    /// directory, and an open panel does not need that once a second. The
-    /// measurement behind it keeps its own freshness window, so this asking
-    /// often costs nothing.
+    /// Re-reads what a product has left on disk, off the refresh because it lists a directory.
     private func refreshDiskFootprintIfNeeded(for agent: AgentKind) {
         guard diskFootprintTask == nil,
               let reporter = footprintReporter(for: agent) else {
@@ -5842,12 +3448,8 @@ final class MonitorStore: ObservableObject {
             let report = await reporter.diskFootprint()
             guard let self else { return }
             self.diskFootprintTask = nil
-            // Absence *is* `leavesNothing`, so it has to be folded into the
-            // optional before the comparison. Compared the other way round,
-            // every refresh of a product that leaves nothing would find `nil`
-            // unequal to `.leavesNothing`, write the same absence back, and
-            // publish -- and one publish on this store re-evaluates the whole
-            // overlay (`AGENTS.md` §7).
+            // Fold `leavesNothing` into `nil` before comparing, or every refresh publishes the same
+            // absence (`AGENTS.md` §7).
             let stored: AgentDiskFootprintReport? =
                 report == .leavesNothing ? nil : report
             guard self.diskFootprints[agent] != stored else { return }
@@ -5859,13 +3461,8 @@ final class MonitorStore: ObservableObject {
         }
     }
 
-    /// Keeps one product's switch in step with what its file actually says.
-    ///
-    /// Skipped while that product's own install or removal is in flight: the
-    /// switch is showing where the user just put it, and a refresh landing
-    /// mid-write would flick it back to the state the write is on its way to
-    /// leaving. Another product being busy is none of this one's business,
-    /// which is the whole reason the flag is a set rather than two booleans.
+    /// Keeps one product's switch in step with its file, skipped while that product's own write
+    /// is in flight so a mid-write refresh cannot flick the switch back.
     private func applyIntegrationHealth(for agent: AgentKind) {
         guard let refreshed = setupStatusByAgent[agent],
               !integrationBusyAgents.contains(agent) else {
@@ -5874,13 +3471,8 @@ final class MonitorStore: ObservableObject {
         setSwitch(refreshed.isIntegrationEnabled, for: agent)
     }
 
-    /// Each provider's next deadline, with providers that cannot advance their
-    /// own dropped.
-    ///
-    /// A provider that reports the same already-overdue instant twice has said
-    /// everything it is going to say about it. Leaving it in the shared minimum
-    /// would pin the loop to the refresh floor and drag every healthy provider
-    /// into a full merged refresh every second alongside it.
+    /// Each provider's next deadline, dropping a provider that reports the same overdue instant
+    /// twice, which would pin every provider to the refresh floor.
     private func providerDeadlines() async -> [Date?] {
         var deadlines: [Date?] = []
         let now = clock.now()
@@ -5899,29 +3491,20 @@ final class MonitorStore: ObservableObject {
         return deadlines
     }
 
-    /// Requests a refresh without waiting for it.
-    ///
-    /// For triggers that only need the state to converge -- the scheduled
-    /// wake-up, the directory watchers. If one is already running, this raises
-    /// the gate so another follows; it is never dropped.
+    /// Requests a refresh without waiting, for triggers that only need convergence. Never dropped:
+    /// a running refresh raises the gate so another follows.
     private func requestRefresh() {
         refreshGate.request()
         startRefreshRunIfNeeded()
     }
 
-    /// Requests a refresh and waits for one that accounts for this request.
-    ///
-    /// For the user pressing Recheck. It used to call `performRefresh`, which
-    /// returned immediately whenever an automatic refresh happened to be in
-    /// flight -- so the button finished instantly and handed back the status it
-    /// already had (CR-008). Waiting on the gate's own revision is what makes
-    /// "I asked, so tell me what is true now" mean something.
+    /// Requests a refresh and waits for one that covers this request (Recheck); otherwise it
+    /// returned stale status mid-refresh (CR-008).
     private func refreshAndWait() async {
         let revision = refreshGate.request()
         startRefreshRunIfNeeded()
 
-        // At most two iterations: a run that begins after this request covers
-        // it, and revisions only move forward.
+        // At most two iterations: a run that begins after this request covers it.
         while !refreshGate.hasCovered(revision) {
             guard let refreshTask else { break }
             await refreshTask.value
@@ -5935,26 +3518,14 @@ final class MonitorStore: ObservableObject {
             repeat {
                 await self.performRefresh()
             } while self.refreshGate.endRun()
-            // The run is over and the gate is idle, so this is the first moment
-            // the providers' deadlines describe the state the user is actually
-            // looking at. Arming from here is what makes a re-check booked by a
-            // watcher-driven refresh get slept on.
+            // The gate is idle: arm from here so re-checks booked by watcher-driven refreshes count.
             guard !Task.isCancelled else { return }
             self.scheduleNextWake()
         }
     }
 
-    /// Asks every product at once and publishes each answer as it lands.
-    ///
-    /// Publishing per answer rather than after the whole group is what keeps a
-    /// slow provider from holding up a fast one: the fast product's rows are on
-    /// screen while the slow one is still being asked. The group is still
-    /// awaited, so a caller that wants "everyone has answered" — Recheck — gets
-    /// exactly that.
-    ///
-    /// Nothing here cancels a slow fetch. Cancelling throws the work away and
-    /// the next cycle starts it again, which is how "slow" turns into "never";
-    /// each provider is responsible for bounding its own request instead.
+    /// Asks every product at once and publishes each answer as it lands. Nothing cancels a slow
+    /// fetch; each provider bounds its own.
     private func performRefresh() async {
         guard !services.isEmpty else { return }
 
@@ -5962,25 +3533,15 @@ final class MonitorStore: ObservableObject {
             for service in services {
                 group.addTask { @MainActor [weak self] in
                     guard let self else { return }
-                    // What the user has already taken off this product's list
-                    // travels with the request. The store keeps the record --
-                    // it is the only layer that can tell a removal from a Turn
-                    // ending -- but the product is the only one that can stop
-                    // paying for it, so it is handed down on every ask rather
-                    // than pushed once and remembered. Pushing it would have to
-                    // survive everything that resets a provider's gate; this
-                    // cannot go stale, because it is read a line before it is
-                    // used (CR-Fable-003).
+                    // Dismissed rows travel with every request so the provider stops paying for them
+                    // (CR-Fable-003).
                     let snapshot = await service.fetchSnapshot(
                         dismissedRowIDs: self.dismissedSessionIDsByAgent[
                             service.agent
                         ] ?? []
                     )
                     guard !Task.isCancelled else { return }
-                    // The snapshot already carries the health the same refresh
-                    // observed; asking again would drain the store twice a
-                    // cycle, and the second reading would take delivery of what
-                    // the first was owed.
+                    // The snapshot already carries this refresh's health; asking again would drain it twice.
                     self.record(snapshot, observedAt: self.clock.now())
                 }
             }

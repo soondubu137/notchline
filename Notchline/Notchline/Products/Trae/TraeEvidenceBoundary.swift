@@ -140,8 +140,7 @@ nonisolated enum TraeBridgeError: Error, LocalizedError {
     }
 }
 
-/// Used only on the transport's serial queue. Source order is retained before
-/// synchronous submission to MonitoringRepository's ordered inbox.
+/// Transport serial queue only; source order is kept into MonitoringRepository's ordered inbox.
 nonisolated struct TraeEvidenceBoundary {
     private(set) var current: [String: TraeDisplayedTurn] = [:]
     private var sequences: [String: Int] = [:]
@@ -183,15 +182,13 @@ nonisolated struct TraeEvidenceBoundary {
             excluded.remove(row.threadID)
             let previous = current[row.threadID]
             let sameTurn = previous?.turnID == row.turnID
-            // A second window may still hold an old view of an ended Turn.
-            // Reconnection does not permit that view to reopen its requests.
+            // A second window may hold an old view of an ended Turn; reconnecting must not reopen it.
             if sameTurn, previous?.status != "in_progress", row.status == "in_progress" { continue }
             if !sameTurn, let previousStart = previous?.startedAt, let nextStart = row.startedAt,
                nextStart < previousStart { continue }
             let key = row.threadID + ":" + row.turnID
-            // A baseline contains history and proves no new submission. Only a
-            // live, native, non-history assistant created after attachment opens
-            // a row. Existing observed Turns may be corrected after reconnect.
+            // A baseline is history: only a live, native, non-history assistant created after attachment
+            // opens a row.
             let newlyStarted = !baseline && !row.historical && row.status == "in_progress"
                 && !sameTurn && (row.startedAt.map { $0 >= (baselines[peer] ?? stamp) - 1 } ?? false)
             if newlyStarted {

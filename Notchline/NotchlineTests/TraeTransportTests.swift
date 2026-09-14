@@ -5,8 +5,7 @@ import Testing
 
 @MainActor
 struct TraeTransportTests {
-    /// A private test directory and a real Unix peer exercise the production
-    /// framing/ownership/epoch boundary without connecting to any user window.
+    /// Exercises the production framing/ownership/epoch boundary on a real Unix peer.
     @Test func fragmentedFramesReachTheReducerAndCorruptionWithholdsTheRoute() async throws {
         let peer = try Peer(); defer { peer.stop() }
         let repository = MonitoringRepository(policy: .explicit)

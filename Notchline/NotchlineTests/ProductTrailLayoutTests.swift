@@ -4,11 +4,7 @@ import SwiftUI
 import Testing
 @testable import Notchline
 
-/// Where the grouped list's headings stand at each offset — the two badge
-/// lines of `expanded-panel-v2.md` §4.6, pinned on the pure layout rather than
-/// on a drawing, because the layout is the design: the same offset always
-/// gives the same positions, and scrolling back is the same function run in
-/// reverse.
+/// Heading positions at each offset (`expanded-panel-v2.md` §4.6), pinned on the pure layout.
 struct ProductTrailLayoutTests {
     private func session(_ agent: AgentKind, _ id: String, _ status: SessionStatus = .running) -> MonitoredSession {
         MonitoredSession(
@@ -25,12 +21,7 @@ struct ProductTrailLayoutTests {
         return MonitorAggregation.groups(of: sessions)
     }
 
-    /// Where the second block's chip stands in the flow: the leading heading,
-    /// the first block's rows, and the second heading's own slack.
-    ///
-    /// Composed rather than tabulated, because the slack is §4.2's to choose —
-    /// it was halved on 2026-09-09 and every literal `392` and `16 + 72 + 16`
-    /// in this file was a restatement of a number the flow already knows.
+    /// The second block's chip in the flow, composed so §4.2's slack is never a literal here.
     private func secondChip(after rows: Int) -> CGFloat {
         PanelMetrics.leadingProductGroupHeaderHeight
             + PanelMetrics.sessionRowHeight * CGFloat(rows)
@@ -66,20 +57,15 @@ struct ProductTrailLayoutTests {
         )
     }
 
-    /// **The grouped cap is a badge line, four rows and a badge line**, and
-    /// the flat cap is the same four rows without the lines — so the switch
-    /// never changes how many rows are on screen.
+    /// The grouped cap is a badge line, four rows and a badge line; the flat cap is the same four
+    /// rows, so the switch never changes how many rows are on screen.
     @Test
     func theGroupedViewportIsATrailFourRowsAndATrail() {
         #expect(PanelMetrics.productTrailHeight == 16)
         #expect(PanelMetrics.sessionViewportCap == PanelMetrics.sessionRowHeight * 4)
         #expect(PanelMetrics.groupedSessionViewportCap == CGFloat(16 + 288 + 16))
 
-        // Grouped: two blocks and eight rows ask for `16 + 576 + 24` and are
-        // given the cap. The headings are named rather than added up, because
-        // what they cost is §4.2's decision and not this test's — the claim
-        // here is that the *cap* does not move when it changes, and that only
-        // reads if the two are written differently.
+        // Headings named, not added: the cap must not move when §4.2's heading cost does.
         #expect(
             PanelMetrics.sessionListContentHeight(liveRowCount: 8, groupHeaderCount: 2)
                 == PanelMetrics.sessionRowHeight * 8 + PanelMetrics.groupHeadingsHeight(count: 2)
@@ -87,25 +73,21 @@ struct ProductTrailLayoutTests {
         #expect(
             PanelMetrics.sessionViewportHeight(liveRowCount: 8, groupHeaderCount: 2) == 320
         )
-        // A list that fits is given what it asks for, and no more.
         #expect(
             PanelMetrics.sessionViewportHeight(liveRowCount: 2, groupHeaderCount: 2)
                 == PanelMetrics.sessionRowHeight * 2 + PanelMetrics.groupHeadingsHeight(count: 2)
         )
-        // Flat: the same eight rows are four rows on screen.
         #expect(PanelMetrics.sessionViewportHeight(liveRowCount: 8) == 288)
 
-        // An open row taller than the cap is given its own room under its
-        // heading, so nothing is left for a rail to offer.
+        // An open row taller than the cap gets its own room under its heading.
         #expect(
             PanelMetrics.sessionViewportHeight(liveRowCount: 1, openRowHeight: 400, groupHeaderCount: 1)
                 == 400 + PanelMetrics.leadingProductGroupHeaderHeight
         )
     }
 
-    /// **At rest, every heading is on screen.** The first holds the top strip
-    /// where its chip has always stood; a block below the fold waits on the
-    /// foot line as a name alone, and the foot draws its ground.
+    /// At rest every heading is on screen: a block below the fold waits on the foot line as a name
+    /// alone, and the foot draws its ground.
     @Test
     func aBlockBelowTheFoldWaitsOnTheFootLine() {
         let blocks = groups(first: 5, second: 3)
@@ -128,14 +110,11 @@ struct ProductTrailLayoutTests {
         #expect(claude.tail == 0, "a foot badge is a name alone")
         #expect(claude.trailed == 1)
         #expect(claude.isOnTrail)
-        // Its chip's own place in the flow: the first heading, five rows and
-        // its own slack.
         #expect(claude.flowChip == secondChip(after: 5))
     }
 
-    /// **Lifting off is the foot line's docking played upward**: over the
-    /// bar's own height the badge rises at the flow's `x` while its count and
-    /// rule come in, and it is in the flow — whole — after that.
+    /// Lifting off is docking played upward: over the bar's height the badge rises at the flow's
+    /// `x` while its count and rule come in.
     @Test
     func aPendingBadgeLiftsStraightUpIntoItsBar() {
         let blocks = groups(first: 5, second: 3)
@@ -143,15 +122,12 @@ struct ProductTrailLayoutTests {
         let half = PanelMetrics.productTrailDockingDistance / 2
         let chip = secondChip(after: 5)
 
-        // Halfway: the chip is half the travel above the foot line, half its
-        // tail drawn.
         let lifting = layout(blocks, offset: chip - (footLine - half)).headings[1]
         #expect(lifting.x == PanelMetrics.sessionRowPadding)
         #expect(abs(lifting.y - (footLine - half)) < 0.001)
         #expect(abs(lifting.tail - 0.5) < 0.001)
         #expect(abs(lifting.trailed - 0.5) < 0.001)
 
-        // Free of the foot: in the flow, at its flow position, whole.
         let free = layout(blocks, offset: 200)
         let flowing = free.headings[1]
         #expect(flowing.y == chip - 200)
@@ -161,21 +137,14 @@ struct ProductTrailLayoutTests {
         #expect(free.scrolls)
     }
 
-    /// **Docking is scroll-linked over the bar's own height**: the arriving chip
-    /// slides right into its slot faster than it rises — so it never crosses
-    /// the badge already there — while the heading it replaces gives up its
-    /// count and rule over the same travel. Docked, the top strip is the
-    /// passed badge beside the active one, and only the active one draws a
-    /// tail.
+    /// Docking is scroll-linked over the bar's height: the arriving chip slides right faster than
+    /// it rises, so it never crosses the passed badge, and only the active one draws a tail.
     @Test
     func anArrivingHeadingDocksBesideThePassedOne() {
-        // Enough list under the second block to carry its heading to the top.
         let blocks = groups(first: 5, second: 6)
         let codexWidth = PanelMetrics.productBadgeWidth(AgentKind.codex.displayName)
         let slot = PanelMetrics.sessionRowPadding + codexWidth + PanelMetrics.productBadgePadding
 
-        // Halfway: the chip is half the travel from the top, and `x` is
-        // already most of the way there.
         let half = PanelMetrics.productTrailDockingDistance / 2
         let chip = secondChip(after: 5)
         let halfway = layout(blocks, offset: chip - half)
@@ -185,8 +154,7 @@ struct ProductTrailLayoutTests {
         #expect(abs(arriving.x - expectedX) < 0.001)
         #expect(arriving.tail == 1, "the arriving heading is whole")
         #expect(arriving.trailed == 0)
-        // Clear of the chip already there: `87.5%` of the slot at half the
-        // travel is past a badge of any name.
+        // `87.5%` of the slot at half the travel clears a badge of any name.
         #expect(arriving.x - PanelMetrics.sessionRowPadding > codexWidth * 0.8)
         let leaving = halfway.headings[0]
         #expect(abs(leaving.tail - 0.5) < 0.001)
@@ -194,7 +162,6 @@ struct ProductTrailLayoutTests {
         #expect(leaving.x == PanelMetrics.sessionRowPadding)
         #expect(leaving.y == 0)
 
-        // Docked: one line, two names, one tail.
         let docked = layout(blocks, offset: chip + PanelMetrics.productTrailDockingDistance)
         let active = docked.headings[1]
         #expect(active.x == slot)
@@ -206,19 +173,11 @@ struct ProductTrailLayoutTests {
         #expect(passed.isOnTrail)
         #expect(!docked.drawsFootLine)
 
-        // And a click on either badge has somewhere to go: the offset that
-        // puts its chip on the top strip.
         #expect(docked.headings.map(\.flowChip) == [0, chip])
     }
 
-    /// **A list that fits pins nothing.** Every position is the flow position
-    /// and the foot line is not drawn: the drawing is the one the list always
-    /// made.
-    ///
-    /// The top strip is no longer part of that claim. The leading chip stands
-    /// at the top of the viewport whether the list scrolls or not, so its `16`
-    /// of ground is drawn either way — on a list that is not moving, black on
-    /// black. See ``ProductTrails``.
+    /// A list that fits pins nothing and draws no foot line. The leading chip's `16` of top-strip
+    /// ground is drawn either way (see ``ProductTrails``).
     @Test
     func aListThatFitsIsDrawnInTheFlow() {
         let blocks = groups(first: 1, second: 1)
@@ -232,10 +191,8 @@ struct ProductTrailLayoutTests {
         #expect(fits.headings.map(\.trailed) == [0, 0])
     }
 
-    /// **A block that wants a person is the layout's business only as far as
-    /// the drawing's inputs go**: the block says so, the heading's `trailed`
-    /// says how far onto a trail it is, and the badge flips by that rather
-    /// than dimming. The layout itself does not change.
+    /// A block that wants a person moves no heading; the badge flips by `trailed` rather than
+    /// dimming.
     @Test
     func wantingAPersonDoesNotMoveAHeading() {
         let quiet = layout(groups(first: 5, second: 3), offset: 0)
@@ -245,22 +202,19 @@ struct ProductTrailLayoutTests {
         #expect(quiet.headings.map(\.trailed) == waiting.headings.map(\.trailed))
     }
 
-    /// **`Group by product` off is the flat list**: no blocks, no headings, the
-    /// panel's own top rule back, and the same four rows on screen.
+    /// `Group by product` off is the flat list: no headings, the panel's top rule back, same rows.
     @Test @MainActor
     func groupingIsAPreferenceAndOffIsTheFlatList() {
         let store = MonitorStore(services: [], preferences: nil)
         store.applyForTesting(snapshot(.codex, (0..<5).map { session(.codex, "c\($0)") }))
         store.applyForTesting(snapshot(.claudeCode, [session(.claudeCode, "k")]))
 
-        // On by default, and the list is the grouped one.
         #expect(store.groupsSessionsByProduct)
         #expect(store.sessionGroups.map(\.agent) == [.codex, .claudeCode])
         #expect(store.sessionGroupHeaderCount == 2)
         #expect(store.listLeadsWithABlockHeading)
         #expect(store.sessionViewportHeight == PanelMetrics.groupedSessionViewportCap)
 
-        // Off: one list, nothing to head, and four rows still.
         store.groupsSessionsByProduct = false
         #expect(store.sessionGroups.isEmpty)
         #expect(store.sessionGroupHeaderCount == 0)
@@ -273,16 +227,8 @@ struct ProductTrailLayoutTests {
         #expect(store.sessionGroups.map(\.agent) == [.codex, .claudeCode])
     }
 
-    /// **The trails are drawn, at the height the panel was sized to.** Five
-    /// Codex rows and one of Claude Code's is six rows and two headings of
-    /// list in a `320` viewport: at rest the top strip carries Codex's chip whole, and the
-    /// foot line carries Claude Code's — dimmed, a name alone — where the
-    /// pinned list used to show nothing of it at all.
-    ///
-    /// Read off the bitmap, because the layout is pinned above and what can
-    /// still be wrong is whether the overlay draws it: the chip's text is the
-    /// theme ink's lit value and nothing else near the panel's left margin is
-    /// that bright.
+    /// At rest the top strip draws Codex's chip whole and the foot line Claude Code's, dimmed.
+    /// Read off the bitmap: the chip's text is the only ink that bright near the left margin.
     @Test @MainActor
     func theFootLineDrawsThePendingBlocksBadge() throws {
         let store = MonitorStore(services: [], preferences: nil)
@@ -335,8 +281,7 @@ struct ProductTrailLayoutTests {
         #expect(foot > 0.25, "the foot line drew no badge — brightest value was \(foot)")
         #expect(foot < top, "a foot badge stands at \(PanelMetrics.productTrailBadgeOpacity), not whole")
 
-        // And the fade above the foot is darker than the foot: rows go out
-        // under it rather than being cut by a rule.
+        // The fade above the foot is darker: rows go out under it rather than being cut by a rule.
         let fade = peak(
             from: height - line - PanelMetrics.productTrailFadeHeight + 1,
             to: height - line - 1
@@ -344,33 +289,18 @@ struct ProductTrailLayoutTests {
         #expect(fade < foot, "the fade above the foot line is brighter than the badge on it")
     }
 
-    /// **A heading's line is opaque, and the fault was that it was not.** A
-    /// list that fits its viewport drew no ground under its chip, on the
-    /// reading that a list that cannot scroll cannot move under one. It can:
-    /// the leading chip is drawn at the top of the viewport at every offset,
-    /// and while a panel resize is in flight the scroller is still the old
-    /// height around content that is already the new one — so the rows really
-    /// do slide, and a row's caption and title were read through the chip, the
-    /// count and the rule (reported 2026-09-10, with a screenshot).
-    ///
-    /// Read off the bitmap over a white ground, because that is the whole
-    /// claim: anything the chrome fails to cover is what the list shows
-    /// through it. Sampled above the rule, where the heading draws nothing of
-    /// its own.
+    /// Opaque even on a list that fits: mid-resize the scroller keeps its old height, so rows slide
+    /// under the chip (reported 2026-09-10). Read over white, above the rule.
     @Test @MainActor
     func aHeadingsLineIsOpaqueOnAListThatFits() throws {
         let store = MonitorStore(services: [], preferences: nil)
         store.isExpanded = true
-        // The empty Codex snapshot is not decoration: a store with no service
-        // carries that product's two preview rows until it is told otherwise,
-        // and this list has to be one block.
+        // Without this, a store with no service carries Codex's two preview rows.
         store.applyForTesting(snapshot(.codex, []))
         store.applyForTesting(
             snapshot(.claudeCode, [session(.claudeCode, "k0"), session(.claudeCode, "k1")])
         )
-        // The list this is about: two rows under one heading, in a viewport
-        // that is exactly what they ask for, so nothing is pinned and the
-        // rail has no lane.
+        // Fits exactly: nothing is pinned and the rail has no lane.
         #expect(store.sessionGroups.count == 1)
         #expect(store.sessionViewportHeight == store.sessionListContentHeight)
 
@@ -392,8 +322,7 @@ struct ProductTrailLayoutTests {
         let across = CGFloat(rep.pixelsWide) / host.bounds.width
         let down = CGFloat(rep.pixelsHigh) / host.bounds.height
 
-        // Past the chip and the count, above the rule: the band of the
-        // heading's own line that the heading itself draws nothing in.
+        // Past the chip and the count, above the rule: where the heading draws nothing.
         let badge = PanelMetrics.sessionRowPadding
             + PanelMetrics.productBadgeWidth(AgentKind.claudeCode.displayName)
         var brightest: CGFloat = 0

@@ -1,18 +1,10 @@
 // Three first-run pages in one stable macOS window. See `figma-design.md` §7.
-// The specimens use the product's own views with numbered keys. Finishing
-// onboarding closes this window and opens Settings in its own scene.
+// Finishing onboarding closes this window and opens Settings in its own scene.
 import AppKit
 import SwiftUI
 
-/// First run, and the hand-over to Settings once it is done.
-///
-/// **This window used to become Settings**, by drawing ``AppSettingsView`` in
-/// place of onboarding. It cannot any more: Settings is three toolbar panes,
-/// and a `TabView` draws those only inside the `Settings` scene — in this
-/// `Window` the same view measured as a segmented control in the title bar,
-/// no pane name for a title, and the pane floating in the 840 pt the first-run
-/// pages had left. So finishing onboarding opens the one Settings window the
-/// gear opens too, and closes this one.
+/// First run, and the hand-over to Settings once it is done. Settings is not drawn here: a
+/// `TabView` draws toolbar panes only inside the `Settings` scene.
 struct ProductRootView: View {
     @EnvironmentObject private var store: MonitorStore
     @Environment(\.openSettings) private var openSettings
@@ -30,8 +22,7 @@ struct ProductRootView: View {
         .onChange(of: store.hasCompletedOnboarding) { _, completed in
             if completed { handOverToSettings() }
         }
-        // The window is suppressed at launch once onboarding is done, so this
-        // is only a window restored against that; it goes the same way.
+        // Only a window restored after onboarding was done; it hands over too.
         .onAppear {
             if store.hasCompletedOnboarding { handOverToSettings() }
         }
@@ -43,9 +34,8 @@ struct ProductRootView: View {
     }
 }
 
-/// Three pages share one fixed content area and one bottom navigation row.
-/// Only the current page is built, so opening the connection page does not
-/// initialise the specimen stores. Long content scrolls above the controls.
+/// Three pages share one fixed content area and one bottom navigation row. Only the current page
+/// is built, so the connection page does not initialise the specimen stores.
 enum OnboardingLayout {
     static let width: CGFloat = 580
     static let height: CGFloat = 840
@@ -149,7 +139,6 @@ struct OnboardingView: View {
         }
     }
 
-    /// The icon and the one sentence about what the app is for.
     private var hero: some View {
         HStack(alignment: .center, spacing: 14) {
             Image(nsImage: NSApp.applicationIconImage)
@@ -168,14 +157,8 @@ struct OnboardingView: View {
         }
     }
 
-    /// The connections, in the rows Settings uses for the same job.
-    ///
-    /// `Recheck` sits in the footnote rather than beside the switches because
-    /// turning the Codex one on is not the end of it: Codex keys hook trust to
-    /// each definition's place in the file and asks before it will run one, so
-    /// that row only says Connected once a trusted event has actually arrived.
-    /// Claude Code has no such step — its row answers as soon as the file is
-    /// written.
+    /// The connections, in the rows Settings uses. `Recheck` is in the footnote: Codex asks the user
+    /// to trust hooks before running them, so its row says Connected only after a trusted event.
     private var connectGroup: some View {
         SettingsGroup(header: "Connect your agents") {
             ProductConnectionRows()
@@ -191,14 +174,8 @@ struct OnboardingView: View {
         }
     }
 
-    /// The whole of what the notch draws: shut, the five states, hovered.
-    ///
-    /// Three blocks rather than one row of swatches. The swatches said what the
-    /// marks mean and nothing about where they sit, which left the first thing
-    /// a user actually sees — a bar in the menu bar with six parts in it —
-    /// unexplained. The bar and the panel are the product's own views at their
-    /// own size (`OnboardingAnatomy.swift`), so this group cannot fall out of
-    /// step with the surface it describes.
+    /// The whole of what the notch draws: shut, the five states, hovered. The bar and panel are the
+    /// product's own views (`OnboardingAnatomy.swift`), so this cannot drift from the surface.
     private var notchGroup: some View {
         SettingsGroup(header: "Reading the notch") {
             CollapsedBarAnatomy()
@@ -219,16 +196,11 @@ struct OnboardingView: View {
                     + "notched display."
             )
         }
-        // Both specimens read from one clock, and it is a real one: the
-        // readings are the product's own, counting on from the moment this
-        // window opened. Restarted every ten minutes so a window left open all
-        // afternoon is still teaching from a turn-shaped figure rather than
-        // from `4:17:33`. Cancelled with the view, which is the whole of its
-        // lifetime.
+        // Both specimens share one real clock, restarted every ten minutes so the figure stays
+        // turn-shaped; cancelled with the view.
         .task { await NotchSpecimen.cycle() }
     }
 
-    /// Recent follows the expanded panel whose seam opens it.
     private var recentGroup: some View {
         SettingsGroup(header: "Recent: find a Thread after it leaves the list") {
             RecentQueueAnatomy().padding(.vertical, 18)
@@ -242,7 +214,6 @@ struct OnboardingView: View {
         }
     }
 
-    /// One lesson at a time keeps each example and its explanation together.
     /// These controls browse drawings; they never send an answer to a product.
     private var answerGroup: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -305,21 +276,8 @@ struct OnboardingView: View {
     }
 }
 
-/// The five appearances, live, in the surface's one ink.
-///
-/// They animate here for the same reason they animate in the notch: the
-/// pattern *is* the motion, and a still grid says far less than a moving one.
-/// It costs nothing to run — the tracks are layer animations on the render
-/// server, and `Connected` holds by itself because its state has no period at
-/// all.
-///
-/// **One mark per specimen, which is how many the notch draws.** It taught two
-/// for as long as hue said which product: first as a single matrix cut on its
-/// own diagonal, then as a stacked pair in the two brand colours. Both are
-/// gone with the colours (`colour-v2.md` §1) — the surface has one aggregate
-/// mark standing for every product at once, in ``NotchPalette/themeInk``, and
-/// a legend showing anything else would be teaching a drawing the product
-/// never makes.
+/// The five appearances, live, in the surface's one ink. Layer animations on the render server,
+/// so free to run. One mark per specimen, as the notch draws (`colour-v2.md` §1).
 private struct MatrixLegend: View {
     private static let states: [(NotchMatrixState, String)] = [
         (.running, "Working..."),
@@ -358,16 +316,8 @@ private struct MatrixLegend: View {
     }
 }
 
-/// A scrap of the notch to stand a specimen on.
-///
-/// The matrix is drawn for one surface only — a black one — and its unlit bed
-/// is nearly black by design. Dropped straight onto a light card it would read
-/// as a smudge, so a specimen brings the ground it belongs to with it. The chip
-/// is also what contains the glow: the lit passes bleed `cell × 10.5/27 × 3`
-/// past the matrix's own bounds, which at this size is less than the padding
-/// here.
-///
-/// A mark shown off the notch should look the same wherever it is shown.
+/// A scrap of the notch to stand a specimen on: the matrix's near-black bed needs its black
+/// ground, and the chip's padding contains the glow (`cell × 10.5/27 × 3` past the bounds).
 struct NotchChip<Content: View>: View {
     @ViewBuilder let content: () -> Content
 
@@ -382,8 +332,7 @@ struct NotchChip<Content: View>: View {
 }
 
 enum MarkSpecimenMetrics {
-    /// The size the notch itself draws a matrix at, so a specimen is one
-    /// rather than an illustration of one.
+    /// The size the notch draws a matrix at, so a specimen is the real thing.
     static let matrixSize = PanelMetrics.statusMatrixSize
     static let chipSize: CGFloat = 30
 }

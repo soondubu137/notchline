@@ -35,8 +35,7 @@ struct StructuredAnswerTests {
         return try #require(updated["answers"] as? [String: String])
     }
 
-    /// A person typing a label and a person choosing it are two acts, told
-    /// apart until the product's own field, which holds one string.
+    /// Typing a label and choosing it stay two acts until the product's own one-string field.
     @Test func aTypedLabelAndAChosenOptionAreDifferentAnswersSpelledAlike() throws {
         let asked = question()
         let chosen = AgentQuestionAnswer(question: asked, selectedOptionIDs: [1])
@@ -51,9 +50,7 @@ struct StructuredAnswerTests {
         #expect(try answers(in: fromChoice) == ["Which database?": "Postgres"])
     }
 
-    /// An option labelled `A, B` is one option; `A` and `B` ticked are two.
-    /// Claude Code's field is one string per question, so the two spell the
-    /// same there by that product's own design and nowhere earlier.
+    /// Claude Code's field is one string per question, so the two spell the same only there.
     @Test func anOptionLabelledWithACommaIsNotTwoOptions() {
         let one = question(options: ["A, B", "C"], several: true)
         let two = question(options: ["A", "B"], several: true)
@@ -65,7 +62,6 @@ struct StructuredAnswerTests {
         #expect(ClaudeCodeRequestAnswering.spelling(of: both) == "A, B")
     }
 
-    /// Two options wearing one label are two options, by position.
     @Test func twoOptionsWearingOneLabelAreToldApartByPosition() {
         let asked = question(options: ["Yes", "Yes"])
         let second = AgentQuestionAnswer(question: asked, selectedOptionIDs: [1])
@@ -74,10 +70,7 @@ struct StructuredAnswerTests {
         #expect(ClaudeCodeRequestAnswering.spelling(of: second) == "Yes")
     }
 
-    /// Two questions asked in the same words are two questions here, and one
-    /// key in Claude Code's own `answers`, which its schema keys by text. The
-    /// later answer wins there; that is the product's format, recorded rather
-    /// than hidden behind a key the tool would not read.
+    /// Claude Code keys `answers` by question text, so the later answer wins there, by its format.
     @Test func twoQuestionsAskedInTheSameWordsCollapseOnlyInTheNativeKey() throws {
         let first = question("Which?", options: ["A", "B"], id: 0)
         let second = question("Which?", options: ["C", "D"], id: 1)
@@ -91,9 +84,7 @@ struct StructuredAnswerTests {
         #expect(try answers(in: sent) == ["Which?": "D"])
     }
 
-    /// A product's own identifier is read where it sends one and stays apart
-    /// from the position the surface draws, so an encoder that answers by
-    /// identifier needs nothing beyond the answer it is handed.
+    /// An encoder answering by identifier needs nothing beyond the answer it is handed.
     @Test func aNativeIdentifierIsReadAndKeptApartFromThePosition() throws {
         let toolInput = JSONValue.object(["questions": .array([
             .object([
@@ -109,8 +100,7 @@ struct StructuredAnswerTests {
         #expect(read.allSatisfy { !$0.acceptsNote && $0.acceptsFreeText })
         #expect(AgentRequestReading.questions(in: toolInput, acceptingNotes: true)?.allSatisfy(\.acceptsNote) == true)
 
-        /// A product that answers by identifier: one line per question, the
-        /// question's own id and its chosen options' positions.
+        /// One line per question: its id and its chosen options' positions.
         struct ByIdentifier: RequestAnswering {
             func hookOutput(for answer: AgentAnswer, updating input: JSONValue?) -> Data? {
                 guard case let .answers(answered) = answer, answered.allSatisfy(\.fitsItsQuestion) else { return nil }
@@ -127,8 +117,7 @@ struct StructuredAnswerTests {
         #expect(sent.map { String(decoding: $0, as: UTF8.self) } == "db=0\n7=Fly\n#2=eu")
     }
 
-    /// A question answered only by choosing draws no field, and refuses words
-    /// at every layer that carries an answer.
+    /// Refuses words at every layer that carries an answer.
     @Test func aChoicesOnlyQuestionTakesNoWords() {
         let asked = question(freeText: false)
         let request = AgentRequest(
@@ -143,7 +132,6 @@ struct StructuredAnswerTests {
         #expect(ClaudeCodeRequestAnswering().hookOutput(
             for: .answers([AgentQuestionAnswer(question: asked, text: "Other")]), updating: input
         ) == nil)
-        // A question that takes words draws the field it always drew.
         let worded = AgentRequest(
             id: "q", toolName: "AskUserQuestion", form: .questions([question()]),
             answerHandle: AnswerHandle(ticket: 1)
@@ -151,9 +139,7 @@ struct StructuredAnswerTests {
         #expect(worded.answerRow()?.placeholder == "your answer…")
     }
 
-    /// An answer that does not fit its question is refused whole: a tick on an
-    /// option the question no longer offers, two ticks on a single choice, a
-    /// note where none may travel, or nothing at all. Half of it is not sent.
+    /// Half of it is never sent.
     @Test func anAnswerThatDoesNotFitItsQuestionIsRefusedWhole() {
         let asked = question()
         #expect(!AgentQuestionAnswer(question: asked, selectedOptionIDs: [7]).fitsItsQuestion)
@@ -173,8 +159,7 @@ struct StructuredAnswerTests {
         #expect(claude.hookOutput(for: .answers([]), updating: input) != nil, "a set with nothing asked merges nothing")
     }
 
-    /// A refusal takes words only where the connection was declared to carry
-    /// them, and a request draws only the answers its connection accepts.
+    /// A request draws only the answers its connection accepts.
     @Test func aRefusalTakesWordsOnlyWhereTheConnectionDeclaredIt() {
         let silent = AnswerOperations(grant: true, refuse: true)
         let request = AgentRequest(
@@ -201,9 +186,6 @@ struct StructuredAnswerTests {
         #expect(grantOnly.answerRow()?.placeholder == nil)
     }
 
-    /// A form the connection cannot answer is read, whatever is held: a
-    /// question over a decision-only channel, a decision over a
-    /// questions-only one, and the form this app declines to draw.
     @Test func aFormTheConnectionCannotAnswerIsReadWhateverIsHeld() {
         let codexQuestion = AgentRequest(
             id: "q", toolName: "request_user_input", form: .questions([question()]),
@@ -223,15 +205,12 @@ struct StructuredAnswerTests {
             id: "e", toolName: "Elicitation", form: .unsupported,
             answerHandle: AnswerHandle(ticket: 1), operations: .decision
         ).canBeAnswered)
-        // A request built with no declaration answers by its form, which is
-        // what a body read off a `PreToolUse` carries until the event holding
-        // the connection says otherwise.
+        // Undeclared answers by its form, as a `PreToolUse` body does until the connection says otherwise.
         let undeclared = AgentRequest(id: "c", toolName: "Bash", form: .command("ls"))
         #expect(undeclared.operations == .decision)
         #expect(undeclared.answerable(on: AnswerHandle(ticket: 1)).canBeAnswered)
         #expect(!undeclared.answerable(on: AnswerHandle(ticket: 1), permitting: .readingOnly).canBeAnswered)
-        // And the connection's declaration wins over the form's default when
-        // the evidence carries one, not otherwise.
+        // The declaration wins over the form's default only when the evidence carries one.
         let held = MonitoringEvidence(
             signal: .approvalWaitInferred, threadID: "t", observedAt: Date(),
             answerHandle: AnswerHandle(ticket: 2), answerOperations: .questionAnswers
@@ -241,8 +220,7 @@ struct StructuredAnswerTests {
         #expect(undeclared.answerable(by: unheld).operations == .decision)
     }
 
-    /// Each vocabulary declares what its held connection will act on, and the
-    /// product that answers nothing declares nothing.
+    /// The product that answers nothing declares nothing.
     @Test func theVocabulariesDeclareWhatTheirHeldConnectionAccepts() {
         let claude = ClaudeCodeHookVocabulary()
         let codex = CodexHookVocabulary()
@@ -255,9 +233,7 @@ struct StructuredAnswerTests {
         #expect(AntigravityHookVocabulary().answerOperations(forEvent: "PermissionRequest", toolName: nil) == .readingOnly)
     }
 
-    /// The boundary refuses an answer the connection was never declared for,
-    /// before a byte is composed and without letting the connection go: the
-    /// answer it does accept still travels afterwards.
+    /// Refused before a byte is composed, the connection kept: an accepted answer still travels.
     @Test func theBoundaryRefusesAnAnswerTheConnectionWasNotDeclaredFor() async throws {
         let root = URL(fileURLWithPath: "/tmp").appendingPathComponent("cin-ops-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -292,8 +268,6 @@ struct StructuredAnswerTests {
         #expect(request.canBeAnswered)
         let handle = try #require(request.answerHandle)
 
-        // A question's answers down a decision's connection: refused, nothing
-        // written, the connection still held and the row still answerable.
         let answered = await repository.answer(
             .answers([AgentQuestionAnswer(question: question(), selectedOptionIDs: [0])]), on: handle
         )
@@ -301,19 +275,16 @@ struct StructuredAnswerTests {
         #expect(!pair.peerHasInput())
         #expect(await repository.observedState().turns.first?.requestAwaitingAnAnswer?.canBeAnswered == true)
 
-        // The decision it was declared for travels.
         #expect(await repository.answer(.refuse("not now"), on: handle) == .sent)
         #expect(pair.peerHasInput())
         let sent = try #require(pair.readFromPeer())
         #expect(String(decoding: sent, as: UTF8.self).contains(#""behavior":"deny""#))
         #expect(await repository.observedState().turns.first?.requestAwaitingAnAnswer?.canBeAnswered == false)
-        // And the spent handle answers nothing more.
         #expect(await repository.answer(.grant, on: handle) == .expired(.notHeld))
     }
 }
 
-/// One connected pair of descriptors: the app's end is handed to the
-/// repository, the peer's end is what the product would read.
+/// The app's end goes to the repository; the peer's end is what the product would read.
 struct AnsweringSocketPair {
     let app: Int32
     let peer: Int32

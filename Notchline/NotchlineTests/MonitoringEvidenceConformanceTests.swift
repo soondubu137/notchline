@@ -2,8 +2,8 @@ import Foundation
 import Testing
 @testable import Notchline
 
-/// A typed native source, with no hook configuration, vocabulary, JSON or
-/// socket. It uses the shipping runtime and reducer rather than its own fold.
+/// A typed native source (no hooks, vocabulary, JSON or socket) through the shipping runtime
+/// and reducer.
 struct MonitoringEvidenceConformanceTests {
     private struct LiveSource: MonitoringLifecycleSource {
         let repository: MonitoringRepository
@@ -69,8 +69,7 @@ struct MonitoringEvidenceConformanceTests {
     func submissionOrderAndRetiredIdentitiesSurviveIndependentDrainTasks() async throws {
         let repository = MonitoringRepository(policy: .explicit)
         let epoch = repository.observationEpoch
-        // No await between submissions: actor task scheduling cannot reorder
-        // the source's prefix, even when it starts reducing during this loop.
+        // No await between submissions: actor scheduling cannot reorder the source's prefix.
         for index in 0..<100 {
             let time = t0.addingTimeInterval(Double(index * 2))
             repository.submit(MonitoringEvidence(

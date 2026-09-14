@@ -167,7 +167,7 @@ struct MonitoringSourceCompositionTests {
             turnID: "turn"), in: repository.observationEpoch)
         let started = Task { await runtime.fetchSnapshot() }
         #expect(await eventually { await source.reads == 1 })
-        // Bounded observation: the snapshot must land while the reader is held.
+        // The snapshot must land while the reader is held.
         let recorder = SnapshotRecorder()
         let observed = Task { await recorder.set(started.value) }
         let returned = await eventually { await recorder.value != nil }
@@ -241,11 +241,10 @@ struct MonitoringSourceCompositionTests {
         let (runtime, _) = product(source, clock: clock)
         _ = await refreshed(runtime)
         var iterator = runtime.stateChangeEvents.makeAsyncIterator()
-        // Consume the initial Turn's edge before testing the source's edge.
+        // Consume the initial Turn's edge first.
         #expect(await iterator.next() != nil)
         source.changes.signal()
         #expect(await iterator.next() != nil)
-        // The source counter advances before its wake reaches the store.
         #expect(await eventually {
             _ = await runtime.fetchSnapshot()
             let reads = await source.reads

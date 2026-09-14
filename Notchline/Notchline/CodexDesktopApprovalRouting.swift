@@ -3,52 +3,25 @@ import Foundation
 
 /// Who answers a thread's approval requests.
 ///
-/// Codex Desktop offers "Approval for me" (the `guardian-approvals` agent mode,
-/// the `--approve-for-me` flag on the CLI), which routes every approval request
-/// to an automatic reviewer instead of to the person. The reviewer is a model
-/// turn of its own, and its answer is only ever *allow* or *deny* — it has no
-/// outcome that escalates back to the human. A thread in that mode therefore
-/// cannot park on an approval the user has to clear.
+/// Codex Desktop's "Approval for me" (`guardian-approvals` agent mode, CLI `--approve-for-me`)
+/// sends every request to a reviewer that only allows or denies, so the thread never waits on
+/// the user.
 nonisolated protocol DesktopApprovalRoutingProviding: Sendable {
     func snapshot() async -> DesktopApprovalRoutingSnapshot
 }
 
 /// Which threads Codex answers approvals for, as Desktop last recorded it.
 ///
-/// Deliberately one-sided: it names only the threads *proven* to be reviewed
-/// automatically. The absent case and the unrecognised case are the same
-/// answer, and it is the answer that changes nothing — because the claim this
-/// snapshot exists to make is "nobody will be asked", and an unreadable file,
-/// a thread Desktop has not recorded, or a reviewer name a later Desktop
-/// invents are all failures to make it. Getting that backwards would silence
-/// the one state the product exists to show.
+/// One-sided: names only threads proven automatic; anything unknown means approvals reach the user.
 struct DesktopApprovalRoutingSnapshot: Equatable, Sendable {
-    /// Threads whose approval requests Codex answers on the user's behalf.
     let automaticallyReviewedThreadIDs: Set<String>
-    /// The instant this reading is a complete account up to.
-    ///
-    /// The same field, for the same reason, as
-    /// ``DesktopUnreadStateSnapshot/currentAsOf``: this map is read out of the
-    /// same `.codex-global-state.json`, and that file is a projection Codex
-    /// Desktop writes through one trailing 500 ms debounce with no maximum
-    /// wait, shared by every persisted atom it owns. The composer draft is one
-    /// of those atoms and the editor writes it on every keystroke, so a user
-    /// who is typing holds the whole file still -- measured at 45.4 seconds
-    /// across 165 characters on Desktop `26.820.60940`, 2026-08-26.
-    ///
-    /// It matters differently here, and the difference is what
-    /// ``TurnApprovalRoutingPin`` acts on. An unread reading taken before a
-    /// Turn ended is *uninformed*: the event had not happened yet. A reviewer
-    /// reading taken before a Turn began is not uninformed at all -- the
-    /// setting existed then, and normally has not changed since. What the
-    /// instant buys is the one sequence that breaks it: change the reviewer,
-    /// type the prompt, send. The change goes into Desktop's memory, the
-    /// typing keeps it off disk, and the Turn starts with this file still
-    /// naming the reviewer the user has just moved away from.
+    /// The instant this reading is a complete account up to (as
+    /// ``DesktopUnreadStateSnapshot/currentAsOf``): typing holds `.codex-global-state.json` still
+    /// (45.4 s, Desktop `26.820.60940`, 2026-08-26), so after change reviewer, type, send, the file
+    /// still names the old reviewer. ``TurnApprovalRoutingPin`` acts on it.
     let currentAsOf: Date
 
-    /// A reading that names nothing and reaches nowhere: no thread is proven
-    /// automatic, and no Turn can be judged against it.
+    /// A reading that proves no thread automatic and against which no Turn can be judged.
     nonisolated static let unknown = Self(
         automaticallyReviewedThreadIDs: [],
         currentAsOf: .distantPast
@@ -62,7 +35,6 @@ struct DesktopApprovalRoutingSnapshot: Equatable, Sendable {
         self.currentAsOf = currentAsOf
     }
 
-    /// Whether an approval request on this thread can still reach the user.
     nonisolated func approvalsReachTheUser(for threadID: String) -> Bool {
         !automaticallyReviewedThreadIDs.contains(threadID)
     }
@@ -70,47 +42,11 @@ struct DesktopApprovalRoutingSnapshot: Equatable, Sendable {
 
 /// The routing answer each live Turn started under, held for that Turn's life.
 ///
-/// **The map is a fact about the thread now; a row is a fact about the Turn
-/// that is running.** Codex Desktop rewrites
-/// `heartbeat-thread-permissions-by-id` the instant the thread's reviewer
-/// changes, and a `ThreadSettings` override does not retarget the turn already
-/// in flight. Measured 2026-08-24 against this machine's Desktop log: thread
-/// `01a03241` started under `user` at 22:32:13, was switched to `auto_review`
-/// at 22:37:35, and went on opening approval dialogs the user answered by hand
-/// at 22:40:07, 22:40:28, 22:41:10, 22:42:10 and 22:42:28 — the `rm -rf` this
-/// was reported against among them. The rollout's
-/// `turn_context.approvals_reviewer`, which is the authority the running turn
-/// actually used, still read `user` through all of it. Asking the map at
-/// projection time silenced every one of those dialogs, and the row sat on
-/// *Running* while the user was being asked. Thread `01a03130` shows the same
-/// shape five hours earlier: switched at 17:34:53, answered by hand at
-/// 17:36:01.
-///
-/// The map is right far more often than not — over the 42 threads whose
-/// rollout was still on disk it agreed with `turn_context` 39 times — but all
-/// three disagreements were threads whose reviewer changed mid-turn, and all
-/// three fell in the one direction that hides the state the product exists to
-/// show.
-///
-/// So the answer is taken once, when a Turn is first seen, and reused until
-/// that Turn is gone. Symmetric on purpose: a thread switched *to* `user`
-/// mid-turn is still being reviewed automatically for the rest of that turn,
-/// and the row must not start asking the user to clear a prompt nobody will
-/// be shown.
-///
-/// **The map is the fallback now, not the source.** An earlier version of this
-/// comment left the map as the only source and named its remaining hole — a
-/// Turn whose first refresh lands before Desktop has persisted a switch pins
-/// the stale answer for that Turn's whole life — as an escalation to pay for
-/// only if it ever proved itself. It proved itself: reported 2026-08-25 as
-/// *Approval needed* on rows where nobody was being asked, on sessions whose
-/// mode had been switched from manual to automatic partway through and never on
-/// sessions started in automatic mode. That is the signature of a stale map
-/// exactly, because a session started in automatic mode has nothing to persist.
-///
-/// So ``CodexRolloutTurnReviewerReader`` is asked first, and this holds what it
-/// said. The map answers only while that reading is outstanding and for the
-/// Turns it cannot answer for at all.
+/// A `ThreadSettings` override does not retarget the Turn in flight, but Desktop rewrites
+/// `heartbeat-thread-permissions-by-id` at once: thread `01a03241`, switched to `auto_review`
+/// mid-turn, kept asking by hand while `turn_context` read `user` (measured 2026-08-24; the
+/// map disagreed on 3 of 42 threads, all this way). Symmetric for a switch *to* `user`.
+/// ``CodexRolloutTurnReviewerReader`` answers first; the map only fills in.
 struct TurnApprovalRoutingPin: Sendable {
     /// A Turn, by the only pair that identifies one across threads.
     nonisolated struct TurnIdentity: Hashable, Sendable {
@@ -123,85 +59,41 @@ struct TurnApprovalRoutingPin: Sendable {
         }
     }
 
-    /// What is known about one Turn's routing.
-    ///
-    /// The two fields answer different questions and neither implies the other:
-    /// `value` is the answer the row uses, `rolloutReading` is what the
-    /// authority has already been asked and of which file.
+    /// `value` is the answer the row uses; `rolloutReading` is what the authority has been asked,
+    /// and of which file.
     private struct Answer: Sendable {
         var value: Bool?
         var rolloutReading: RolloutReading = .notAsked
     }
 
-    /// How far the Turn's own `turn_context` has been looked for.
-    ///
-    /// **The third case is the whole of why this is not a `Bool`.** A reading
-    /// that comes up empty used to close the question for the Turn's whole
-    /// life, on the measurement that the record is written before the hook
-    /// that makes this app aware of the Turn -- true, and still true, but it
-    /// answers *when* the record is written and not *which file it is written
-    /// in*. The rollout a thread is written to is not fixed: resuming an
-    /// interrupted Turn rotates it, and the path this app holds is the App
-    /// Server's, read up to a metadata refresh interval ago. So an empty
-    /// reading now records the file it was made against, and closes the
-    /// question only when that file was the Turn's own.
+    /// How far the Turn's own `turn_context` has been looked for. Not a `Bool`: resuming an
+    /// interrupted Turn rotates the rollout and the held path can be stale, so an empty reading
+    /// records the file it was made against and is final only for the Turn's own file.
     private enum RolloutReading: Sendable {
-        /// The authority has not been asked.
         case notAsked
-        /// It was asked and it answered. Nothing more to ask.
         case answered
-        /// It was asked of the rollout the App Server named at this instant,
-        /// and that file did not carry this Turn's record.
+        /// Asked of the rollout the App Server named at this instant; that file lacked this Turn's record.
         case silent(pathReportedAt: Date)
     }
 
-    /// How far into a Turn Desktop's map may have been written and still be
-    /// describing what that Turn started under.
-    ///
-    /// The mirror of ``CodexRolloutTurnReviewerReader/recordTolerance``, which
-    /// bounds the same question from the other side, and the same two seconds:
-    /// the write this window is sized for is the one the 500 ms debounce
-    /// releases when sending stops the typing, so there is four times the
-    /// headroom over the delay it has to cover, and a reviewer switched
-    /// deliberately mid-turn is minutes away rather than seconds -- 5:22 and
-    /// 1:08 in the two measured cases.
+    /// How far into a Turn Desktop's map may have been written and still describe what that Turn
+    /// started under. Mirrors ``CodexRolloutTurnReviewerReader/recordTolerance``: 4x headroom over
+    /// the 500 ms debounce; deliberate mid-turn switches were measured 5:22 and 1:08 in.
     nonisolated private static let mapWindow: TimeInterval = 2
 
     private var answersByTurn: [TurnIdentity: Answer] = [:]
 
     nonisolated init() {}
 
-    /// Whether the Turn's own `turn_context` is still worth looking for in the
-    /// rollout the App Server named at `pathReportedAt`.
+    /// Whether the Turn's own `turn_context` is still worth looking for in the rollout the App
+    /// Server named at `pathReportedAt`. One reading per path.
     ///
-    /// **Once per rollout the Turn could be in, not once per refresh and not
-    /// once per Turn.** The record is written *before* the hook that makes
-    /// this app aware of the Turn — measured 2026-08-25 against CLI
-    /// `0.149.0-alpha.4.3`, `turn_context` at `…491.593` and
-    /// `UserPromptSubmit` at `…491.660`, again 65 ms apart on an
-    /// `--approve-for-me` run, and again 34 ms apart on the resumed Turn
-    /// measured 2026-08-31 — so a look inside the Turn's own rollout that
-    /// finds nothing is looking at a file that will never carry the record.
-    ///
-    /// **But the path may predate the Turn.** It comes from `thread/read`,
-    /// cached for a metadata refresh interval, and Codex writes a Turn resumed
-    /// after an interrupt into a *new* rollout for the same thread. Measured
-    /// 2026-08-31 on thread `01a058c7` (CLI `0.151.0-alpha.7.2`, Desktop): the
-    /// Turn was interrupted at `…38.039`, the user edited the prompt, and the
-    /// resumed Turn opened a rollout of its own at `…44.592` — the App Server
-    /// reported the new path from that instant, while this app's last
-    /// `thread/read` had gone out at `…36.206`, eight seconds before. Read
-    /// against that path, the newest `turn_context` in it belonged to the
-    /// interrupted Turn and no answer was given; recorded as final, the Turn
-    /// spent its whole life on the map, which had nothing admissible to say
-    /// either, and every call the automatic reviewer decided was announced as
-    /// *Approval needed*.
-    ///
-    /// So an empty reading is final only when it was made against a path the
-    /// App Server reported at or after the Turn began — which is after the
-    /// rotation, because the rollout exists before the record that is written
-    /// into it and the record precedes the hook. Otherwise the question stays
-    /// open until a newer path arrives, and one reading is made per path.
+    /// - The record precedes the Turn's first hook (65 ms, CLI `0.149.0-alpha.4.3`, 2026-08-25;
+    ///   34 ms on a resumed Turn, 2026-08-31), so an empty look in the Turn's own rollout is final.
+    /// - The path is cached from `thread/read`, and a Turn resumed after an interrupt writes a new
+    ///   rollout (thread `01a058c7`, CLI `0.151.0-alpha.7.2`, 2026-08-31); reading the old one
+    ///   announced every auto-reviewed call as *Approval needed*. So an empty reading is final
+    ///   only against a path reported at or after the Turn began.
     nonisolated func awaitsRolloutReading(
         forTurn turn: TurnIdentity,
         startedAt turnStartedAt: Date,
@@ -218,14 +110,8 @@ struct TurnApprovalRoutingPin: Sendable {
         }
     }
 
-    /// Records what the Turn's own `turn_context` said, or that the rollout
-    /// named at `pathReportedAt` did not carry it.
-    ///
-    /// `nil` is the second case, and it is deliberately not the same as an
-    /// answer: it claims nothing, leaving the map to supply the value exactly
-    /// as it did before this reading existed, and it names the file it looked
-    /// in so ``awaitsRolloutReading(forTurn:startedAt:inRolloutReportedAt:)``
-    /// can tell "not there" from "not there *yet*, in the wrong file".
+    /// Records what the Turn's own `turn_context` said, or (`nil`) that the rollout named at
+    /// `pathReportedAt` did not carry it. `nil` claims nothing and leaves the map to answer.
     nonisolated mutating func recordRolloutReading(
         _ approvalsReachTheUser: Bool?,
         forTurn turn: TurnIdentity,
@@ -236,9 +122,7 @@ struct TurnApprovalRoutingPin: Sendable {
                 .silent(pathReportedAt: pathReportedAt)
             return
         }
-        // Overwrites a map answer this Turn may already have been given. That
-        // is the whole point: the map is a fact about the thread now, and this
-        // is the reviewer the running Turn was handed.
+        // Overwrites any map answer: the map describes the thread now, this the running Turn.
         answersByTurn[turn] = Answer(
             value: approvalsReachTheUser,
             rolloutReading: .answered
@@ -247,47 +131,12 @@ struct TurnApprovalRoutingPin: Sendable {
 
     /// The answer for this Turn, recording it the first time the Turn is seen.
     ///
-    /// - Parameter turnStartedAt: when this Turn began. Only a map Desktop
-    ///   wrote in this Turn's own opening moments may answer for it, and both
-    ///   ends of that window are load-bearing.
-    ///
-    ///   **Too old is the dangerous end.** Desktop's file is a projection
-    ///   written through a debounce that anything typing can starve
-    ///   indefinitely (``DesktopApprovalRoutingSnapshot/currentAsOf``), so a
-    ///   projection from before the Turn can still name the reviewer the user
-    ///   has just moved away from. The sequence is *switch the thread to
-    ///   yourself, type the prompt, send*: the switch went into Desktop's
-    ///   memory, the typing held it off disk, and the map this app then read
-    ///   still said `auto_review`. Pinned, that silenced every approval dialog
-    ///   the user was in fact being shown, for the Turn's whole life.
-    ///
-    ///   **Too new is the end this pin already existed for.** A map written
-    ///   well into the Turn describes a reviewer the user may have changed
-    ///   *since* it started, and the running Turn keeps the one it was handed
-    ///   -- the measured `01a03241` case above, where reading the map at
-    ///   projection time silenced five hand-answered dialogs.
-    ///
-    ///   Neither end pins anything, so a refused reading costs only itself and
-    ///   the next admissible one still answers. The Turn meanwhile reports
-    ///   what this adapter reports for any thread it cannot vouch for: that
-    ///   approvals reach the user.
-    ///
-    ///   **The window is wide enough because Desktop writes this file at the
-    ///   start of every Turn it hosts.** Sending clears the composer, and the
-    ///   draft is a persisted atom -- twice over, through the editor's own
-    ///   `setText("")` and through the reset that follows it -- so the write
-    ///   the debounce has been holding lands about half a second in, carrying
-    ///   whatever the user changed just before they typed. That write is what
-    ///   makes the ordinary case answerable at all, and it is also what
-    ///   repairs the stale value rather than merely refusing it.
-    ///
-    ///   When it does not land -- the user submits here and goes on typing in
-    ///   another thread, which is the same starvation measured on the unread
-    ///   set -- nothing in the window answers and the row shows *Approval
-    ///   needed* until ``CodexRolloutTurnReviewerReader``, which is the
-    ///   authority and does not read this file, answers over the top of it.
-    ///   That is the direction this adapter fails in everywhere else; the
-    ///   other one hides the single state the product exists to show.
+    /// - Parameter turnStartedAt: when this Turn began. Only a map written in this Turn's opening
+    ///   window may answer. Too old: typing starves Desktop's debounced write
+    ///   (``DesktopApprovalRoutingSnapshot/currentAsOf``), so it can name the reviewer the user
+    ///   just left. Too new: it may describe a switch made after the Turn started (`01a03241`).
+    ///   A refused reading pins nothing and reports that approvals reach the user. Sending clears
+    ///   the persisted draft, landing the held write about half a second in.
     nonisolated mutating func approvalsReachTheUser(
         forTurn turn: TurnIdentity,
         startedAt turnStartedAt: Date,
@@ -305,29 +154,17 @@ struct TurnApprovalRoutingPin: Sendable {
         return answer
     }
 
-    /// Forgets every Turn not named here.
-    ///
-    /// Without it the table grows by one entry per Turn for as long as the app
-    /// is open, which on this machine's usage is a few thousand a week — small,
-    /// but unbounded, and the caller already walks exactly the set that is
-    /// still live.
+    /// Forgets every Turn not named here; otherwise the table grows by a few thousand a week.
     nonisolated mutating func retain(turns: Set<TurnIdentity>) {
         answersByTurn = answersByTurn.filter { turns.contains($0.key) }
     }
 }
 
-/// The reviewer one running Turn was actually handed.
-///
-/// Split from ``DesktopApprovalRoutingProviding`` because the two answer
-/// different questions from different sources: that one reads what Desktop last
-/// recorded about a *thread*, this one reads what Codex wrote down when it
-/// started this *Turn*.
+/// The reviewer one running Turn was actually handed, from what Codex wrote when it started
+/// the Turn (``DesktopApprovalRoutingProviding`` reads Desktop's per-thread record instead).
 nonisolated protocol TurnReviewerReading: Sendable {
-    /// Whether an approval on this Turn can still reach the user.
-    ///
-    /// `nil` means the rollout did not say — no such file, no `turn_context`
-    /// near its end, or one belonging to a different Turn. It is not an answer
-    /// and must not be treated as one.
+    /// Whether an approval on this Turn can still reach the user. `nil` means the rollout did not
+    /// say (no file, no `turn_context` near its end, or another Turn's) and is not an answer.
     func approvalsReachTheUser(
         forTurn turnID: String,
         startedAt turnStartedAt: Date,
@@ -335,66 +172,27 @@ nonisolated protocol TurnReviewerReading: Sendable {
     ) async -> Bool?
 }
 
-/// Reads `turn_context.approvals_reviewer` from the tail of a thread's rollout.
+/// Reads `turn_context.approvals_reviewer` from the tail of a thread's rollout: the authority,
+/// written at the head of every Turn and obeyed for its whole life.
 ///
-/// **This is the authority, and the only one.** Codex writes a `turn_context`
-/// record at the head of every Turn naming the reviewer that Turn will use, and
-/// that value is what the turn goes on to obey for its whole life — a
-/// `ThreadSettings` override applied mid-turn changes the *thread*, not the
-/// turn in flight (the timings for that are in ``TurnApprovalRoutingPin``).
-/// Desktop's `heartbeat-thread-permissions-by-id` is a copy of the thread's
-/// current setting, written by a different process at a time nobody here
-/// controls; this record is the turn's own.
-///
-/// **Reading it is cheap at the only moment it is read.** The p90 of "how far
-/// is the last `turn_context` from EOF" over this machine's rollouts is ~950 KB
-/// and the worst is 20 MB, but those are rollouts at rest, with a turn's worth
-/// of items appended after the record. This reader looks when the Turn has just
-/// begun, which is when the record is the newest thing in the file: measured
-/// 2026-08-25 against CLI `0.149.0-alpha.4.3`, ~1 KB from EOF at the moment
-/// `UserPromptSubmit` fired. ``maximumTailByteCount`` is sized for the case
-/// where a refresh is late rather than for the case where it is on time.
-///
-/// **And it is read before the app has heard of the Turn.** Same measurement,
-/// twice: `turn_context` at `…491.593` against `UserPromptSubmit` at
-/// `…491.660`, and on an `--approve-for-me` run `…561.167` against `…561.232`.
-/// 65 ms and 67 ms — the record is on disk first, so a look that comes up empty
-/// is looking at a rollout that has nothing to give rather than one that is
-/// behind. That is what lets the caller ask once per Turn instead of once per
-/// refresh.
+/// - Read as the Turn begins, the record is ~1 KB from EOF (at rest: p90 ~950 KB, worst
+///   20 MB). ``maximumTailByteCount`` is sized for a late refresh.
+/// - The record is on disk 65–67 ms before `UserPromptSubmit` (CLI `0.149.0-alpha.4.3`,
+///   2026-08-25), so an empty look means there is nothing to give, not that it is behind.
 actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
-    /// The one reviewer name that means "not the user".
-    ///
-    /// One-sided for the same reason the map is: an unreadable file, a record
-    /// this build does not recognise, or a reviewer a later Codex invents all
-    /// fail to prove "nobody will be asked", and the answer to a failed proof
-    /// is the state that keeps the row honest.
+    /// The one reviewer name that means "not the user". An unreadable file or unknown reviewer
+    /// fails to prove nobody will be asked, so it keeps approvals reaching the user.
     nonisolated private static let automaticReviewer = "auto_review"
-    /// How much of the end of the rollout is scanned for the record.
     nonisolated private static let maximumTailByteCount = 512 * 1_024
-    /// How much older than the Turn its own `turn_context` may be.
-    ///
-    /// **The fallback test, for a record that does not name its Turn.** The
-    /// record precedes the Turn's first hook by ~65 ms measured, and the
-    /// Turn's `startedAt` is that hook's arrival, so this Turn's record is
-    /// always a little *older* than `startedAt` and the previous Turn's is
-    /// older by however long the user took to type. Two seconds separates them
-    /// with three orders of magnitude of headroom, and where it does not — two
-    /// Turns opened on one thread inside two seconds — the two share a
-    /// reviewer anyway, because nobody switched a mode in between.
+    /// How much older than the Turn its own `turn_context` may be, for a record that does not
+    /// name its Turn. The record precedes the first hook by ~65 ms; two Turns on one thread inside
+    /// 2 s share a reviewer anyway.
     nonisolated private static let recordTolerance: TimeInterval = 2
 
     private struct TurnContextRecord: Decodable {
         let timestamp: Date
-        /// The Turn this record was written for, where the record says.
-        ///
-        /// The same identity the hooks carry and the same one the abort record
-        /// carries: measured on the 2026-08-29 end-to-end run behind ADR 0011,
-        /// the hook's `turn_id`, the id `turn/start` returned, the
-        /// `turn_context` at the head of the Turn and the `turn_aborted` at
-        /// its end were one string. Optional because a build that stops
-        /// writing it must fall back to the window rather than answer nothing
-        /// for every Turn there is.
+        /// The Turn this record was written for: the same id as the hook's `turn_id` (measured
+        /// 2026-08-29, ADR 0011). Optional so a build without it falls back to the time window.
         let turnID: String?
         let approvalsReviewer: String?
 
@@ -457,16 +255,9 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
         guard let record = newestTurnContext(inRolloutAt: rolloutPath) else {
             return nil
         }
-        // A record from the Turn before this one describes a reviewer that has
-        // already been superseded, which is the whole failure this reader was
-        // built for. Better to say nothing and let the map answer than to pin
-        // it.
-        //
-        // **The record names its own Turn, so where it does, that settles it.**
-        // The window below is a proxy for this question and a good one, but a
-        // proxy: it reads "written at about the time this Turn started" as
-        // "written for this Turn", which the rollout a resumed Turn leaves
-        // behind can satisfy while naming the Turn the user interrupted.
+        // A previous Turn's record names a superseded reviewer: return nil and let the map answer.
+        // A record that names its Turn settles it; the window below is a proxy that a resumed
+        // Turn's old rollout can satisfy.
         if let recordedTurnID = record.turnID {
             guard recordedTurnID == turnID else { return nil }
         } else if record.timestamp
@@ -484,12 +275,9 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
             return nil
         }
         let decoder = JSONDecoder()
-        // Backwards: the newest record wins, and stopping at the first match is
-        // what keeps the rest of the tail from being decoded at all.
+        // Backwards: the newest record wins, and the rest of the tail is never decoded.
         for line in tail.split(separator: UInt8(ascii: "\n")).reversed() {
-            // The decode is the test of what a line is. This only keeps the
-            // other ninety-nine in a hundred from reaching it, and a rollout
-            // line can be tens of kilobytes of assistant text.
+            // Cheap prefilter; the decode decides. A rollout line can be tens of KB of assistant text.
             guard line.range(of: Self.turnContextMarker) != nil else { continue }
             if let record = try? decoder.decode(
                 TurnContextRecord.self,
@@ -505,11 +293,8 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
     nonisolated private static let turnContextMarker = Data("turn_context".utf8)
 }
 
-/// The one timestamp format every rollout record is stamped with.
-///
-/// `2026-08-26T04:44:51.593Z`: internet date time, fractional seconds, always
-/// UTC. Held here rather than built per read because `ISO8601DateFormatter` is
-/// expensive to create and this one is immutable once configured.
+/// The rollout record timestamp format (`2026-08-26T04:44:51.593Z`, always UTC). The
+/// formatter is cached because `ISO8601DateFormatter` is expensive to create.
 nonisolated enum CodexRolloutTimestamp {
     nonisolated private static let formatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
@@ -524,38 +309,12 @@ nonisolated enum CodexRolloutTimestamp {
 
 /// Reads the automatic-review membership out of Codex Desktop's state file.
 ///
-/// **Why this is read at all.** `PermissionRequest` fires when the permission
-/// pipeline runs, not when a person is asked — measured 2026-08-22 against CLI
-/// `0.149.0-alpha.4.1`, in a non-interactive `codex exec --approve-for-me` run
-/// where nobody could be asked: `PreToolUse(exec-…)`, `PermissionRequest`
-/// 10 ms later, and the paired `PostToolUse` 2.5 s after that, once the
-/// reviewer had answered and the command had run. The reducer's borrowed wait
-/// spans exactly that gap, so on this setting a row announced *Approval
-/// needed* for every reviewed call and cleared itself again with nothing for
-/// the user to do. The official `permission-request.command.input` schema
-/// carries no field that separates the two cases — `permission_mode` is
-/// `default` in both — so the separation has to come from the thread.
-///
-/// **Not the rollout, and not the host-level setting.** The value is also in
-/// each rollout's `turn_context.approvals_reviewer`, which is the authority the
-/// running turn actually used; reading it means tail-scanning a JSONL whose
-/// last `turn_context` sits arbitrarily far from the end once the turn has
-/// produced items. The same file also holds a host-level
-/// `permission-selection-by-host-id:local`, but that describes what the *next*
-/// thread will be started with, not what this one is running under. The
-/// per-thread map is the fact this adapter can read cheaply, and measured
-/// 2026-08-22 it covered every `user` thread of the last forty; the only ones
-/// missing were `subagent` threads, which never become rows.
-///
-/// **It is a fact about the thread now, and not about the Turn on the row.**
-/// An earlier version of this comment claimed the map *was* the fact about the
-/// row, and that was wrong: Desktop rewrites the entry the moment the reviewer
-/// is changed, while the turn already in flight keeps the reviewer it started
-/// with and goes on asking the person. Measured 2026-08-24, and the reason
-/// ``TurnApprovalRoutingPin`` sits between this snapshot and the row — the
-/// timings are recorded there. Nothing about this adapter changed for it; a
-/// snapshot is still what Desktop last recorded, and it is the caller's job to
-/// hold the answer still for the Turn it applies to.
+/// `PermissionRequest` fires when the permission pipeline runs, not when a person is asked
+/// (measured 2026-08-22, CLI `0.149.0-alpha.4.1`, `codex exec --approve-for-me`), and its
+/// schema cannot tell the cases apart (`permission_mode` is `default` in both). The per-thread
+/// map covered every `user` thread of the last forty (only `subagent` threads were missing).
+/// `permission-selection-by-host-id:local` describes the next thread, not this one. The map is
+/// a fact about the thread now, not the running Turn; ``TurnApprovalRoutingPin`` holds that.
 actor CodexDesktopApprovalRoutingRepository: DesktopApprovalRoutingProviding {
     nonisolated private static let stateFileName = ".codex-global-state.json"
     nonisolated private static let maximumStateFileSize = 4 * 1_024 * 1_024
@@ -591,10 +350,7 @@ actor CodexDesktopApprovalRoutingRepository: DesktopApprovalRoutingProviding {
             }
         }
 
-        /// Only the reviewer is decoded. The sibling `approvalPolicy` is
-        /// sometimes a string and sometimes an object with a `granular` table,
-        /// and reading it would make this adapter fail on a shape it has no
-        /// question about.
+        /// Only the reviewer is decoded: `approvalPolicy` is sometimes a string, sometimes an object.
         private struct ThreadPermissions: Decodable {
             let approvalsReviewer: String?
         }
@@ -617,22 +373,8 @@ actor CodexDesktopApprovalRoutingRepository: DesktopApprovalRoutingProviding {
 
     private let stateFileURL: URL
     private let fileManager: FileManager
-    /// The last map that decoded.
-    ///
-    /// Kept for the same reason the sibling adapters keep theirs, and with a
-    /// smaller consequence: Desktop rewrites this file atomically and often,
-    /// so a read that lands mid-replacement is ordinary. Dropping to "nothing
-    /// is automatic" for that one refresh would put *Approval needed* back on
-    /// the row for a beat — the exact flicker this adapter exists to end —
-    /// while a mode the user changed in the meantime is corrected by the next
-    /// successful read, which the Desktop's own write triggers.
-    ///
-    /// What it keeps is the map *and* the instant that map was written, so a
-    /// retained reading cannot pass itself off as newer than it is. For a Turn
-    /// that already has its answer this changes nothing; for one still inside
-    /// its opening window it means a failed read can leave the row saying
-    /// *Approval needed* for that beat after all, which is the direction this
-    /// adapter fails in everywhere else.
+    /// The last map that decoded, with the instant it was written. Desktop rewrites the file
+    /// atomically and often, so a mid-replacement read must not flicker *Approval needed*.
     private var lastKnownGood: DesktopApprovalRoutingSnapshot?
     private var lastSuccessfulRevision: FileRevision?
 
@@ -664,8 +406,8 @@ actor CodexDesktopApprovalRoutingRepository: DesktopApprovalRoutingProviding {
         self.fileManager = fileManager
     }
 
-    /// No change stream of its own: this fact shares a file with the unread
-    /// state, whose watcher already wakes a refresh on every write to it.
+    /// No change stream of its own: the unread-state watcher already wakes a refresh on every
+    /// write to this file.
     func snapshot() async -> DesktopApprovalRoutingSnapshot {
         let currentRevision = try? revision(of: stateFileURL)
         if currentRevision != nil,
@@ -683,33 +425,22 @@ actor CodexDesktopApprovalRoutingRepository: DesktopApprovalRoutingProviding {
                         .filter { $0.value == Self.automaticReviewer }
                         .keys
                 ),
-                // Desktop rewrites this file whole, so its modification date
-                // is the instant everything in it was last true. Unreadable
-                // means the reading reaches nowhere, which costs nothing that
-                // is not already lost: a map that cannot be read names no
-                // thread either.
+                // Desktop rewrites the file whole, so its modification date is when all of it was last true.
                 currentAsOf: writtenAt ?? .distantPast
             )
             lastKnownGood = snapshot
             lastSuccessfulRevision = currentRevision
             return snapshot
         } catch {
-            // Nothing is reported to the user here, and that is deliberate:
-            // the failure lands on the answer that keeps every state the row
-            // could already show, so there is nothing for them to act on.
+            // Deliberately unreported: the fallback keeps every state the row could already show.
             return lastKnownGood ?? .unknown
         }
     }
 
     /// - Returns: the file's bytes, and the instant it was last written.
     ///
-    /// The date comes from the same `attributesOfItem` reading as the
-    /// ownership check, before the bytes, for the reason spelled out in
-    /// ``CodexDesktopUnreadStateRepository``: under the atomic replace this
-    /// file arrives by, that order pairs an older date with newer content,
-    /// which can only withhold a subtraction for a moment longer. The other
-    /// order pairs a newer date with content from before the replace, and
-    /// that is the pairing that silences a row.
+    /// The date is read before the bytes (see ``CodexDesktopUnreadStateRepository``): under the
+    /// atomic replace that pairs an older date with newer content; the reverse silences a row.
     private func readValidatedData(
         from url: URL
     ) throws -> (data: Data, writtenAt: Date?) {

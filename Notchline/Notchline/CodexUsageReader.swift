@@ -1,29 +1,14 @@
 import Foundation
 
-/// Codex's account and quota, read over the App Server and held between reads.
-///
-/// **Taken out of `LiveCodexMonitorService` on 2026-09-12**, where it was six
-/// stored properties, a task and three methods threaded through the actor that
-/// also owns the thread reads, the pid binding and the connection. It is one
-/// capability with one consumer — the footer — and Claude Code's copy of it has
-/// always been a reader of its own (``ClaudeCodeUsageReader``); the two now
-/// present the same ``UsageReading`` shape to whatever composes them
-/// (`tiered-support.md` §5.4).
-///
-/// **It asks only while the service says the transport answers.** Nothing here
-/// connects: ``readIfStale()`` is called from the branches of a refresh that
-/// have just connected, and a read issued on a transport that is down would
-/// book a retry and blank the held figures for a failure that is not the
-/// account's.
+/// Codex's account and quota, read over the App Server and held between reads
+/// (`tiered-support.md` §5.4). Never connects: ``readIfStale()`` is called only from refresh
+/// branches that just connected, since a read on a down transport would blank the figures.
 actor CodexUsageReader: UsageReading {
     private let client: any CodexAppServerCommunicating
     private let clock: any MonitorClock
     private let timing: MonitorTiming
-    /// Whether there is a screen the figures could be drawn on. See
-    /// ``readIfStale()``.
     private let screenAvailability: any ScreenAvailabilityReporting
-    /// Called when a read lands, because nothing waits for one: the snapshot
-    /// that started it has already been published.
+    /// Called when a read lands; the snapshot that started it is already published.
     private let onUpdate: @Sendable () -> Void
 
     private var cachedQuota = QuotaSnapshot.unavailable
@@ -47,36 +32,20 @@ actor CodexUsageReader: UsageReading {
         self.onUpdate = onUpdate
     }
 
-    /// What was last read. Never starts a read: this product's reads need a
-    /// transport, and only the refresh knows whether it has one.
+    /// What was last read. Never starts a read: only the refresh knows whether there is a transport.
     func currentQuota() -> QuotaSnapshot {
         cachedQuota
     }
 
-    /// Codex says nothing about its account that a user could act on here; a
-    /// failed read blanks the figures and the next one tries again.
+    /// Nothing actionable to report; a failed read blanks the figures and the next one retries.
     func quotaDiagnostic() -> String? {
         nil
     }
 
-    /// Starts the account and quota reads if either has gone stale, and there
-    /// is a screen the answer could be drawn on.
-    ///
-    /// **Nothing is read while there is no screen.** Both figures exist to be
-    /// drawn in the panel's footer, which a user reaches by hovering the notch,
-    /// so a display that is asleep or a screen that is locked means they cannot
-    /// be looked at -- not merely that they are unlikely to be. Left ungated,
-    /// an idle machine spent the night issuing three App Server requests a
-    /// minute for a footer nobody could open, and unlike Codex Desktop being
-    /// shut this cost was paid whenever the transport was alive at all: the
-    /// branch of the refresh that finds no Hook observation asks for this too.
-    ///
-    /// The same rule ``ClaudeCodeUsageReader`` applies to the other product's
-    /// copy of this reading, and for the same reason. The wake is an edge the
-    /// service's change stream already carries -- the screen coming back is one
-    /// of the streams merged into it -- so the first refresh after an unlock
-    /// takes the reading, rather than the figures waiting out the interval at
-    /// the moment the user is most likely to be looking.
+    /// Starts the account and quota reads if either is stale and there is a screen to draw them
+    /// on (as ``ClaudeCodeUsageReader``). Ungated, an idle machine issued three App Server requests
+    /// a minute all night. The screen returning is an edge on the service's change stream, so the
+    /// first refresh after an unlock reads.
     func readIfStale() {
         let now = clock.now()
         guard refreshTask == nil,
@@ -88,8 +57,7 @@ actor CodexUsageReader: UsageReading {
         let accountNeedsRefresh = accountReadAt == nil
             || now.timeIntervalSince(accountReadAt ?? .distantPast)
                 >= timing.accountRefreshInterval
-        // The same window ``nextReadDeadline()`` publishes for quota. A literal
-        // here would let the wake-up and the work it wakes for disagree.
+        // Same window ``nextReadDeadline()`` publishes, so the wake-up and its work cannot disagree.
         let quotaNeedsRefresh = quotaReadAt == nil
             || now.timeIntervalSince(quotaReadAt ?? .distantPast)
                 >= timing.quotaRefreshInterval
@@ -100,18 +68,9 @@ actor CodexUsageReader: UsageReading {
         }
     }
 
-    /// When the figures want reading again.
-    ///
-    /// A nil read date means the read is already due, and the next refresh
-    /// schedules it without needing a wake-up of its own. Both are skipped
-    /// while there is no screen, mirroring the guard in ``readIfStale()``:
-    /// left standing they would be deadlines no refresh could clear -- the
-    /// store wakes, the read is refused, the deadline is still in the past --
-    /// and the screen coming back is already an edge.
-    ///
-    /// A retry backoff defers each due date rather than being a wake-up of its
-    /// own: waking at a bare retry marker asks a reader that may have decided
-    /// it has nothing to do, which leaves the marker in the past forever.
+    /// When the figures want reading again; nil while there is no screen (as ``readIfStale()``),
+    /// else a past deadline no refresh could clear. A retry backoff defers each due date rather
+    /// than waking on its own, which would leave the marker in the past forever.
     func nextReadDeadline() -> Date? {
         guard screenAvailability.isAvailable() else { return nil }
         return [
@@ -126,8 +85,7 @@ actor CodexUsageReader: UsageReading {
         .min()
     }
 
-    /// Stops a read in flight. The connection it was reading over is going
-    /// away, and its answer would describe a server this app no longer holds.
+    /// Stops a read in flight: its connection is going away.
     func cancel() {
         refreshTask?.cancel()
         refreshTask = nil
@@ -189,9 +147,7 @@ actor CodexUsageReader: UsageReading {
             CodexSnapshotParser.quota(from: $0)
         }
             ?? .unavailable
-        // Every window the read produced, not just the first: rebuilding this
-        // through the single-window initialiser is what used to throw the
-        // second one away before the footer could draw it.
+        // Every window, not just the first: the single-window initialiser drops the rest.
         let quota = QuotaSnapshot(
             windows: rateLimitQuota.windows,
             todayTokens: responses.1.flatMap {

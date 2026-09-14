@@ -1,7 +1,6 @@
 import Foundation
 
-/// Readiness of a product's actual observation channel, never Turn state.
-/// Setup is optional: an already-connected SDK source has nothing to install.
+/// Readiness of a product's observation channel, never Turn state. Setup is optional.
 nonisolated enum MonitoringSourceGate: Sendable {
     case open(IntegrationSetupStatus?)
     case closed(

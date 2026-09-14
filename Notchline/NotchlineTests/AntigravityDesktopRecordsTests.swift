@@ -3,12 +3,8 @@ import SQLite3
 import Testing
 @testable import Notchline
 
-/// ``AntigravityDesktopProjects`` against a summaries database and Project
-/// files written the way Antigravity Desktop 2.13.0 writes them.
-///
-/// The table is the measured schema's two columns this reads; Desktop's other
-/// columns are irrelevant to the query and are left out so that a change to
-/// them cannot be mistaken for a change to what is read.
+/// ``AntigravityDesktopProjects`` against data as Antigravity Desktop 2.13.0 writes it. The
+/// table holds only the two columns read, so changes to the others cannot matter.
 @Suite
 struct AntigravityDesktopProjectsTests {
     private struct Fixture {
@@ -58,8 +54,6 @@ struct AntigravityDesktopProjectsTests {
         }
     }
 
-    /// The conversation's own assignment names its Project, as the sidebar
-    /// draws it, and follows a rename.
     @Test
     func aConversationIsNamedByTheProjectItIsFiledUnder() throws {
         let fixture = try Fixture()
@@ -73,7 +67,6 @@ struct AntigravityDesktopProjectsTests {
         #expect(reader.resolution(forConversation: "c1") == .project("Notchline, renamed"))
     }
 
-    /// Desktop's two spellings of "no Project" are both `Standalone`.
     @Test
     func noProjectIsStandaloneInEitherSpelling() throws {
         let fixture = try Fixture()
@@ -85,9 +78,8 @@ struct AntigravityDesktopProjectsTests {
         #expect(reader.resolution(forConversation: "outside") == .standalone)
     }
 
-    /// Nothing that cannot be read becomes `Standalone`: a missing row, a
-    /// missing database, a Project file that is gone or not JSON, and an id
-    /// that would name a file somewhere else are all `unavailable`.
+    /// A missing row, database or Project file, non-JSON, or an id naming a file elsewhere are all
+    /// `unavailable`.
     @Test
     func whatCannotBeReadIsUnavailableAndNeverStandalone() throws {
         let fixture = try Fixture()
@@ -112,8 +104,6 @@ struct AntigravityDesktopProjectsTests {
         #expect(missing.resolution(forConversation: "c1") == .unavailable)
     }
 
-    /// A reading that fails after one succeeded keeps the name the row had,
-    /// rather than flickering to `Project unavailable`.
     @Test
     func aFailedReadingKeepsTheLastGoodName() throws {
         let fixture = try Fixture()
@@ -127,15 +117,9 @@ struct AntigravityDesktopProjectsTests {
         #expect(reader.resolution(forConversation: "c1") == .project("Demo"))
     }
 
-    /// **Desktop's database is in WAL mode, and both of its states are read.**
-    ///
-    /// Between checkpoints there is no `-wal` beside it, and a read-only
-    /// connection cannot open a WAL database it would have to create one for —
-    /// the first live run failed exactly so, and every Desktop row read
-    /// `Project unavailable`. While Desktop is writing, the newest rows are in
-    /// the WAL alone and the main file's modification time stands still, so a
-    /// cache keyed on the main file would never see a conversation filed after
-    /// the first reading.
+    /// Between checkpoints there is no `-wal`, which a read-only connection cannot open (every row
+    /// read `Project unavailable`). While writing, new rows are in the WAL alone and the main
+    /// file's mtime stands still, so a cache keyed on it misses them.
     @Test
     func aWALDatabaseIsReadBetweenCheckpointsAndWhileItIsBeingWritten() throws {
         let fixture = try Fixture()
@@ -143,16 +127,13 @@ struct AntigravityDesktopProjectsTests {
         try fixture.execute("PRAGMA journal_mode=WAL;")
         try fixture.project("p1", named: "Demo")
         try fixture.file("c1", under: "p1")
-        // Every connection has closed, so the checkpoint has emptied the WAL
-        // into the main file. Desktop's engine then removes the WAL and its
-        // index; the system SQLite this test writes with keeps them, empty, by
-        // default, so the test removes them as Desktop would.
+        // Desktop's engine removes the WAL and index after a checkpoint; system SQLite keeps them
+        // empty, so the test removes them.
         try fixture.execute("PRAGMA wal_checkpoint(TRUNCATE);")
         for suffix in ["-wal", "-shm"] {
             try? FileManager.default.removeItem(atPath: fixture.database.path + suffix)
         }
         #expect(!FileManager.default.fileExists(atPath: fixture.database.path + "-wal"))
-        // The premise: a plain read-only connection cannot read this state.
         var plain: OpaquePointer?
         let opened = sqlite3_open_v2(fixture.database.path, &plain, SQLITE_OPEN_READONLY, nil) == SQLITE_OK
             && sqlite3_exec(plain, "SELECT count(*) FROM conversation_summaries;", nil, nil, nil) == SQLITE_OK
@@ -162,8 +143,7 @@ struct AntigravityDesktopProjectsTests {
         let reader = fixture.reader()
         #expect(reader.resolution(forConversation: "c1") == .project("Demo"))
 
-        // Desktop's server holding the database open, with rows in the WAL
-        // that no checkpoint has moved yet.
+        // Desktop's server holding the database open, with unmoved rows in the WAL.
         var writer: OpaquePointer?
         #expect(sqlite3_open(fixture.database.path, &writer) == SQLITE_OK)
         defer { sqlite3_close(writer) }
@@ -180,8 +160,6 @@ struct AntigravityDesktopProjectsTests {
         #expect(reader.resolution(forConversation: "c1") == .project("Second"), "a move that is only in the WAL is still a change")
     }
 
-    /// Moving a conversation to another Project is read, because the database
-    /// changed under it.
     @Test
     func aConversationMovedToAnotherProjectIsReadAgain() throws {
         let fixture = try Fixture()
@@ -197,11 +175,11 @@ struct AntigravityDesktopProjectsTests {
     }
 }
 
-/// ``AntigravityDesktopReadRecords`` against records written the way Desktop
-/// 2.13.0 writes `annotations/<conversationId>.pbtxt`.
+/// ``AntigravityDesktopReadRecords`` against Desktop 2.13.0's
+/// `annotations/<conversationId>.pbtxt`.
 @Suite
 struct AntigravityDesktopReadRecordsTests {
-    /// The line Desktop wrote, measured 2026-09-12.
+    /// Measured 2026-09-12.
     @Test
     func theMeasuredRecordReadsItsViewTime() throws {
         let record = try #require(AntigravityDesktopReadRecords.parse(
@@ -211,8 +189,6 @@ struct AntigravityDesktopReadRecordsTests {
         #expect(record.markedAsUnread == false)
     }
 
-    /// Before its title is generated a record is the view time alone, and a
-    /// record Desktop has written no view into has none.
     @Test
     func aRecordWithoutATitleOrAViewIsStillARecord() throws {
         let untitled = try #require(AntigravityDesktopReadRecords.parse(
@@ -224,7 +200,6 @@ struct AntigravityDesktopReadRecordsTests {
         #expect(unviewed.lastViewedAt == nil)
     }
 
-    /// `marked_as_unread` is read, in the text format's other spellings too.
     @Test
     func markedAsUnreadIsRead() throws {
         let record = try #require(AntigravityDesktopReadRecords.parse(
@@ -234,8 +209,6 @@ struct AntigravityDesktopReadRecordsTests {
         #expect(record.lastViewedAt == Date(timeIntervalSince1970: 20))
     }
 
-    /// A title is the user's words, and may say anything — including the
-    /// fields this reads.
     @Test
     func aTitleCannotCarryAFieldOfItsOwn() throws {
         let record = try #require(AntigravityDesktopReadRecords.parse(
@@ -245,7 +218,6 @@ struct AntigravityDesktopReadRecordsTests {
         #expect(record.markedAsUnread == false)
     }
 
-    /// Text that is not a record is no record, rather than part of one.
     @Test
     func textThatIsNotARecordIsNil() {
         #expect(AntigravityDesktopReadRecords.parse(#"title:"never closed"#) == nil)
@@ -253,7 +225,6 @@ struct AntigravityDesktopReadRecordsTests {
         #expect(AntigravityDesktopReadRecords.parse("last_user_view_time:{nanos:5}") == nil)
     }
 
-    /// The file is read by the conversation's id and nothing else.
     @Test
     func theFileIsReadByConversationIDOnly() throws {
         let directory = FileManager.default.temporaryDirectory

@@ -2,21 +2,10 @@ import Foundation
 
 /// Change signals for a set of paths that is reconciled while the app runs.
 ///
-/// ``DirectoryChangeWatcher/merged(_:)`` cannot serve this: that merge is fixed
-/// at the moment it is built, and both callers here hand over a set that
-/// changes afterwards -- the session records of the turns still in flight, and
-/// the account folders Claude Desktop keeps its session state in. A consumer
-/// still subscribes exactly once, at launch, and goes on receiving edges as the
-/// set underneath it is replaced.
-///
-/// Reconciled rather than added to: a path that leaves the set drops its
-/// watcher here. Left to accumulate, this would hold a descriptor per path the
-/// app had ever been interested in.
-///
-/// Existing watchers are asked to re-attach on every reconcile, for the reason
-/// ``DirectoryChangeWatcher/attachIfNeeded()`` exists: the path may have been
-/// created for the first time, or replaced, since the last one. One failed
-/// `open` per refresh is cheaper than a timer.
+/// ``DirectoryChangeWatcher/merged(_:)`` is fixed when built; these sets (session records of
+/// in-flight turns, Claude Desktop account folders) change, while consumers subscribe once at
+/// launch. A path leaving the set drops its watcher. Existing watchers re-attach on every
+/// reconcile (see ``DirectoryChangeWatcher/attachIfNeeded()``).
 final class PathSetChangeWatcher: @unchecked Sendable {
     private struct Watch {
         let watcher: DirectoryChangeWatcher
@@ -53,19 +42,14 @@ final class PathSetChangeWatcher: @unchecked Sendable {
         }
     }
 
-    /// The paths currently watched.
-    ///
-    /// Reporting only, and for tests: what is watched, and for how long, is an
-    /// invariant its owners state rather than an implementation detail -- see
-    /// ``ClaudeCodeMonitorService/transcriptWatcher`` and
-    /// ``LiveCodexMonitorService/rolloutWatcher``.
+    /// The paths currently watched. Reporting only, for tests; see
+    /// ``ClaudeCodeMonitorService/transcriptWatcher`` and ``LiveCodexMonitorService/rolloutWatcher``.
     nonisolated var watchedPaths: Set<URL> {
         lock.lock()
         defer { lock.unlock() }
         return Set(watches.keys)
     }
 
-    /// Watches exactly these paths, and no others.
     nonisolated func watch(paths: Set<URL>) {
         lock.lock()
         guard !isFinished else {
@@ -79,8 +63,8 @@ final class PathSetChangeWatcher: @unchecked Sendable {
         let retained = watches.values.map(\.watcher)
         lock.unlock()
 
-        // Outside the lock: attaching opens a descriptor, and cancelling a
-        // forwarder can run arbitrary continuation work.
+        // Outside the lock: attaching opens a descriptor, and cancelling a forwarder can run
+        // arbitrary continuation work.
         for watch in dropped.values {
             watch.forwarder.cancel()
         }
@@ -91,13 +75,8 @@ final class PathSetChangeWatcher: @unchecked Sendable {
             let watcher = DirectoryChangeWatcher(
                 directoryURL: path,
                 debounceInterval: debounceInterval,
-                // Every path here belongs to a set this app reconciles, so one
-                // that is simply not there is not a diagnostic: it is the
-                // session whose record it is having ended, a transcript not
-                // written yet, or an account folder that went away. The watch
-                // is dropped at the next reconcile either way, and a failure
-                // that is *not* absence still gets its line. See
-                // ``DirectoryChangeWatcher/absenceIsExpected``.
+                // A missing path here is an ended session, an unwritten transcript or a removed account
+                // folder, not a diagnostic. See ``DirectoryChangeWatcher/absenceIsExpected``.
                 absenceIsExpected: true
             )
             let events = watcher.events()
@@ -107,9 +86,7 @@ final class PathSetChangeWatcher: @unchecked Sendable {
                 }
             }
             lock.lock()
-            // A reconcile that ran while this one was building the watcher
-            // wins, and so does a teardown: both have seen something newer
-            // than this call has.
+            // A reconcile or teardown that ran meanwhile has seen something newer, so it wins.
             let keep = !isFinished && watches[path] == nil
             if keep { watches[path] = Watch(watcher: watcher, forwarder: forwarder) }
             lock.unlock()
@@ -117,8 +94,7 @@ final class PathSetChangeWatcher: @unchecked Sendable {
         }
     }
 
-    /// How many paths are being watched. For tests and for a future diagnostic;
-    /// nothing in the product branches on it.
+    /// How many paths are being watched. For tests; nothing in the product branches on it.
     nonisolated var watchedCount: Int {
         lock.lock()
         defer { lock.unlock() }

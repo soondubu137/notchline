@@ -2,20 +2,13 @@ import Foundation
 import Testing
 @testable import Notchline
 
-/// Lifecycle/context and wait/request-reading fixtures (`docs/product-support.md`
-/// §6), run against the Provider a hook-based product gets for free (``HookProductProvider``).
-///
-/// The product under test is synthetic: two vocabularies that map only what
-/// the capability requires, over a temporary root, with presence and admission
-/// stubbed. It borrows `AgentKind.claudeCode`;
-/// nothing here reads anything of Claude Code's: the paths are the fixture's,
-/// the vocabulary is the fixture's, and the socket is never bound to the
-/// user's.
+/// Lifecycle/context and wait/request-reading fixtures (`docs/product-support.md` §6) against
+/// ``HookProductProvider``. The product is synthetic and borrows `AgentKind.claudeCode`, but
+/// reads nothing of Claude Code's.
 @Suite(.serialized)
 struct HookProductConformanceTests {
     // MARK: - Fixtures
 
-    /// A product whose hooks say only "a Turn started" and "it ended".
     private struct LifecycleVocabulary: AgentHookVocabulary {
         let agent: AgentKind = .claudeCode
         let managedDefinitions = [
@@ -52,9 +45,8 @@ struct HookProductConformanceTests {
         }
     }
 
-    /// Independent wait/request-reading capabilities: it names an open tool
-    /// call and a wait, and shows the command, but cannot carry an answer back.
-    /// It has no progress source, so this fixture does not prove cumulative L5.
+    /// Names an open tool call and a wait but cannot carry an answer back. No progress source, so
+    /// this does not prove cumulative L5.
     private struct ReadingOnlyApprovalVocabulary: AgentHookVocabulary {
         let agent: AgentKind = .claudeCode
         let managedDefinitions = [
@@ -114,8 +106,6 @@ struct HookProductConformanceTests {
         }
     }
 
-    /// Limits read on a clock of the product's own, answering what the test
-    /// says and recording whether a read was asked for.
     private actor UsageStub: UsageReading {
         let quota: QuotaSnapshot
         let deadline: Date?
@@ -147,7 +137,6 @@ struct HookProductConformanceTests {
         }
     }
 
-    /// One synthetic product over a root of its own, torn down with it.
     private struct Product {
         let root: URL
         let paths: HookIntegrationPaths
@@ -156,7 +145,7 @@ struct HookProductConformanceTests {
         let provider: HookProductProvider
 
         init(vocabulary: any AgentHookVocabulary, usage: (any UsageReading)? = nil) throws {
-            // Short on purpose: a Unix socket path may not exceed 104 bytes.
+            // A Unix socket path may not exceed 104 bytes.
             root = URL(fileURLWithPath: "/tmp")
                 .appendingPathComponent("hpp-\(UUID().uuidString.prefix(8))")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -186,9 +175,7 @@ struct HookProductConformanceTests {
         }
     }
 
-    /// Well in the past, because the reducer's new-Turn reconciliation grace is
-    /// measured against the real clock and a fixture dated ahead of it would
-    /// never be old enough to retire.
+    /// In the past: the reducer's new-Turn reconciliation grace uses the real clock.
     private let t0 = Date(timeIntervalSince1970: 1_757_000_000)
 
     private func submission(_ thread: String, turn: String, cwd: String = "/Users/someone/Projects/demo") -> [String: Any] {
@@ -207,8 +194,6 @@ struct HookProductConformanceTests {
 
     // MARK: - L1 lifecycle and L2 context
 
-    /// Setup, a row on submission, `Completed` on the end event, and L2
-    /// row content: the directory's last component, the prompt, the start.
     @Test
     func aStartAndAnEndAreARowThatComesAndGoes() async throws {
         let product = try Product(vocabulary: LifecycleVocabulary())
@@ -225,8 +210,7 @@ struct HookProductConformanceTests {
         #expect(registered.availability == .ready)
         #expect(registered.presence == .open)
         #expect(registered.sessions.isEmpty)
-        // No windows rather than one made of dashes: a Provider that reads no
-        // quota gets an outer footer row and no lines under it
+        // A Provider that reads no quota gets an outer footer row with no lines
         // (`quota-footer-v2.md` §5).
         #expect(registered.quota == .noneReported)
         #expect(registered.quota.windows.isEmpty)
@@ -250,12 +234,8 @@ struct HookProductConformanceTests {
         let done = try #require(finished.sessions.first)
         #expect(done.status == .completed)
         #expect(done.finishedAt == t0.addingTimeInterval(9))
-        // This product supplies no read evidence, so the row stays until its
-        // own exits apply -- and books nothing while it stands, because there
-        // is no reading a re-check could take (`docs/product-support.md` §4,
-        // read removal). A product that hands in
-        // ``TerminalReadEvidence`` gets the other behaviour and pays for it;
-        // see `AntigravityConformanceTests`.
+        // No read evidence: the row stays until its own exits and books nothing
+        // (`docs/product-support.md` §4). ``TerminalReadEvidence`` products differ.
         #expect(await product.provider.fetchSnapshot().sessions.count == 1)
         #expect(await product.provider.nextRefreshDeadline() == nil)
 
@@ -264,9 +244,6 @@ struct HookProductConformanceTests {
         #expect(await product.provider.fetchSnapshot().availability == .setupRequired)
     }
 
-    /// A Thread has one open Turn: the next submission replaces the row once
-    /// the first Turn has ended, and a late event for the Turn it replaced
-    /// changes nothing.
     @Test
     func anOldTurnsEventCannotTouchTheTurnThatReplacedIt() async throws {
         let product = try Product(vocabulary: LifecycleVocabulary())
@@ -276,7 +253,6 @@ struct HookProductConformanceTests {
         try product.deliver(submission("t1", turn: "p1"), at: t0)
         try product.deliver(stop("t1", turn: "p1"), at: t0.addingTimeInterval(4))
         try product.deliver(submission("t1", turn: "p2"), at: t0.addingTimeInterval(5))
-        // Duplicate end for the retired Turn, arriving late.
         try product.deliver(stop("t1", turn: "p1"), at: t0.addingTimeInterval(6))
         let snapshot = await product.provider.fetchSnapshot()
         #expect(snapshot.sessions.count == 1)
@@ -285,10 +261,8 @@ struct HookProductConformanceTests {
         #expect(snapshot.sessions.first?.startedAt == t0.addingTimeInterval(5))
     }
 
-    /// A second submission while the first Turn is still working is not this
-    /// Thread's next Turn — one agent, one open Turn — so it is held rather than
-    /// drawn over the running row (the reducer's identity rule, `tech-design.md`
-    /// §9.2).
+    /// One agent, one open Turn: a second submission is held, not drawn over the running row
+    /// (`tech-design.md` §9.2).
     @Test
     func aSubmissionDuringARunningTurnDoesNotReplaceIt() async throws {
         let product = try Product(vocabulary: LifecycleVocabulary())
@@ -303,9 +277,7 @@ struct HookProductConformanceTests {
         #expect(snapshot.sessions.first?.status == .running)
     }
 
-    /// A submission directory the product did not send is not guessed: the
-    /// row's fallback (``RowContentFallback/projectName``) is
-    /// ``MonitoredSession/init``'s to supply, not this reader's.
+    /// The fallback (``RowContentFallback/projectName``) is ``MonitoredSession/init``'s to supply.
     @Test
     func aMissingDirectoryIsEmptyNotAGuess() throws {
         #expect(HookProductProvider.projectName(forWorkingDirectory: nil) == "")
@@ -314,9 +286,7 @@ struct HookProductConformanceTests {
         #expect(HookProductProvider.projectName(forWorkingDirectory: "/Users/x/Projects/demo/") == "demo")
     }
 
-    /// Presence draws the matrix and the reducer lights it: a closed product
-    /// lists nothing but is still observable, and an unknown one is honestly
-    /// unwatchable rather than quietly empty.
+    /// A closed product lists nothing but is observable; an unknown one is unwatchable, not empty.
     @Test
     func presenceDecidesWhatIsListedAndNeverWhatIsKnown() async throws {
         let product = try Product(vocabulary: LifecycleVocabulary())
@@ -342,9 +312,8 @@ struct HookProductConformanceTests {
         #expect(open.sessions.count == 1, "the Turn survived the product being closed and unknown")
     }
 
-    /// Only the product's own list retires a Thread, and only a read that
-    /// began after the Thread last spoke can do it. The Turn is ended first:
-    /// absence from a list never ends a live Turn (`tiered-support.md` §2).
+    /// Only a list read after the Thread last spoke retires it; absence never ends a live Turn
+    /// (`tiered-support.md` §2).
     @Test
     func onlyAnAdmissionListThatPostdatesTheThreadRetiresIt() async throws {
         let product = try Product(vocabulary: LifecycleVocabulary())
@@ -356,7 +325,6 @@ struct HookProductConformanceTests {
         product.admission.set(.unknown)
         #expect(await product.provider.fetchSnapshot().sessions.count == 1)
 
-        // A list read before the submission cannot have seen it.
         product.admission.set(.exactly([], readAt: t0.addingTimeInterval(-1)))
         #expect(await product.provider.fetchSnapshot().sessions.count == 1)
 
@@ -367,8 +335,6 @@ struct HookProductConformanceTests {
         #expect(await product.provider.fetchSnapshot().sessions.isEmpty)
     }
 
-    /// The store operates the product through the contracts alone: one switch,
-    /// installed and removed, with no product-named code in between.
     @Test @MainActor
     func theStoreRunsTheProductThroughItsContractsAlone() async throws {
         let product = try Product(vocabulary: LifecycleVocabulary())
@@ -389,10 +355,7 @@ struct HookProductConformanceTests {
 
     // MARK: - Wait detection and request reading (independent of L3 progress)
 
-    /// A wait opens on the request event, shows what it is waiting for, and
-    /// closes when the tool call it borrowed its identity from closes. With no
-    /// answer encoding, the row offers no affirmative — it never claims a way
-    /// back it does not have.
+    /// With no answer encoding the row offers no affirmative.
     @Test
     func aWaitIsShownButNotAnsweredWithoutAnEncoding() async throws {
         let product = try Product(vocabulary: ReadingOnlyApprovalVocabulary())
@@ -438,9 +401,8 @@ struct HookProductConformanceTests {
 
     // MARK: - Capabilities
 
-    /// A product that hands in a usage reader publishes its limits, books the
-    /// reader's deadline, and says its sentence last; the same Provider with
-    /// none publishes no windows and books nothing (`quota-footer-v2.md` §5).
+    /// With a usage reader: limits published, deadline booked, sentence last. Without: no windows,
+    /// nothing booked (`quota-footer-v2.md` §5).
     @Test
     func aUsageReaderIsPublishedAndBookedOnlyWhereOneIsHandedIn() async throws {
         let quota = QuotaSnapshot(

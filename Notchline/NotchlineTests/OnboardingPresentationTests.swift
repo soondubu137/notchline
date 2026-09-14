@@ -4,14 +4,8 @@ import Testing
 @testable import Notchline
 
 struct OnboardingPresentationTests {
-    /// Each lesson's specimen is in the state that lesson is about.
-    ///
-    /// **The typed one has nothing ticked, and that is the correction**
-    /// (`answer-in-notch.md` §5.4, 2026-09-07): it used to stage both options
-    /// ticked *and* a draft, which taught the old rule that text outranked a
-    /// selection. Under the rule that replaced it the same specimen would be a
-    /// question answered by its ticks with a sentence beside them doing
-    /// nothing — the opposite of what the page is for.
+    /// Each lesson's specimen is in its lesson's state; the typed one has nothing ticked
+    /// (`answer-in-notch.md` §5.4).
     @Test @MainActor
     func questionExamplesTeachSelectionAndTypedPriorityUsingTheRealDraft() throws {
         let examples = NotchSpecimen.openedSpecimens()
@@ -29,7 +23,6 @@ struct OnboardingPresentationTests {
         #expect(examples.multipleChoice.isOptionTicked(0))
         #expect(examples.multipleChoice.isOptionTicked(1))
         #expect(!examples.multipleChoice.questionUsesTypedAnswer)
-        // The one the field answers: nothing chosen, so the words are it.
         #expect(!examples.typedAnswer.questionHasASelection)
         #expect(examples.typedAnswer.questionUsesTypedAnswer)
         #expect(examples.typedAnswer.answerDraft == "Use a compact summary with optional details.")

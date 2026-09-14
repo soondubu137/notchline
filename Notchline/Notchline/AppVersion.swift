@@ -1,28 +1,10 @@
-// What this build calls itself, and the line Settings draws it on.
-//
-// The numbers are read from the bundle rather than written here. They live in
-// `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION`, which is what the build
-// stamps into `Info.plist` and what notarisation, the crash reporter and any
-// installer read; a copy in Swift would be a second declaration of the same
-// fact, and the copy is the one that gets forgotten at the next release.
-//
-// **The stage word is the part the bundle cannot carry.**
-// `CFBundleShortVersionString` is a numeric-dotted string or it is invalid, so
-// `0.1.0 Alpha` cannot be the marketing version: it fails validation, and every
-// comparison made against it — an update check, a bug report sorted by version
-// — becomes a string compare on something that no longer orders. So the
-// numbers stay a version, the word stays a word, and they meet only where they
-// are drawn.
+// What this build calls itself. The numbers come from the bundle (`MARKETING_VERSION`,
+// `CURRENT_PROJECT_VERSION`); the stage word lives here because
+// `CFBundleShortVersionString` must be numeric-dotted.
 import SwiftUI
 
-/// The version this build is, composed from what the bundle says plus the one
-/// word the bundle has nowhere to put.
 enum AppVersion {
-    /// Where this build stands in the run-up to `1.0`, or `nil` once a build
-    /// needs no qualifying.
-    ///
-    /// The one hand-written part, for the reason in the file comment. It is
-    /// drawn verbatim, so it changes here and nowhere else.
+    /// Where this build stands before `1.0`, or `nil` once it needs no qualifying.
     static let stage: String? = "Alpha"
 
     /// `0.1.0` — `MARKETING_VERSION`, as stamped into this bundle.
@@ -31,25 +13,21 @@ enum AppVersion {
     /// `1` — `CURRENT_PROJECT_VERSION`.
     static var build: String? { infoString(for: "CFBundleVersion") }
 
-    /// `0.1.0 Alpha` — what this build is called, with nothing in front of it.
+    /// `0.1.0 Alpha`.
     static var name: String? {
         guard let marketing else { return nil }
         return stage.map { "\(marketing) \($0)" } ?? marketing
     }
 
-    /// `Version 0.1.0 Alpha (1)` — the About-box form drawn in Settings.
-    ///
-    /// The build number is kept rather than tidied away because this is an
-    /// alpha: two people running `0.1.0` can be running different code, and the
-    /// number in brackets is the only thing in the interface that tells those
-    /// builds apart in a bug report.
+    /// `Version 0.1.0 Alpha (1)`, drawn in Settings. The build number tells apart alpha builds of
+    /// one version in bug reports.
     static var summary: String? {
         guard let name else { return nil }
         guard let build else { return "Version \(name)" }
         return "Version \(name) (\(build))"
     }
 
-    /// The same statement said aloud, where `(1)` would be read as punctuation.
+    /// The spoken form, where `(1)` would be read as punctuation.
     static var spokenSummary: String? {
         guard let name else { return nil }
         guard let build else { return "Version \(name)" }
@@ -61,8 +39,7 @@ enum AppVersion {
 
     static let repositoryURL = URL(string: "https://github.com/soondubu137/notchline")!
 
-    /// Nothing is guessed: a bundle that cannot say which version it is draws
-    /// no version at all, rather than a line reading `Unknown`.
+    /// A bundle that cannot say its version draws none, never `Unknown`.
     private static func infoString(for key: String) -> String? {
         guard
             let value = Bundle.main.object(forInfoDictionaryKey: key) as? String,

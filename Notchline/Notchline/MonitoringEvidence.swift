@@ -1,7 +1,6 @@
 import Foundation
 
-/// Measured behaviour selected by an adapter, independent of native event
-/// names. These preserve the existing reduction policies; they are not levels.
+/// Measured behaviour selected by an adapter, independent of native event names; not levels.
 nonisolated struct MonitoringReductionPolicy: Sendable {
     var infersApprovalRefusalFromActivity = false
     var infersSubagentApprovalRefusalFromActivity = false
@@ -11,9 +10,8 @@ nonisolated struct MonitoringReductionPolicy: Sendable {
     static let explicit = MonitoringReductionPolicy()
 }
 
-/// A positively observed live boundary, already interpreted by its source.
-/// Source event names are optional provenance for boundary diagnostics only;
-/// the reducer never interprets them. Requests are projected values, not JSON.
+/// A positively observed live boundary, interpreted by its source. Event names are diagnostics
+/// only; requests are projected values, not JSON.
 nonisolated struct MonitoringEvidence: Sendable {
     let signal: MonitoringSignal?
     let threadID: String
@@ -21,9 +19,8 @@ nonisolated struct MonitoringEvidence: Sendable {
     var turnID: String? = nil
     var agentID: String? = nil
     var toolUseID: String? = nil
-    /// The request's own identity, for a product that names requests apart
-    /// from the calls they concern; nil where the call's id is the identity,
-    /// as on both hook products. A resolution names the same identity.
+    /// The request's own identity where a product names requests apart from calls; nil where the
+    /// call's id is the identity (both hook products).
     var requestID: String? = nil
     /// Where the native protocol versions a request separately from its ID.
     var requestRevision: String? = nil
@@ -35,27 +32,21 @@ nonisolated struct MonitoringEvidence: Sendable {
     var pausesForBackgroundWork = false
     var request: AgentRequest? = nil
     var answerHandle: AnswerHandle? = nil
-    /// What an answer on `answerHandle` may do. Read only beside a handle:
-    /// evidence holding no connection declares nothing about one.
+    /// What an answer on `answerHandle` may do; meaningless without a handle.
     var answerOperations: AnswerOperations = .readingOnly
     var sourceEvent: String? = nil
 }
 
 extension AgentRequest {
-    /// This request filed on the connection one piece of evidence carries,
-    /// permitting what that evidence declares -- and left as it was where the
-    /// evidence carries no connection, so a body read off an event that holds
-    /// nothing keeps its form's own operations until the event that holds one
-    /// says otherwise.
+    /// Filed on the evidence's connection with its declared operations; unchanged without one.
     nonisolated func answerable(by evidence: MonitoringEvidence) -> AgentRequest {
         guard evidence.answerHandle != nil else { return self }
         return answerable(on: evidence.answerHandle, permitting: evidence.answerOperations)
     }
 }
 
-/// Content evidence has no lifecycle authority. A missing native Turn ID is
-/// retained for compatibility with existing message sources; adapters should
-/// supply it whenever their source can establish it.
+/// Content evidence has no lifecycle authority. The Turn ID is optional for compatibility;
+/// adapters should supply it when they can.
 nonisolated struct MonitoringProgress: Sendable {
     let threadID: String
     let turnID: String?
@@ -77,20 +68,16 @@ nonisolated struct MonitoringEpoch: Sendable, Hashable {
     fileprivate let id = UUID()
 }
 
-/// Optional boundary bookkeeping. It cannot mutate Turn state. Hooks use it
-/// for installation trust and connection retention, both outside the reducer.
-/// Package 4 of product-generalisation-plan.md replaces the ticket-backed
-/// handle representation; no descriptor is owned or written by the kernel.
+/// Optional boundary bookkeeping; it cannot mutate Turn state (product-generalisation-plan.md
+/// package 4).
 nonisolated protocol MonitoringBoundaryObserver: Sendable {
     var hasObservedEvidence: Bool { get }
     func didApply(_ evidence: MonitoringEvidence, accepted: Bool)
-    /// Evidence an observation reset dropped before any drain took it; the
-    /// handles it carried will never be reconciled and are the boundary's to
+    /// Evidence an observation reset dropped before any drain; its handles are the boundary's to
     /// let go.
     func didDiscard(_ evidence: [MonitoringEvidence])
     func retainAnswerHandles(_ handles: Set<AnswerHandle>)
-    /// The handles whose answer window has run out, let go by the boundary
-    /// and returned so the reducer can withdraw them from their requests.
+    /// Expired handles, let go by the boundary so the reducer can withdraw them from requests.
     func expiredAnswerHandles(at now: Date) -> Set<AnswerHandle>
     /// When the next held window runs out; nil while none is held.
     func nextAnswerHandleExpiry() -> Date?
@@ -134,8 +121,7 @@ nonisolated final class MonitoringEvidenceInbox: @unchecked Sendable {
         return result
     }
 
-    /// Rotates the epoch and returns whatever was pending, so its handles can
-    /// be released rather than waiting on a drain that will never take them.
+    /// Rotates the epoch and returns what was pending, so its handles can be released.
     @discardableResult
     func reset(clearingContent: () -> Void) -> [MonitoringEvidence] {
         lock.lock()

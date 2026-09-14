@@ -26,34 +26,11 @@ struct DesktopUnreadStateSnapshot: Equatable, Sendable {
     let source: Source
     /// The instant this reading is a complete account up to.
     ///
-    /// **A set of thread ids is not an answer on its own.** What retires a
-    /// finished row is a thread's *absence* from this set, and absence means
-    /// "read" only if whatever produced the set had already heard about the
-    /// Turn. Every reading therefore has to say how far forward it reaches,
-    /// and the gate compares that against the Turn it is judging -- see
-    /// ``TerminalUnreadMembershipGate/shouldDisplay(sessionID:threadID:status:turnEndedAt:terminalBoundaryAt:unreadState:now:)``.
-    ///
-    /// For the file behind ``CodexDesktopUnreadStateRepository`` this is not a
-    /// formality. Codex Desktop keeps the blue dots in memory and projects
-    /// them onto `.codex-global-state.json` through a **trailing 500 ms
-    /// debounce with no maximum wait, shared by every persisted atom it
-    /// owns** -- so anything written more often than that postpones the write
-    /// for as long as it keeps happening. The composer draft is such an atom,
-    /// and it is written on *every keystroke*.
-    ///
-    /// Measured against Desktop `26.820.60940` on 2026-08-26: 165 characters
-    /// typed into a composer produced exactly **one** write to that file, 45.4
-    /// seconds after the previous one and about half a second after the last
-    /// keystroke; nothing at all was written while the typing lasted. A Turn
-    /// that finishes inside a burst like that has its dot in Desktop's own
-    /// sidebar within milliseconds and is missing from this file for as long
-    /// as the user keeps typing -- which is exactly the moment the user is
-    /// working in another thread and this product is at its most useful.
-    ///
-    /// The instant is a property of the *reading*, not of the schema, which is
-    /// why a snapshot assembled in memory carries one too: the Claude Code
-    /// service builds its own from readings taken in the refresh that uses
-    /// them, and answers `now`.
+    /// A thread's absence from the set means "read" only if the reading reaches past the Turn
+    /// (``TerminalUnreadMembershipGate``). Codex Desktop writes `.codex-global-state.json` through
+    /// a trailing 500 ms debounce with no maximum wait, shared by every persisted atom including
+    /// the per-keystroke composer draft: 165 typed characters produced one write, 45.4 s after the
+    /// previous (Desktop `26.820.60940`, 2026-08-26). A snapshot built in memory answers `now`.
     let currentAsOf: Date
     let diagnostic: String?
 
@@ -69,9 +46,8 @@ struct DesktopUnreadStateSnapshot: Equatable, Sendable {
         self.diagnostic = diagnostic
     }
 
-    /// A reading that speaks for nothing: it has no data, and it reaches no
-    /// further forward than the beginning of time, so no Turn can be judged
-    /// against it whatever the gate is asked.
+    /// A reading with no data that reaches no further than the beginning of time, so it judges
+    /// no Turn.
     nonisolated static func unavailable(_ diagnostic: String) -> Self {
         Self(
             unreadThreadIDs: [],
@@ -81,9 +57,7 @@ struct DesktopUnreadStateSnapshot: Equatable, Sendable {
         )
     }
 
-    /// The data stands, and so does the instant it was a complete account up
-    /// to. Being demoted to a source that may not hide anything does not make
-    /// the reading reach further forward than it did.
+    /// Keeps the data and its `currentAsOf`: demotion to a non-hiding source does not move it forward.
     nonisolated func retainingData(
         source: Source,
         diagnostic: String
@@ -99,47 +73,19 @@ struct DesktopUnreadStateSnapshot: Equatable, Sendable {
 
 struct TerminalUnreadMembershipGate: Sendable {
     private struct Entry: Sendable {
-        /// When this Turn's own terminal arrived, and nothing else.
-        ///
-        /// **The instant read evidence is dated against.** Reading is done to
-        /// a Turn's answer, and the answer landed here; a reading of Desktop's
-        /// unread set can only speak for this Turn if it was written after it.
-        /// Deliberately not ``terminalObservedAt``, which a subagent pushes
-        /// forward long after the answer was there to be read.
+        /// When this Turn's own terminal arrived; unread readings are dated against this, not
+        /// ``terminalObservedAt``, which a subagent pushes forward.
         var turnEndedAt: Date
-        /// When this thread stopped working, subagents included.
-        ///
-        /// Only the settling window is measured from here: a row that has just
-        /// stopped saying anything is in flight is not snatched off the notch
-        /// in the same instant. It says nothing about what Desktop knew.
+        /// When this thread stopped working, subagents included. Only the settling window uses it.
         var terminalObservedAt: Date
         var hasObservedUnread: Bool
         var isHidden: Bool
-        /// Whether waiting -- and nothing else -- could still hide this row.
-        ///
-        /// Three things make waiting pointless. An unreadable state cannot
-        /// hide anything however long it is given, and neither can a reading
-        /// taken before the Turn ended -- that one is not stale data to be
-        /// waited out but a reading of a moment in which the Turn had not
-        /// happened yet. And a row Desktop still reports as *unread* is not
-        /// waiting on a window at all: only the user reading it changes that,
-        /// which arrives as a file change on the watcher, not as time passing.
-        ///
-        /// This decides *which* deadline the row reports, not whether it
-        /// reports one -- see ``nextDeadline(now:screenIsAvailable:)``.
+        /// Whether waiting, and nothing else, could still hide this row. False for an unreadable
+        /// state, a reading taken before the Turn ended, or a row Desktop still reports unread.
+        /// See ``nextDeadline(now:screenIsAvailable:)``.
         var canHideByWaiting: Bool
-        /// Whether the *user* is the only thing that can hide this row.
-        ///
-        /// The complement of `canHideByWaiting` splits in two, and the halves
-        /// wait on different things. A row Desktop reports unread waits on
-        /// somebody reading it, which needs a screen they can see. A row whose
-        /// unread state could not be read -- or could be read, but describes a
-        /// moment before this Turn ended -- waits on that file, becoming
-        /// legible in the one case and simply being written in the other.
-        /// Both happen whatever the screen is doing.
-        ///
-        /// Only the first may be deferred for an unusable screen -- see
-        /// ``nextDeadline(now:screenIsAvailable:)``.
+        /// Whether only the *user* can hide this row (Desktop reports it unread), which needs a
+        /// visible screen; a row waiting on the file does not. See ``nextDeadline(now:screenIsAvailable:)``.
         var waitsOnTheUser: Bool
     }
 
@@ -156,20 +102,11 @@ struct TerminalUnreadMembershipGate: Sendable {
     }
 
     /// - Parameters:
-    ///   - turnEndedAt: When this Turn's own terminal arrived. The unread
-    ///     reading is dated against this, because that is the moment the
-    ///     answer was there to be read.
-    ///   - terminalBoundaryAt: When this *thread* stopped working, a subagent
-    ///     outliving the Turn included. Only the settling window uses it.
-    ///
-    ///     **The two were one argument, and that is this defect.** A
-    ///     `SubagentStop` was measured 91 seconds after its parent's `Stop`
-    ///     (2026-08-22); dating the reading against that demanded a Desktop
-    ///     write later than an instant Desktop had no reason to write after,
-    ///     so the write recording the user opening the thread -- which
-    ///     happened while the subagent was still going, because that is when
-    ///     the row is on the notch -- fell short of the bar and was thrown
-    ///     away. The row then waited on a write that might never come.
+    ///   - turnEndedAt: When this Turn's own terminal arrived; the unread reading is dated
+    ///     against it.
+    ///   - terminalBoundaryAt: When this *thread* stopped working, subagents included. Only the
+    ///     settling window uses it: dating the reading against it (a `SubagentStop` 91 s after
+    ///     `Stop`, 2026-08-22) discarded the write recording the user reading the thread.
     nonisolated mutating func shouldDisplay(
         sessionID: String,
         threadID: String,
@@ -192,22 +129,10 @@ struct TerminalUnreadMembershipGate: Sendable {
             canHideByWaiting: false,
             waitsOnTheUser: false
         )
-        // Whether a *newer* Turn has ended than the one this entry describes,
-        // which is the only thing allowed to bring a hidden row back -- see
-        // below. Read before the stamp is folded in, because folding it in is
-        // what makes the two equal.
-        //
-        // A new Turn normally passes through a running status, and the guard
-        // above drops the entry outright when it does. This covers the case
-        // where no refresh saw it: a Turn that started and ended between two
-        // looks is still a Turn the user has not read.
-        //
-        // Asked of the Turn's own terminal rather than of `terminalBoundaryAt`:
-        // a subagent stopping is not a Turn ending, and reading it as one
-        // un-hides a row the user has already read -- the same shape as the
-        // internal-fork fix in
-        // ``HookEventRepository/reduceSubagentBoundary(_:agentID:threadID:at:)``,
-        // reaching the gate through the other half of the same stamp.
+        // Only a *newer* Turn ending may bring a hidden row back; read before folding in the stamp.
+        // Covers a Turn that started and ended between two refreshes. Uses the Turn's own terminal,
+        // not `terminalBoundaryAt`: a subagent stopping is not a Turn ending (cf.
+        // ``HookEventRepository/reduceSubagentBoundary(_:agentID:threadID:at:)``).
         let endedAgain = turnEndedAt > entry.turnEndedAt
         entry.turnEndedAt = max(entry.turnEndedAt, turnEndedAt)
         entry.terminalObservedAt = max(
@@ -219,34 +144,10 @@ struct TerminalUnreadMembershipGate: Sendable {
             entry.hasObservedUnread = false
         }
         let isCurrentlyUnread = unreadState.unreadThreadIDs.contains(threadID)
-        // Whether this reading can answer for *this* Turn at all, which is two
-        // questions and used to be asked as one. Authority says the data is
-        // the real thing rather than a backup or a retained copy.
-        // ``DesktopUnreadStateSnapshot/currentAsOf`` says how far forward the
-        // reading reaches, and a reading that stops short of this Turn's own
-        // end describes a moment in which the Turn had not ended yet: it
-        // cannot have recorded it either way, so its silence about this thread
-        // is not evidence of anything.
-        //
-        // Asking only the first is the defect this exists for, reported by
-        // the user and measured on 2026-08-26. Codex Desktop's dots are in
-        // memory and reach the file through a debounce that any
-        // other persisted atom can postpone indefinitely, so a Turn finishing
-        // while the user typed in a *different* thread lit its dot in Desktop
-        // at once and stayed out of the file for the length of the burst --
-        // measured at 45.4 seconds. The file parsed, so it was authoritative;
-        // it did not name the thread, so the row was hidden at the settling
-        // interval; and hiding is final, so the id landing seconds later
-        // brought nothing back. The user watched a row they had never read
-        // leave the notch while the blue dot for it sat in Desktop's sidebar.
-        //
-        // Widening the settling interval was rejected: the delay has no upper
-        // bound, and any interval long enough to cover a typing burst would
-        // hold every read row on the notch for that long as well. This is the
-        // same shape as ADR 0012 第一条, which already refuses to let Desktop's
-        // write throttling call a Turn read -- only evidence that demonstrably
-        // happened *after* the Turn ended counts. That rule was applied to
-        // Claude Desktop's focus stamps and never to this file.
+        // Needs an authoritative source *and* a reading that reaches this Turn's end; an earlier
+        // reading's silence is not evidence. Desktop's debounce kept a finished Turn out of the file
+        // for 45.4 s while the user typed elsewhere, and the row was hidden for good (2026-08-26).
+        // No settling interval bounds that. Same rule as ADR 0012 第一条.
         let canAnswer = unreadState.source.isAuthoritative
             && unreadState.currentAsOf >= entry.turnEndedAt
         entry.canHideByWaiting = canAnswer && !isCurrentlyUnread
@@ -257,16 +158,8 @@ struct TerminalUnreadMembershipGate: Sendable {
             return !entry.isHidden
         }
 
-        // Hiding is final for the Turn it was decided for. It used to be
-        // provisional -- a row reported unread again came back -- and that made
-        // the row a live readout of whatever the sources happened to say rather
-        // than a record of a decision. Every source behind that decision is
-        // assembled from files written by another application at times it
-        // chooses, so a moment where they disagree is ordinary rather than
-        // exceptional, and each one flashed a retired row back onto the notch
-        // (CC-024). Nothing is lost by refusing: within one finished Turn there
-        // is no way to become unread again, and a row that starts running has
-        // dropped its entry above before it can ask.
+        // Hiding is final for this Turn: sources written by other apps disagree routinely, and a
+        // provisional hide flashed retired rows back (CC-024). A running row drops its entry above.
         if isCurrentlyUnread {
             entry.hasObservedUnread = true
         } else if entry.hasObservedUnread
@@ -279,59 +172,19 @@ struct TerminalUnreadMembershipGate: Sendable {
         return !entry.isHidden
     }
 
-    /// When a still-visible terminal row should next be looked at again.
+    /// When a still-visible terminal row should next be looked at again. Every such row reports:
     ///
-    /// Every listed terminal row reports something, because every one of them
-    /// is waiting -- but not on the same thing, and the deadline has to say
-    /// which:
+    /// - Inside its settling window: the instant the window expires.
+    /// - Unread, unreadable, or read before this Turn ended: a re-check measured from `now`. The
+    ///   watcher is only a hint; without this a late edge left rows listed (8 s, traced live).
+    ///   Never a stale `terminalObservedAt + settlingInterval`: clamped to the 1 s floor, that is
+    ///   a busy loop.
     ///
-    /// - Inside its settling window a row waits on *time*. Report the instant
-    ///   the window expires; a refresh then genuinely clears it.
-    /// - A row Desktop still reports as unread waits on the *user*, and one
-    ///   whose unread state is unreadable -- or was read before this Turn
-    ///   ended -- waits on the file: on it becoming legible in the first case,
-    ///   and on Desktop writing it at all in the second. All of them arrive on
-    ///   the watcher, and the watcher is a low-latency hint, never a source of
-    ///   truth. Report a re-check measured forward from now.
-    ///
-    /// Excluding that second group entirely is what regressed this. Waiting
-    /// cannot hide those rows, which is true and was the wrong conclusion: the
-    /// store then had no scheduled wake-up at all for the product's core
-    /// interaction, so a watcher edge that arrived late -- or never -- left the
-    /// row listed until some unrelated refresh happened along. Traced on the
-    /// live app: eight seconds of complete silence between a finished Turn
-    /// being listed and the user reading it, the disappearance resting entirely
-    /// on one edge landing.
-    ///
-    /// The mistake worth not repeating is reporting a *stale* deadline rather
-    /// than none. `terminalObservedAt + settlingInterval` for an unread row
-    /// sits permanently in the past, the store clamps it to its one-second
-    /// floor, and no refresh can move it -- a busy loop wearing a deadline's
-    /// clothes. A re-check measured from `now` is clearable by construction:
-    /// the refresh at that instant either hides the row or books the next look.
-    ///
-    /// - Parameter screenIsAvailable: Whether the display is awake and the
-    ///   login session unlocked and on the console. A row waiting on the *user*
-    ///   books nothing while that is false, because every route that could
-    ///   retire it requires the same thing: Claude Code's `isInFrontOfThem` and
-    ///   its terminal-gesture route both fail
-    ///   ``DesktopReadingWatcher/systemScreenIsAvailable()`` outright, and a
-    ///   Codex thread is marked read by somebody opening it in Desktop. The
-    ///   defence of the one-second sample above is a good one, and it is made
-    ///   for a screen somebody might be looking at; through a locked screen the
-    ///   answer is knowably "no" before the work is done, so the sample is not
-    ///   a sample of anything. Left ungated this ran all night -- a wake-up a
-    ///   second, on battery, for a row nobody could see (CR-Fable-018).
-    ///
-    ///   The row is not abandoned: it waits on
-    ///   ``ScreenAvailabilityReporting/changeEvents()`` instead, which fires
-    ///   when the screen comes back, ahead of anything the user could then do.
-    ///
-    ///   Defaults to `true` so a test of the deadline logic states only what it
-    ///   is about. Both callers in the product pass the live reading.
-    ///
-    ///   A row waiting on an unreadable *file* is unaffected: that becomes
-    ///   legible whether or not anybody is at the machine.
+    /// - Parameter screenIsAvailable: Whether the display is awake and the session unlocked and
+    ///   on the console. A row waiting on the *user* books nothing while false, since every route
+    ///   that retires it needs the screen; ungated it woke every second all night on battery
+    ///   (CR-Fable-018). It waits on ``ScreenAvailabilityReporting/changeEvents()`` instead.
+    ///   Rows waiting on the file are unaffected. Defaults to `true` for tests.
     nonisolated func nextDeadline(
         now: Date,
         screenIsAvailable: Bool = true
@@ -359,13 +212,8 @@ struct TerminalUnreadMembershipGate: Sendable {
         entries.removeAll()
     }
 
-    /// Whether this gate has anything to say about a row in this status.
-    ///
-    /// Internal because a caller that reads nothing else has a reason to ask:
-    /// assembling the read state a verdict needs is expensive, and a list with
-    /// no such row in it cannot be changed by any of it. One definition, so
-    /// that widening it here cannot leave that caller skipping work it now
-    /// needs.
+    /// Whether this gate has anything to say about a row in this status. Internal so a caller can
+    /// skip assembling expensive read state when no such row is listed.
     nonisolated static func isTerminal(_ status: SessionStatus) -> Bool {
         status == .completed
     }
@@ -383,17 +231,9 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
 
     /// The blue-dot set, out of whichever shape Codex Desktop keeps it in.
     ///
-    /// **Desktop moved it, and that is the defect this decodes two shapes
-    /// for.** Up to `26.820.60940` the set lived in the renderer's persisted
-    /// atom map, at `electron-persisted-atom-state.unread-thread-ids-by-host-v1`,
-    /// keyed by host id. `26.903.61454` (measured 2026-09-09, the day it
-    /// installed) migrates it to a **top-level** `electron-thread-read-state-v1`
-    /// and *deletes* the atom, so the old reader threw `incompatibleSchema` on
-    /// every read: the state was unavailable, the membership gate can hide
-    /// nothing on an unauthoritative reading, and every Completed Codex row
-    /// stayed on the notch however thoroughly the user read it.
-    ///
-    /// The new shape adds an identity above the host:
+    /// Up to `26.820.60940`: `electron-persisted-atom-state.unread-thread-ids-by-host-v1`, keyed
+    /// by host id. `26.903.61454` (measured 2026-09-09) moves it to a top-level
+    /// `electron-thread-read-state-v1` and deletes the atom:
     ///
     /// ```
     /// electron-thread-read-state-v1: {
@@ -403,36 +243,12 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
     /// }
     /// ```
     ///
-    /// Three readings of it are deliberate.
-    ///
-    /// **Every identity is merged, rather than one being chosen.** The
-    /// `identityKey` is a SHA-256 over the signed-in account, which this app
-    /// could only reproduce by reading Desktop's auth material -- it will not.
-    /// It does not have to: a thread id belongs to exactly one identity, so a
-    /// union adds nothing that is not this user's, and an identity left behind
-    /// by an account switch can only *keep* a row listed. Logging out deletes
-    /// that identity's entry outright, so it does not even accumulate. This
-    /// restores exactly the old schema's answer, which had no identity in it.
-    ///
-    /// **`legacyMigration` is read for nothing.** It is tempting -- it holds
-    /// `unreadThreadIdsByHostId` in the old shape, and today it matches. It is
-    /// a record of the adoption, written once and never revised: Desktop's
-    /// change path only ever rewrites `unreadByIdentity`. Reading it would
-    /// freeze the answer at the instant the user upgraded, which retires every
-    /// row read since immediately and never retires the ones unread then.
-    ///
-    /// **The new key wins when both are present.** The migration writes the
-    /// new key and deletes the atom in two updates that may land in one file
-    /// or two, and it has already merged the old set into the new one, so a
-    /// file carrying both is mid-migration and the new key is the complete
-    /// half.
+    /// - Every identity is merged: `identityKey` is a SHA-256 over the account, a thread id
+    ///   belongs to one identity, and a stale identity can only keep a row listed.
+    /// - `legacyMigration` is ignored: written once at adoption and never revised.
+    /// - The new key wins when both are present: the file is mid-migration.
     private struct GlobalState: Decodable {
-        /// One host's unread array, lifted out of whatever nests it.
-        ///
-        /// Flattened rather than merged so that the checks below stay per
-        /// array: two identities naming the same thread is not a duplicate id
-        /// in the sense this rejects a file for, and merging first would make
-        /// it look like one.
+        /// One host's unread array, flattened rather than merged so duplicate-id checks stay per array.
         struct HostMembership {
             let hostKey: String
             let threadIDs: [String]
@@ -477,10 +293,7 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
                     ThreadReadState.self,
                     forKey: .threadReadState
                 )
-                // Desktop declares this a literal `1` and drops the key
-                // wholesale when it does not parse. A version this does not
-                // know is a shape this cannot read, and guessing at it is the
-                // one thing worse than reporting nothing.
+                // Desktop declares a literal `1`; an unknown version is a shape this cannot read.
                 guard state.version == 1 else {
                     throw UnreadStateError.incompatibleSchema
                 }
@@ -510,14 +323,8 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
         }
     }
 
-    /// Whether a host key names the Codex running on this machine.
-    ///
-    /// V1 consumes the local host and merges no other, which was one string
-    /// comparison while host ids were bare. The migration re-keys them by
-    /// *execution* host -- `local` became
-    /// `local:092af2cb…` here, and Desktop's other by-host maps write
-    /// `local:/Users/…/.codex` -- so the same rule is now a prefix. The bare
-    /// form stays legal because the pre-migration schema is still read above.
+    /// Whether a host key names the local Codex: bare `local` (pre-migration schema) or the
+    /// migrated execution-host form `local:…`.
     nonisolated private static func isLocalHost(_ hostKey: String) -> Bool {
         hostKey == "local" || hostKey.hasPrefix("local:")
     }
@@ -595,10 +402,8 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
     }
 
     func snapshot() async -> DesktopUnreadStateSnapshot {
-        // Same reason as the Hook event queue: the watcher may have failed to
-        // attach at launch, or Codex may have replaced this directory since.
-        // Retrying on a read that was happening anyway restores the 250 ms
-        // unread path without a wake-up of its own (CR-018).
+        // Re-attach if the watcher failed at launch or the directory was replaced; restores the
+        // 250 ms unread path without a wake-up of its own (CR-018).
         directoryWatcher.attachIfNeeded()
 
         let primaryRevision = try? revision(of: stateFileURL)
@@ -646,10 +451,7 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
         let (data, writtenAt) = try readValidatedData(from: url)
         let state = try JSONDecoder().decode(GlobalState.self, from: data)
 
-        // Every host is checked and only the local one is kept: a snapshot
-        // holds entirely or not at all, so a malformed array under a host this
-        // app never consults still rejects the file rather than being skipped
-        // past.
+        // Every host is checked, only the local one kept: a malformed array anywhere rejects the file.
         var localUnreadThreadIDs: Set<String> = []
         for membership in state.memberships {
             guard !membership.hostKey.trimmingCharacters(
@@ -672,25 +474,16 @@ actor CodexDesktopUnreadStateRepository: DesktopUnreadStateProviding {
         return DesktopUnreadStateSnapshot(
             unreadThreadIDs: localUnreadThreadIDs,
             source: source,
-            // Codex Desktop rewrites this file whole, every time, from one
-            // in-memory map -- so the instant it was last written is the
-            // instant its account of the blue dots was complete up to. A file
-            // whose modification date cannot be read reaches nowhere at all
-            // rather than up to now: this is the field a row is retired on,
-            // and it fails closed like every other reading here.
+            // Desktop rewrites the file whole from one in-memory map, so its modification date is how
+            // far the reading reaches. Unreadable fails closed.
             currentAsOf: writtenAt ?? .distantPast
         )
     }
 
     /// - Returns: the file's bytes, and the instant it was last written.
     ///
-    /// The date is taken from the same `attributesOfItem` reading that the
-    /// ownership check uses, which is *before* the bytes are read, and the
-    /// order is the safe one under the atomic replace this file arrives by. A
-    /// replace landing between the two pairs an older date with newer content,
-    /// which can only keep a row listed a moment longer. Reading the date
-    /// afterwards would pair a newer date with content from before the
-    /// replace, and that pairing retires rows.
+    /// The date is read before the bytes: under atomic replace that pairs an older date with newer
+    /// content, keeping a row a moment longer; the reverse order retires rows.
     private func readValidatedData(
         from url: URL
     ) throws -> (data: Data, writtenAt: Date?) {

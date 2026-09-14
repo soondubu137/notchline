@@ -1,34 +1,11 @@
-//
-//  NotchlineApp.swift
-//  Notchline
-//
-//  Created by Yinfeng Lu on 8/10/26.
-//
-
 import AppKit
 import SwiftUI
 
-/// What this process is: the product, or a host for the product's own tests.
+/// Whether this process is the product or a host for its tests.
 ///
-/// **A macOS unit-test bundle has no executable.** It is injected into a host
-/// application, and this app is its own host — `TEST_HOST` in the project file
-/// names this very binary. So every `xcodebuild test` run *is* a launch of the
-/// product, on the developer's own machine, beside whatever copy is already
-/// running there. Nothing about the suite asks for that: every test builds its
-/// own store, on its own paths under `/tmp`.
-///
-/// What the second copy did instead was take the running one apart. It drew its
-/// own overlay in the notch over the one already there; it bound the live hook
-/// sockets, which ``AgentHookListener`` did by unlinking whatever was at the
-/// path — so the running copy went on holding a socket no helper could reach,
-/// for the rest of its life. From the outside that is a notch that blinks, a
-/// row that freezes mid-turn and never moves again, and a session started
-/// afterwards that never appears at all.
-///
-/// The two readings are the documented one and a belt to its braces:
-/// `XCTestConfigurationFilePath` is what XCTest puts in a host process's
-/// environment, and the framework itself is loaded into that process either
-/// way.
+/// `TEST_HOST` is this binary, so every `xcodebuild test` launches the product; unguarded, it
+/// draws a second overlay and binds the live hook sockets. Reads `XCTestConfigurationFilePath`
+/// and whether XCTest is loaded.
 nonisolated enum AppProcess {
     static let isHostingTests: Bool = {
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
@@ -36,41 +13,19 @@ nonisolated enum AppProcess {
     }()
 }
 
-/// Turns a write to a pipe nobody is reading any more into a thrown error,
-/// rather than the end of this process.
+/// Makes a write to a closed pipe throw instead of killing the process.
 ///
-/// `SIGPIPE` is delivered synchronously to the thread that called `write(2)`,
-/// and its default disposition is **terminate**. The throwing
-/// `FileHandle.write(contentsOf:)` never gets as far as seeing `EPIPE`.
-///
-/// The one pipe this app writes to is the `codex app-server` subprocess's
-/// stdin, and the child's read end closes the instant it goes away -- a crash,
-/// a force-quit, a Codex update replacing the binary underneath it. Between
-/// that instant and the termination handler reaching
-/// ``CodexAppServerClient`` and dropping the write handle, every request that
-/// enters -- the background metadata loop, a quota read, a watcher-driven
-/// refresh -- writes into a broken pipe, and Notchline died there: no
-/// diagnostic, no crash report the user could act on, and most likely against
-/// exactly the server that had just been crashing (CR-Fable-006).
-///
-/// Ignoring the signal is the standard remedy for any process doing pipe or
-/// socket I/O, and it belongs to the **process** rather than to the transport:
-/// the disposition is process-wide, the suite's hook-socket writes have the
-/// same hazard, and `SO_NOSIGPIPE` -- the per-descriptor remedy used there --
-/// does not apply to a pipe at all. With it installed the write fails with
-/// `EPIPE`, which the transport already reads as a disconnect and reconnects
-/// from.
+/// `SIGPIPE`'s default is terminate, before `FileHandle.write(contentsOf:)` sees `EPIPE`. The
+/// `codex app-server` stdin closes when the child dies, and Notchline died on the next request
+/// (CR-Fable-006). Process-wide because the disposition is, and `SO_NOSIGPIPE` does not apply to
+/// pipes. The transport treats `EPIPE` as a disconnect.
 nonisolated enum BrokenPipeSignal {
-    /// Installs the disposition. Idempotent, and one syscall.
+    /// Idempotent.
     static func ignore() {
         signal(SIGPIPE, SIG_IGN)
     }
 
-    /// Whether this process would survive that write.
-    ///
-    /// Read back from the kernel rather than from a flag ``ignore()`` set: an
-    /// installer that answers questions about its own installation can only
-    /// report that it ran, which is not the thing that has to be true.
+    /// Read back from the kernel, not from a flag ``ignore()`` set.
     static var isIgnored: Bool {
         var current = sigaction()
         guard sigaction(SIGPIPE, nil, &current) == 0 else { return false }
@@ -84,36 +39,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var overlayController: OverlayPanelController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Hosting the test bundle is not running the product — see
-        // ``AppProcess``. The store answers the same way (it is built with no
-        // services at all), so this is the surface half of one decision rather
-        // than a second one.
+        // Hosting tests is not running the product (``AppProcess``); the store makes the same call.
         guard !AppProcess.isHostingTests else { return }
         overlayController = OverlayPanelController(store: .shared)
         overlayController?.show()
 
-        // The one launch that opens a window is also the one that has to ask
-        // for the foreground.
-        //
-        // `LSUIElement` makes this an accessory application, and the third
-        // thing that buys — after no Dock tile and no menu bar — is **no
-        // activation at launch**. A regular app comes up frontmost and the
-        // window the `Window` scene presents is key; an accessory one comes up
-        // behind whatever the user was already doing, so onboarding would
-        // arrive with an inactive title bar under someone else's window and
-        // `Start` would not take the Return it declares. Every launch after
-        // that wants the accessory behaviour exactly as it is: the overlay is
-        // a non-activating panel, and taking the foreground to put it up would
-        // be a bug.
-        //
-        // `ignoringOtherApps:` rather than the cooperative `NSApp.activate()`
-        // that ``SettingsWindowPresenter`` uses, because **the cooperative one
-        // is refused here** — measured, with Chrome frontmost and this app
-        // launched by `open`: the foreground stayed with Chrome, both when the
-        // call was made from this method and when it was deferred a turn to
-        // let SwiftUI put the window up first. The gear keeps the cooperative
-        // call and keeps working, because there the activation is answering a
-        // click the user has just made.
+        // Onboarding needs the foreground: an `LSUIElement` app does not activate at launch, so the
+        // window would sit behind others and miss Return. Later launches must not activate.
+        // `ignoringOtherApps:` because the cooperative `NSApp.activate()` is refused here (measured,
+        // Chrome frontmost, launched by `open`).
         guard !MonitorStore.shared.hasCompletedOnboarding else { return }
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -130,61 +64,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 @main
 struct NotchlineApp: App {
-    /// The identifier of the onboarding-and-settings window.
-    ///
-    /// A `Window` scene needs one, and it is also the key AppKit remembers the
-    /// window's position under -- so it is spelled once here rather than
-    /// written out wherever it happens to be needed.
+    /// The onboarding-and-settings window's id, also the key AppKit saves its position under.
     private static let mainWindowID = "main"
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
-    /// The one store, handed to each scene's views -- and **not observed
-    /// here.**
-    ///
-    /// It was a `@StateObject`, which made every publish re-evaluate these
-    /// scenes: the overlay's latest line, the quota, the hover. Nothing below
-    /// reads the store for more than the launch behaviour, but re-evaluating a
-    /// scene hands its open window a new root view, and the Settings window
-    /// re-laid itself out and re-measured its content-size limits for each one
-    /// -- most of the `14`–`18 ms` of CPU a publish cost with Settings open
-    /// (Release). The views that draw from the store observe it themselves.
-    ///
-    /// Computed rather than stored: a stored default would build the store
-    /// before ``init()`` has run.
+    /// Not observed here: as a `@StateObject`, every publish re-evaluated the scenes and cost the
+    /// Settings window `14`–`18 ms` of CPU (Release). Computed so it is not built before ``init()``.
     private var store: MonitorStore { .shared }
 
-    /// Here rather than in the delegate, because this runs first.
-    ///
-    /// The store is what starts the App Server transport, and it is built the
-    /// first time the scenes below are evaluated -- which is after this
-    /// initialiser and before `applicationDidFinishLaunching(_:)`. Nothing in
-    /// this process may write to a pipe before ``BrokenPipeSignal/ignore()``
-    /// has run, and this is the earliest point that is true of.
+    /// ``BrokenPipeSignal/ignore()`` must run before the store starts the App Server transport,
+    /// which happens when the scenes are first evaluated, before `applicationDidFinishLaunching(_:)`.
     init() {
         BrokenPipeSignal.ignore()
     }
 
     var body: some Scene {
-        // A single `Window` rather than a `WindowGroup`, and suppressed at
-        // launch once the user has been through onboarding.
-        //
-        // Both halves are the same decision. A `WindowGroup` opens one of its
-        // windows on every launch and there is no way to ask it not to --
-        // `defaultLaunchBehavior(.suppressed)` is ignored on the first group,
-        // measured on macOS 26.5 -- so this app put its **whole settings
-        // window** on screen every time it started, and paid for it: building
-        // and laying out that view tree, plus the tracking-area pass the new
-        // window triggers, is **half of the launch's CPU** (`0.62 s -> 0.32 s`
-        // of a Release launch, peak `%cpu` `55 -> 33`; see
-        // `system-architecture.md` §6). Nothing asked for that window: the
-        // product is the overlay, and the same view is one click on the
-        // overlay's gear away, through the `Settings` scene below. (It is not
-        // also a `⌘,` away any more — an `LSUIElement` app has no menu bar
-        // for that item to live in; see ``AppDelegate``.)
-        //
-        // There is exactly one launch that does want it, and that is the
-        // first: onboarding has to appear without being sent for.
+        // A `Window` suppressed after onboarding: a `WindowGroup` always opens one at launch
+        // (`defaultLaunchBehavior(.suppressed)` ignored on macOS 26.5), which was half of launch CPU
+        // (`system-architecture.md` §6). Only the first launch needs it, for onboarding.
         Window("Notchline", id: Self.mainWindowID) {
             ProductRootView()
                 .environmentObject(store)
@@ -194,10 +92,8 @@ struct NotchlineApp: App {
             store.hasCompletedOnboarding ? .suppressed : .presented
         )
 
-        // The tracker hands this scene's window to ``SettingsWindowPresenter``,
-        // which is what makes the gear land in front of the user on the
-        // display they are working on rather than wherever the window was
-        // last closed.
+        // The tracker hands this window to ``SettingsWindowPresenter`` so the gear opens it on the
+        // user's current display.
         Settings {
             AppSettingsView()
                 .environmentObject(store)

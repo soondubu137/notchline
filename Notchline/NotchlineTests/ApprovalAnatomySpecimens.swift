@@ -1,11 +1,5 @@
-// The two shapes a person answers in, staged as the product stages them.
-//
-// **Each specimen is walked into its state through the store's own acts**,
-// never assigned one: the row is opened, options are ticked with
-// `takeAnswer(.option:)` — the click an `OptionRow` sends — and a set is walked
-// forward with `takeAnswer(.affirmative)`, which on any question but the last
-// draws the next one and sends nothing (`MonitorStore.answerTheQuestion`). So a
-// figure can only show a state the notch itself can reach.
+// The two answering shapes, walked into their state through the store's own acts
+// (`takeAnswer(.option:)`, `takeAnswer(.affirmative)`), so a figure shows only reachable states.
 import AppKit
 import SwiftUI
 
@@ -13,7 +7,6 @@ import SwiftUI
 
 @MainActor
 enum ApprovalSpecimens {
-    /// The two, in the order the figure sets them beside each other.
     struct Staged {
         let command: MonitorStore
         let series: MonitorStore
@@ -21,19 +14,14 @@ enum ApprovalSpecimens {
 
     // MARK: - Form 01: a permission request
 
-    /// A `Bash` approval carrying the arguments the product sent, which is what
-    /// the body draws as labelled fields (`answer-in-notch.md` §4.2). The
-    /// command string stays as the compatibility reading and is never parsed
-    /// back out.
+    /// The body draws the product's arguments as labelled fields (`answer-in-notch.md` §4.2); the
+    /// command string is never parsed back out.
     static func commandRequest() -> AgentRequest {
         AgentRequest(
             id: "anatomy-command",
             toolName: "Bash",
             form: .command("npm run build -- --profile"),
-            // Two fields, because a third took the body past
-            // `requestBodyMaximumHeight` (`140` then) and the row starts scrolling —
-            // which is what the product should do and not what a picture of it
-            // should show, with the last argument cut off mid-label.
+            // Two fields: a third exceeds `requestBodyMaximumHeight` and the body scrolls, cutting a label.
             argumentFields: [
                 ApprovalArgument(
                     id: "command",
@@ -124,19 +112,13 @@ enum ApprovalSpecimens {
         holding session: MonitoredSession,
         at now: Date
     ) -> MonitorStore {
-        // No services, on `NotchSpecimen`'s terms: nothing is watched, no
-        // socket is bound and no file of the user's is read. Preferences are a
-        // throwaway suite rather than `nil` — see
-        // ``AnatomyFigureRenderer/preferences``.
+        // No services; preferences are a throwaway suite, not `nil`
+        // (``AnatomyFigureRenderer/preferences``).
         let store = MonitorStore(
             displays: [AnatomyFigureRenderer.panelDisplay],
             services: [],
-            // **Both products connected, with the rows on one of them.** The
-            // badge is drawn on presence rather than on who has threads right
-            // now (`panel-v2.md` §2), so a store holding one product draws a
-            // caption line with no chip on it — which is a true drawing of a
-            // one-product install and the wrong one to put beside a figure
-            // whose every row carries a badge.
+            // Both products connected: the badge follows presence (`panel-v2.md` §2), so one product would
+            // draw a caption with no chip.
             initialSnapshots: [AgentKind.codex, .claudeCode].map { agent in
                 AgentSnapshot(
                     agent: agent,
@@ -169,16 +151,10 @@ enum ApprovalSpecimens {
             ),
             at: now
         )
-        // Nothing to tick on a permission request; this is the arming alone,
-        // so `Approve` is drawn at the weight it wears once the row has
-        // arrived rather than at the `45%` of a row still coming up.
+        // Arming alone, so `Approve` draws at its arrived weight rather than `45%`.
         command.stageSpecimenAnswer(selectedOptions: [])
 
-        // A set of three, one answer each, drawn at the second — which is the
-        // only place both of a set's own controls stand: `Back`, because there
-        // is a question behind this one, and `Next`, because there is one in
-        // front. It is reached by answering the first, which is what a person
-        // does and what draws the second.
+        // A set of three drawn at the second, the only place both `Back` and `Next` stand.
         let series = store(
             holding: session(
                 id: "series",
@@ -192,10 +168,7 @@ enum ApprovalSpecimens {
             ),
             at: now
         )
-        // Two calls, one per question: the first is the answer that was given
-        // to `Scope`, the second is `Rollout` showing with an answer of its
-        // own. The frontier moves with them, which is what puts `Back` on the
-        // row.
+        // One call per question; the moving frontier is what puts `Back` on the row.
         series.stageSpecimenAnswer(selectedOptions: [1], showingQuestion: 0)
         series.stageSpecimenAnswer(selectedOptions: [0], showingQuestion: 1)
 

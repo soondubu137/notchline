@@ -1,45 +1,16 @@
 import AppKit
 import Foundation
 
-/// What Trae's own extension manifest says about ``TraeInstallation/extensionID``,
-/// read fresh rather than remembered — the parallel of `HookRegistration` for
-/// a product with no hooks file.
+/// Trae's own extension manifest entry for ``TraeInstallation/extensionID``, read fresh.
 nonisolated enum TraeCompanionRegistration: Sendable, Equatable {
-    /// Nothing under that ID is in Trae's manifest.
     case absent
-    /// Something is, but not the version this build installs.
     case mismatched
-    /// Exactly the version this build expects.
     case current
 }
 
-/// Installs one owned companion with Trae's extension CLI. No Hooks,
-/// application bundle or authentication files are edited by this
-/// integration, and installation never edits anything but through that CLI.
-/// Removal edits Trae's own extension manifest directly, but only as a
-/// fallback when that same CLI cannot do the removal itself -- see
-/// ``remove()``.
-///
-/// **Trae's own extension manifest is the only source of truth for "is it
-/// installed".** This used to be a marker Notchline wrote to its own support
-/// directory after a successful install, deleted after a successful removal —
-/// a private belief that only this app's own code path could update. A
-/// companion removed any other way (Trae's Extensions view, deleting the
-/// folder, a corrupt profile) left that belief uncorrected: Settings went on
-/// reporting "Installed, reopen the Trae window to connect" forever, because
-/// reopening Trae can never make an absent extension connect. Worse, turning
-/// the switch off then called `--uninstall-extension` on an extension already
-/// gone, which exits non-zero, threw before the marker could be deleted, and
-/// snapped the switch back on -- a state with no way out.
-///
-/// Reading `~/.trae/extensions/extensions.json` -- the same file Trae's own
-/// CLI consults for `--list-extensions` -- answers the actual question
-/// instead of a cached opinion about it, at the cost of one small JSON read
-/// per check rather than a process spawn. A companion present at the wrong
-/// version reads ``TraeCompanionRegistration/mismatched``, the same shape
-/// `HookRegistration.mismatched` already gives the hooks-based products, so
-/// Settings can offer the same recovery: switch shows off, turning it on
-/// reinstalls.
+/// Installs one owned companion through Trae's extension CLI; no Hooks, bundle or auth files
+/// are edited. Installed state is read from `~/.trae/extensions/extensions.json`, never a marker
+/// of our own, so a companion removed elsewhere reads absent.
 nonisolated struct TraeInstallation: Sendable {
     static let traeVersion = "3.5.91"
     static let companionVersion = "1.2.1"
@@ -58,8 +29,6 @@ nonisolated struct TraeInstallation: Sendable {
         self.application = application; self.directory = directory; self.resources = resources
         self.extensionsManifest = extensionsManifest
     }
-    /// What Trae itself currently has registered for ``extensionID``, read
-    /// fresh from its own manifest rather than trusted from a prior install.
     var registration: TraeCompanionRegistration {
         guard let data = try? Data(contentsOf: extensionsManifest),
               let entries = try? JSONDecoder().decode([ManifestEntry].self, from: data),
@@ -91,27 +60,11 @@ nonisolated struct TraeInstallation: Sendable {
         }.value
     }
 
-    /// Idempotent: a companion Trae has already lost has nothing left to
-    /// uninstall, and Trae's CLI exits 1 for that ("is not installed"),
-    /// which the switch must not read as a failed removal.
+    /// Idempotent: Trae's CLI exits 1 for a companion already gone.
     ///
-    /// **Trae 3.5.91's own `--uninstall-extension` crashes unconditionally**
-    /// -- `Cannot read properties of undefined (reading 'isProtectedExtension')`,
-    /// thrown before it ever reaches the extension being removed. Verified
-    /// independently of this companion's shape, in an isolated profile with
-    /// no Trae Desktop instance attached: a plain control extension with none
-    /// of this companion's manifest fields fails the identical way. So the
-    /// official CLI path cannot remove anything right now, on any build of
-    /// Trae running this version, and retrying it changes nothing.
-    ///
-    /// The fallback does directly what a working uninstall would have:
-    /// delete this extension's own folder and its one entry in
-    /// ``extensionsManifest``, leaving every other installed extension's
-    /// entry untouched. Reopening Trae's windows is required afterward, the
-    /// same requirement install already carries -- a running window's
-    /// in-memory extension list is not expected to notice a manifest edit
-    /// underneath it before then, which is exactly the state a real
-    /// uninstall through the CLI would also have left it in.
+    /// Trae 3.5.91's `--uninstall-extension` always crashes (`isProtectedExtension`), so this
+    /// deletes the extension's folder and its one ``extensionsManifest`` entry. Trae's windows must
+    /// be reopened afterwards.
     func remove() async throws {
         try await Task.detached {
             guard registration != .absent else { return }
@@ -124,11 +77,7 @@ nonisolated struct TraeInstallation: Sendable {
         }.value
     }
 
-    /// Bypasses Trae's broken uninstall command by editing its manifest
-    /// directly. Reads and rewrites the whole entry list as loose JSON
-    /// rather than through ``ManifestEntry`` -- decoding every entry into
-    /// that narrow shape and re-encoding them would silently drop every
-    /// field of every *other* installed extension this app does not model.
+    /// Loose JSON, not ``ManifestEntry``: re-encoding would drop other extensions' unmodelled fields.
     private func removeFromManifestDirectly() throws {
         let failureMessage = "Trae's extension manifest could not be changed. "
             + "Remove \"Notchline Companion\" from Trae's Extensions view instead."
@@ -143,7 +92,6 @@ nonisolated struct TraeInstallation: Sendable {
             removedFolder = entry["relativeLocation"] as? String ?? "\(id)-\(version)"
             return false
         }
-        // Already gone by the time this read completes; nothing left to do.
         guard remaining.count < entries.count else { return }
         guard let rewritten = try? JSONSerialization.data(withJSONObject: remaining) else {
             throw TraeBridgeError.installation(failureMessage)
@@ -192,8 +140,7 @@ nonisolated struct TraeInstallation: Sendable {
         let process = Process()
         process.executableURL = executable; process.arguments = arguments
         process.currentDirectoryURL = FileManager.default.temporaryDirectory
-        // No captured user content or unlimited pipe buffer. CLI failures have
-        // an actionable fixed message; these operations carry no model request.
+        // No captured user content or unbounded pipe buffer.
         process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
         try process.run()
         let deadline = Date().addingTimeInterval(45)

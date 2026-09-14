@@ -3,22 +3,15 @@ import Testing
 @testable import Notchline
 
 /// Antigravity CLI through L1–L3 and independent-capability fixtures
-/// (`docs/product-support.md` §6),
-/// with the product's own payloads as its helper delivers them.
-///
-/// The payloads are the shapes measured on 2026-09-11 against `agy` 1.2.2
-/// (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`),
-/// with the ids and paths of the fixture rather than of any conversation. The
-/// process table is the fixture's too, so presence, admission and the click's
-/// process come from the same reading the live scanner would make, without
-/// the kernel.
+/// (`docs/product-support.md` §6), with payloads measured 2026-09-11 against `agy` 1.2.2
+/// (`docs/technical-explorations/multi-product-provider-architecture/antigravity-cli.md`) and a
+/// fixture process table.
 @Suite(.serialized)
 struct AntigravityConformanceTests {
     // MARK: - Fixtures
 
-    /// The transcript the payload names, as the test says it reads — and a
-    /// count of how many times it was asked, because the file is read on the
-    /// hook delivery path and only at the events that can find something new.
+    /// Counts reads: the file is read on the hook delivery path, only at events that can find
+    /// something new.
     final class TranscriptStub: AntigravityTranscriptReading, @unchecked Sendable {
         private let lock = NSLock()
         private var answer: String?
@@ -35,7 +28,6 @@ struct AntigravityConformanceTests {
             lock.unlock()
         }
 
-        /// The model's newest words since the request, written in `step`.
         nonisolated func says(_ text: String, step: Int) {
             lock.lock()
             modelText = AntigravityModelText(step: step, text: text)
@@ -48,7 +40,6 @@ struct AntigravityConformanceTests {
             lock.unlock()
         }
 
-        /// Every path asked about, in order.
         nonisolated var asked: [String] {
             lock.lock()
             defer { lock.unlock() }
@@ -63,8 +54,7 @@ struct AntigravityConformanceTests {
         }
     }
 
-    /// Edges seen on a change stream, counted rather than awaited once: the
-    /// stream buffers, so an edge from starting up can already be on it.
+    /// Counted rather than awaited once: the stream buffers, so a startup edge may already be on it.
     final class EdgeCounter: @unchecked Sendable {
         private let lock = NSLock()
         private var stored = 0
@@ -82,12 +72,8 @@ struct AntigravityConformanceTests {
         }
     }
 
-    /// What the terminal a conversation's process is attached to says, as the
-    /// test says it — and how many times it was asked, because a list with no
-    /// finished row in it must not pay for a reading at all.
-    ///
-    /// A pid it has never heard of answers `nil`, which is a conversation with
-    /// no controlling terminal: the reading that keeps a row listed.
+    /// Counts reads: a list with no finished row must not pay for one. An unknown pid answers `nil`
+    /// (no controlling terminal), which keeps a row listed.
     final class GestureStub: ControllingTerminalGestureReporting, @unchecked Sendable {
         private let lock = NSLock()
         private var readings: [Int32: ControllingTerminalReading] = [:]
@@ -99,8 +85,6 @@ struct AntigravityConformanceTests {
             lock.unlock()
         }
 
-        /// The user was at that terminal at `at`, with its application in
-        /// front of them.
         nonisolated func wasAtTheTerminal(of pid: Int32, at date: Date) {
             set(pid, ControllingTerminalReading(
                 lastGesture: date,
@@ -126,7 +110,6 @@ struct AntigravityConformanceTests {
         }
     }
 
-    /// Stands in for the machine's display and lock state.
     final class ScreenStub: ScreenAvailabilityReporting, @unchecked Sendable {
         private let lock = NSLock()
         private var stored = true
@@ -142,7 +125,6 @@ struct AntigravityConformanceTests {
         }
     }
 
-    /// A process table the test writes.
     private final class TableStub: ProcessTableReading, @unchecked Sendable {
         private let lock = NSLock()
         private var entries: [ProcessEntry] = []
@@ -155,9 +137,7 @@ struct AntigravityConformanceTests {
             lock.unlock()
         }
 
-        /// The kernel's own shape: a machine with no processes on it at all is
-        /// the kernel declining to answer, never an empty machine — this app is
-        /// itself one of the processes it would have listed.
+        /// No processes at all is the kernel declining to answer; this app is itself a process.
         nonisolated func processes(named name: String) -> [ProcessEntry]? {
             lock.lock()
             defer { lock.unlock() }
@@ -174,7 +154,6 @@ struct AntigravityConformanceTests {
         }
     }
 
-    /// Whether Antigravity Desktop is running, as the test says.
     final class DesktopStub: AntigravityDesktopLocating, @unchecked Sendable {
         private let lock = NSLock()
         private var running: HostApplication?
@@ -202,8 +181,7 @@ struct AntigravityConformanceTests {
         }
     }
 
-    /// Desktop's Project assignments, as the test says. Unlisted is
-    /// `unavailable`.
+    /// Unlisted is `unavailable`.
     final class ProjectsStub: AntigravityDesktopProjectResolving, @unchecked Sendable {
         private let lock = NSLock()
         private var answers: [String: AntigravityDesktopProjectResolution] = [:]
@@ -221,8 +199,7 @@ struct AntigravityConformanceTests {
         }
     }
 
-    /// Desktop's read records, as the test says — and who was asked, because
-    /// a CLI row must never be judged by one.
+    /// Records who was asked: a CLI row must never be judged by Desktop's records.
     final class RecordsStub: AntigravityDesktopReadRecordReading, @unchecked Sendable {
         private let lock = NSLock()
         private var records: [String: AntigravityDesktopReadRecord] = [:]
@@ -248,40 +225,30 @@ struct AntigravityConformanceTests {
         }
     }
 
-    /// The product over a root of its own, torn down with it.
     private struct Product {
         let root: URL
         let paths: HookIntegrationPaths
         let table = TableStub()
-        /// The one ledger the translator writes and every source reads, as the
-        /// registry composes it.
         let surfaces = AntigravitySurfaceLedger()
         let desktop = DesktopStub()
         let projects = ProjectsStub()
         let records = RecordsStub()
         let sessions: AntigravitySessions
-        /// The scanner's clock, and only the scanner's: a reading has to
-        /// postdate the events it retires, so it starts after `t0`. The
-        /// reducer keeps the real clock, against which `t0` is long past
-        /// its new-Turn reconciliation grace.
+        /// The scanner's clock only: a reading must postdate the events it retires, so it starts after
+        /// `t0`. The reducer keeps the real clock.
         let clock = TestClock(now: Date(timeIntervalSince1970: 1_757_001_000))
         let scanner: AntigravityConversationScanner
         let provider: HookProductProvider
         let presenceDirectory: URL
-        /// What the conversation's terminal says about the user being at it,
-        /// and whether there is a screen to read it on. Nothing is set by
-        /// default, which is a conversation with no controlling terminal — the
-        /// reading that keeps every finished row listed.
+        /// Unset by default: no controlling terminal, which keeps every finished row listed.
         let gestures = GestureStub()
         let screen = ScreenStub()
-        /// What the transcript the payload names is holding, as the test says
-        /// it is. The file itself is read by ``AntigravityTranscriptFile``,
-        /// which has a suite of its own below.
+        /// The file itself is read by ``AntigravityTranscriptFile``, tested separately.
         let transcripts: TranscriptStub
 
         init(transcripts: TranscriptStub = TranscriptStub()) throws {
             self.transcripts = transcripts
-            // Short on purpose: a Unix socket path may not exceed 104 bytes.
+            // A Unix socket path may not exceed 104 bytes.
             root = URL(fileURLWithPath: "/tmp")
                 .appendingPathComponent("agy-\(UUID().uuidString.prefix(8))")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -317,13 +284,11 @@ struct AntigravityConformanceTests {
             )
         }
 
-        /// One process running `conversation`, holding its lock.
         func run(_ conversation: String, pid: Int32 = 4242) async {
             table.set([
                 (pid: pid, path: "/Users/someone/.local/bin/agy",
                  open: ["/dev/null", presenceDirectory.appendingPathComponent("\(conversation).lock").path])
             ])
-            // A fresh reading, not the cached one.
             await clock.advance(by: AntigravityConversationScanner.readingLifetime + 0.01)
         }
 
@@ -332,8 +297,7 @@ struct AntigravityConformanceTests {
             await clock.advance(by: AntigravityConversationScanner.readingLifetime + 0.01)
         }
 
-        /// What the helper hands the socket: the event on one line, then the
-        /// product's JSON.
+        /// The helper's framing: the event on one line, then the product's JSON.
         func deliver(_ event: String, _ fields: [String: Any], at date: Date) throws {
             var body = Data("\(event)\n".utf8)
             body.append(try JSONSerialization.data(withJSONObject: fields))
@@ -346,15 +310,13 @@ struct AntigravityConformanceTests {
         }
     }
 
-    /// Well in the past, because the reducer's new-Turn reconciliation grace
-    /// is measured against the real clock.
+    /// In the past: the reducer's new-Turn reconciliation grace uses the real clock.
     private let t0 = Date(timeIntervalSince1970: 1_757_000_000)
     private let conversation = "0f7d6a1c-4b7e-4e6b-9c2a-3d5f8e1a2b3c"
     private let workspace = "/Users/someone/Projects/demo"
 
-    /// The common fields every payload carries, as the TUI sends them — or, with
-    /// `antigravity` for the state directory, as Desktop does: the same fields,
-    /// measured 2026-09-12 on 2.13.0, with only the directory different.
+    /// The common fields as the TUI sends them, or with `antigravity` as the state directory, as
+    /// Desktop does (measured 2026-09-12 on 2.13.0).
     private func common(
         _ conversation: String,
         workspaces: [String],
@@ -391,10 +353,8 @@ struct AntigravityConformanceTests {
 
     // MARK: - Setup
 
-    /// The registration is the product's own shape: this app's definitions
-    /// under a named hook of its own, each lifecycle handler bare, naming the
-    /// helper through `/bin/sh` with the event as its argument; the user's
-    /// named hooks beside it untouched; and the helper announces the event.
+    /// This app's definitions under its own named hook, each lifecycle handler bare and running the
+    /// helper through `/bin/sh` with the event as argument; the user's named hooks untouched.
     @Test
     func theRegistrationIsWrittenInTheProductsShapeBesideTheUsersOwn() async throws {
         let product = try Product()
@@ -435,9 +395,8 @@ struct AntigravityConformanceTests {
 
     // MARK: - L1 lifecycle and L2 context
 
-    /// A turn is its first invocation to its `Stop`: one row, `Running` from
-    /// the first event with the workspace's last component for a project,
-    /// unchanged by the invocations between, `Completed` on the end.
+    /// One row, `Running` from the first event with the workspace's last component as project,
+    /// `Completed` on `Stop`.
     @Test
     func aTurnIsItsFirstInvocationToItsStop() async throws {
         let product = try Product()
@@ -484,9 +443,6 @@ struct AntigravityConformanceTests {
         #expect(done.finishedAt == t0.addingTimeInterval(9))
     }
 
-    /// The next turn of the same conversation starts at its own first
-    /// invocation and replaces the finished row; a `Stop` that repeats
-    /// changes nothing.
     @Test
     func theNextTurnReplacesTheFinishedRowAndARepeatedStopChangesNothing() async throws {
         let product = try Product()
@@ -514,8 +470,6 @@ struct AntigravityConformanceTests {
         #expect(next.finishedAt == nil)
     }
 
-    /// Launched mid-turn, the first thing seen is a later invocation: the
-    /// row runs from that moment and ends on the turn's own `Stop`.
     @Test
     func aTurnSeenFromItsMiddleRunsFromThenAndEndsOnItsStop() async throws {
         let product = try Product()
@@ -536,9 +490,8 @@ struct AntigravityConformanceTests {
         #expect(ended.startedAt == t0)
     }
 
-    /// A `Stop` this app never saw the start of: the next turn's first
-    /// invocation is held and then redeemed on that turn's own `Stop`, so the
-    /// row ends up on the new turn with the new turn's start.
+    /// The next turn's first invocation is held and redeemed on its own `Stop`, so the row ends up
+    /// on the new turn with its start.
     @Test
     func aLostStopIsHealedByTheNextTurnsOwnStop() async throws {
         let product = try Product()
@@ -547,7 +500,6 @@ struct AntigravityConformanceTests {
         await product.run(conversation)
 
         try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
-        // No Stop arrives. The next turn begins.
         try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0.addingTimeInterval(30))
         let held = try #require(await product.provider.fetchSnapshot().sessions.first)
         #expect(held.status == .running)
@@ -560,8 +512,7 @@ struct AntigravityConformanceTests {
         #expect(healed.turnID != held.turnID)
     }
 
-    /// Under `-p` the product sends no workspace, and the row says so rather
-    /// than guessing one.
+    /// Under `-p` the product sends no workspace.
     @Test
     func aPrintModeTurnIsAnUntitledProject() async throws {
         let product = try Product()
@@ -576,8 +527,7 @@ struct AntigravityConformanceTests {
 
     // MARK: - The prompt, read out of the transcript the payload names
 
-    /// The prompt is read at the turn's boundary, from the file the payload
-    /// itself names, and the row is titled with it.
+    /// Read at the turn's boundary, from the file the payload names.
     @Test
     func theTitleIsTheRequestReadOutOfTheTranscriptThePayloadNames() async throws {
         let product = try Product(transcripts: TranscriptStub("Take the third product end to end"))
@@ -595,8 +545,6 @@ struct AntigravityConformanceTests {
             "the file the payload named, once, and nothing searched for"
         )
 
-        // The invocations between and the end are read for the model's words,
-        // and a Turn already named keeps its name through all of them.
         product.transcripts.holds("Something the user typed later")
         for number in 1...3 {
             try product.deliver(
@@ -614,9 +562,7 @@ struct AntigravityConformanceTests {
         )
     }
 
-    /// A transcript this app reached before the product had written the user's
-    /// step is read again at the turn's end, and the row is named then rather
-    /// than staying `Untitled` for the life of the Turn.
+    /// A transcript read before the user's step was written is read again at the turn's end.
     @Test
     func aTranscriptReachedTooEarlyIsReadAgainAtTheTurnsEnd() async throws {
         let product = try Product(transcripts: TranscriptStub(nil))
@@ -637,8 +583,6 @@ struct AntigravityConformanceTests {
         #expect(product.transcripts.asked.count == 2)
     }
 
-    /// A prompt read late may fill a blank title and may never rewrite one the
-    /// Turn already carries, nor reach the Turn after it.
     @Test
     func aLatePromptFillsABlankTitleAndOverwritesNothing() async throws {
         let stub = TranscriptStub("What the first turn asked")
@@ -648,8 +592,7 @@ struct AntigravityConformanceTests {
         await product.run(conversation)
 
         try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
-        // The user types the next thing while the first turn is still running,
-        // so the file's last request is no longer this Turn's.
+        // The user types next while the turn runs, so the file's last request is not this Turn's.
         stub.holds("What the user typed next")
         try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(4))
         let first = try #require(await product.provider.fetchSnapshot().sessions.first)
@@ -661,8 +604,6 @@ struct AntigravityConformanceTests {
         #expect(second.title == "What the user typed next")
     }
 
-    /// A transcript that never says what was asked leaves the row `Untitled`,
-    /// which is the honest answer, and a repeated `Stop` reads nothing.
     @Test
     func aTranscriptThatSaysNothingLeavesTheRowUntitled() async throws {
         let product = try Product(transcripts: TranscriptStub(nil))
@@ -673,8 +614,7 @@ struct AntigravityConformanceTests {
         try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
         try product.deliver("PreInvocation", invocation(1, of: conversation), at: t0.addingTimeInterval(1))
         try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(5))
-        // A repeated `Stop` is a late duplicate of a Turn already retired and
-        // is owed no reading at all.
+        // A repeated `Stop` is a late duplicate of a retired Turn and is owed no reading.
         try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(6))
 
         let row = try #require(await product.provider.fetchSnapshot().sessions.first)
@@ -688,22 +628,12 @@ struct AntigravityConformanceTests {
 
     // MARK: - The live line, read out of the same transcript
 
-    /// **A running row says what the model last said**, and a finished one its
-    /// closing words.
+    /// No payload carries the model's words; they are in the transcript by the next
+    /// `PreInvocation`, and `Stop` carries the last of them.
     ///
-    /// No payload carries anything the model says, so until 2026-09-12 an
-    /// Antigravity row had a title and a clock and no line under them for the
-    /// whole of its Turn. The words are in the transcript, written whole when a
-    /// model call finishes and on disk by the next `PreInvocation`; that
-    /// invocation hands them over, and `Stop` carries the last of them.
-    ///
-    /// Three things are pinned beside the happy path. A turn that has said
-    /// nothing draws no line rather than the prompt a second time. A model call
-    /// that only called a tool leaves the transcript's newest words where they
-    /// were, and the invocation after it must not hand the same message over
-    /// again — the preview store joins two deliveries of one message into one
-    /// line, which drew the sentence twice. And a repeated `Stop`, which reads
-    /// nothing, must not blank the closing words the first one carried.
+    /// Also pinned: a turn that said nothing draws no line (not the prompt again); a tool-only call
+    /// must not hand the same message over again (the preview store joins deliveries, drawing it
+    /// twice); a repeated `Stop` must not blank the closing words.
     @Test
     func aRunningRowSaysWhatTheModelLastSaidAndAFinishedOneItsClosingWords() async throws {
         let product = try Product()
@@ -722,7 +652,6 @@ struct AntigravityConformanceTests {
         #expect(first.status == .running)
         #expect(first.preview == "I will list the files in this directory first.")
 
-        // The next call only called a tool, so the newest words are still step 1's.
         try product.deliver("PreInvocation", invocation(2, of: conversation), at: t0.addingTimeInterval(4))
         let quiet = try #require(await product.provider.fetchSnapshot().sessions.first)
         #expect(quiet.preview == "I will list the files in this directory first.", "one message, not the same one twice")
@@ -744,15 +673,12 @@ struct AntigravityConformanceTests {
         #expect(repeated.preview == "notes.txt holds three Greek letters, one per line.")
         #expect(product.transcripts.asked.count == asked)
 
-        // The next Turn does not open on the last one's words.
         try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0.addingTimeInterval(20))
         let next = try #require(await product.provider.fetchSnapshot().sessions.first)
         #expect(next.turnID != done.turnID)
         #expect(next.preview == nil)
     }
 
-    /// A Turn that ends without closing words of its own keeps the last thing
-    /// it said, rather than going blank at the moment it finishes.
     @Test
     func aTurnThatEndsWithoutClosingWordsKeepsItsLastLine() async throws {
         let product = try Product()
@@ -765,8 +691,7 @@ struct AntigravityConformanceTests {
         try product.deliver("PreInvocation", invocation(1, of: conversation), at: t0.addingTimeInterval(2))
         _ = await product.provider.fetchSnapshot()
 
-        // The window the `Stop` reads no longer reaches the words: a tool
-        // returned more than the window after them.
+        // A tool returned more than the `Stop`'s read window after the words.
         product.transcripts.saysNothing()
         try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(5))
         let done = try #require(await product.provider.fetchSnapshot().sessions.first)
@@ -774,10 +699,8 @@ struct AntigravityConformanceTests {
         #expect(done.preview == "Running the test suite now.")
     }
 
-    /// Words handed over for a listed row wake the panel, because nothing else
-    /// would: an invocation between two status changes changes nothing the
-    /// reducer holds, so without the edge the row keeps its old line until the
-    /// turn ends.
+    /// An invocation between status changes changes nothing the reducer holds, so without this
+    /// edge the row keeps its old line until the turn ends.
     @Test
     func wordsHandedOverForAListedRowWakeThePanel() async throws {
         let product = try Product()
@@ -786,7 +709,7 @@ struct AntigravityConformanceTests {
         await product.run(conversation)
 
         try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
-        // Lists the row, which is what arms the edge.
+        // Listing the row arms the edge.
         #expect(await product.provider.fetchSnapshot().sessions.count == 1)
 
         let edges = EdgeCounter()
@@ -807,12 +730,8 @@ struct AntigravityConformanceTests {
         #expect(edges.count > before, "the words were collected and nothing asked for them to be drawn")
     }
 
-    /// The IDE's event through the shared file — a transcript under
-    /// `antigravity-ide/` — is nobody's row and nobody's diagnostic.
-    ///
-    /// Until 2026-09-12 this was pinned with a transcript under `antigravity/`,
-    /// which is now Antigravity Desktop's and this product's own
-    /// (``aDesktopTurnIsARowFiledUnderItsDesktopProject``).
+    /// A transcript under `antigravity-ide/` is nobody's row and nobody's diagnostic.
+    /// (`antigravity/` is Desktop's: ``aDesktopTurnIsARowFiledUnderItsDesktopProject``.)
     @Test
     func theIDEsEventIsDeclinedQuietly() async throws {
         let product = try Product()
@@ -829,8 +748,6 @@ struct AntigravityConformanceTests {
         #expect(snapshot.diagnostic == nil)
     }
 
-    /// The surface is the directory under `.gemini` the transcript names, and
-    /// nothing else in the path.
     @Test
     func theSurfaceIsTheStateDirectoryTheTranscriptNames() {
         let tail = "brain/c/.system_generated/logs/transcript_full.jsonl"
@@ -839,23 +756,15 @@ struct AntigravityConformanceTests {
         #expect(AntigravitySurface(transcriptPath: "/Users/a/.gemini/antigravity-ide/\(tail)") == nil)
         #expect(AntigravitySurface(transcriptPath: "/Users/a/.gemini/jetski/\(tail)") == nil)
         #expect(AntigravitySurface(transcriptPath: nil) == .cli, "a payload naming no transcript was always the CLI's")
-        // A workspace folder of the same name decides nothing.
         #expect(AntigravitySurface(transcriptPath: "/Users/a/antigravity/.gemini/antigravity-cli/\(tail)") == .cli)
         #expect(AntigravitySurface(transcriptPath: "/Users/a/antigravity-cli/.gemini/antigravity/\(tail)") == .desktop)
     }
 
     // MARK: - Antigravity Desktop
 
-    /// **A Desktop Turn is a row, through the registration the CLI already
-    /// has**, filed under Desktop's own Project rather than its folder.
-    ///
-    /// Desktop 2.13.0 loads the same `~/.gemini/config/hooks.json` and sends
-    /// the same payloads, so nothing is registered for it; what is its own is
-    /// that its application being open is the product being open — no `agy`
-    /// runs here at all — and that it files conversations under named Projects,
-    /// one of which a folder name must not stand in for (`product-support.md`
-    /// §2, L2). The title and line come from its transcript exactly as the
-    /// CLI's do.
+    /// Desktop 2.13.0 loads the same `~/.gemini/config/hooks.json` and payloads. Its app being open
+    /// is presence (no `agy` runs), and it files under named Projects a folder name must not stand
+    /// in for (`product-support.md` §2, L2).
     @Test
     func aDesktopTurnIsARowFiledUnderItsDesktopProject() async throws {
         let product = try Product()
@@ -880,9 +789,7 @@ struct AntigravityConformanceTests {
         #expect(done.status == .completed)
         #expect(done.preview == "Done.")
 
-        // A conversation in no Project reads the app's own generic word
-        // (``RowContentFallback/projectName``), not Desktop's `Standalone`;
-        // one whose assignment cannot be read says that instead.
+        // No Project reads ``RowContentFallback/projectName``, not Desktop's `Standalone`.
         product.projects.file(conversation, .standalone)
         #expect(try #require(await product.provider.fetchSnapshot().sessions.first).projectName == RowContentFallback.projectName)
         product.projects.file(conversation, .unavailable)
@@ -892,9 +799,7 @@ struct AntigravityConformanceTests {
         )
     }
 
-    /// Desktop vouches for its conversations while it runs, and for none once
-    /// it has quit — a Turn it was running is retired rather than left saying
-    /// `Working...` for an application that is gone.
+    /// Once Desktop quits, a Turn it was running is retired rather than left `Working...`.
     @Test
     func desktopVouchesForItsConversationsOnlyWhileItRuns() async throws {
         let product = try Product()
@@ -923,9 +828,6 @@ struct AntigravityConformanceTests {
         #expect(back.sessions.isEmpty, "retired, not merely hidden while the application was away")
     }
 
-    /// A CLI conversation and a Desktop one side by side: each is open on its
-    /// own surface's evidence, and neither surface's quitting takes the other's
-    /// row with it.
     @Test
     func eachSurfaceVouchesOnlyForItsOwnConversations() async throws {
         let product = try Product()
@@ -942,25 +844,18 @@ struct AntigravityConformanceTests {
         #expect(await product.sessions.processIdentifier(forThreadID: conversation) == 4242)
         #expect(await product.sessions.processIdentifier(forThreadID: desktopConversation) == nil)
 
-        // The CLI exits; Desktop's row stays.
         await product.stopEverything()
         #expect(await product.provider.fetchSnapshot().sessions.map(\.threadID) == [desktopConversation])
 
-        // Desktop quits; nothing is left, and the product is closed.
         product.desktop.set(running: false)
         let gone = await product.provider.fetchSnapshot()
         #expect(gone.sessions.isEmpty)
         #expect(gone.presence == .closed)
     }
 
-    /// **A finished Desktop row is retired by Desktop's own record of the
-    /// conversation being viewed**, and its terminal is never asked.
-    ///
-    /// Desktop draws its own unread dot from `last_user_view_time` against
-    /// when the conversation last changed, and `marked_as_unread` overrides
-    /// both; this row follows the same rule with the Turn's end as the change.
-    /// A record written before the end — the one Desktop writes when the user
-    /// submits — is not a reading of the answer.
+    /// Desktop's unread dot compares `last_user_view_time` with the last change, and
+    /// `marked_as_unread` overrides both; here the Turn's end is the change. A record written
+    /// before the end (on submit) is not a reading. The terminal is never asked.
     @Test
     func aFinishedDesktopRowIsRetiredByDesktopsOwnViewRecord() async throws {
         let product = try Product()
@@ -993,8 +888,6 @@ struct AntigravityConformanceTests {
         #expect(product.gestures.timesAsked == 0, "no terminal is asked about a Desktop row")
     }
 
-    /// A Desktop conversation with no record to read keeps its row and books
-    /// nothing, and a CLI row beside it is judged by its terminal alone.
     @Test
     func aDesktopRowWithNoRecordKeepsItsRowAndBooksNothing() async throws {
         let product = try Product()
@@ -1030,9 +923,7 @@ struct AntigravityConformanceTests {
         }
     }
 
-    /// A Desktop row raises Desktop and says the conversation itself was not
-    /// reached — its one deep link opens nothing else — and a CLI row goes to
-    /// its terminal as before.
+    /// Desktop's one deep link opens nothing else, so its row says the conversation was not reached.
     @Test @MainActor
     func aDesktopRowRaisesDesktopAndACLIRowGoesToItsTerminal() async throws {
         let surfaces = AntigravitySurfaceLedger()
@@ -1073,10 +964,8 @@ struct AntigravityConformanceTests {
         }
     }
 
-    /// Presence and admission are one kernel reading: the product is open
-    /// while an `agy` process holds a conversation's lock, its rows are listed
-    /// while it does, and the conversation is retired once no process holds
-    /// the lock — a list read after the Turn last spoke.
+    /// The product is open while an `agy` process holds a conversation's lock; the conversation is
+    /// retired once no process holds it.
     @Test
     func theProcessHoldingTheLockIsPresenceAdmissionAndTheClicksTarget() async throws {
         let product = try Product()
@@ -1098,7 +987,6 @@ struct AntigravityConformanceTests {
         #expect(await product.scanner.processIdentifier(forThreadID: conversation) == 777)
         #expect(await product.scanner.processIdentifier(forThreadID: "other") == nil)
 
-        // The daemon and a stranger holding a lock are not the product open.
         product.table.set([
             (pid: 900, path: "/Users/someone/.local/bin/agy", open: ["/dev/null"]),
             (pid: 901, path: "/usr/bin/vim",
@@ -1108,14 +996,12 @@ struct AntigravityConformanceTests {
         let gone = await product.provider.fetchSnapshot()
         #expect(gone.presence == .closed)
         #expect(gone.sessions.isEmpty)
-        // And the Thread is retired, not merely hidden: the product came back
-        // with a different conversation and this one stayed gone.
+        // Retired, not hidden: it stays gone when the product returns with another conversation.
         await product.run("another-conversation", pid: 778)
         let back = await product.provider.fetchSnapshot()
         #expect(back.presence == .open)
         #expect(back.sessions.isEmpty)
 
-        // A kernel that lists nothing is not evidence.
         product.table.set([])
         await product.clock.advance(by: 1)
         #expect(await product.scanner.presence() == .unknown)
@@ -1124,20 +1010,9 @@ struct AntigravityConformanceTests {
 
     // MARK: - Read state
 
-    /// **A finished row is retired once the user has been at its terminal**,
-    /// and not before.
-    ///
-    /// The default without read evidence (`docs/product-support.md` §4) leaves on the
-    /// next submission, when the Thread goes away, or on a right-click — is
-    /// what a product with no read evidence gets, and it left a `Completed`
-    /// row standing on the notch for as long as the TUI session it belonged to
-    /// stayed open, however thoroughly its answer had been read. Antigravity
-    /// supplies the evidence by naming the process its conversation runs in,
-    /// which it already does for presence, admission and the click.
-    ///
-    /// Three instants, in order: the reading is not taken at all while the row
-    /// is running; a gesture from *before* the Turn ended is not evidence it
-    /// was read; one after it is, and the row goes.
+    /// Without read evidence (`docs/product-support.md` §4) a `Completed` row stayed while the TUI
+    /// session was open. Order pinned: no reading while running; a gesture before the Turn ended
+    /// is not evidence; one after it retires the row.
     @Test
     func aFinishedRowIsRetiredOnceTheUserHasBeenAtItsTerminal() async throws {
         let product = try Product()
@@ -1164,8 +1039,7 @@ struct AntigravityConformanceTests {
         #expect(unread.sessions.first?.status == .completed)
         #expect(product.gestures.timesAsked == 1, "one reading per finished row per refresh")
         let deadline = try #require(await product.provider.nextRefreshDeadline())
-        // An access time moves in the kernel with nothing to watch it, so a row
-        // waiting on one is looked at again a second later.
+        // An access time changes with nothing to watch it, so a waiting row is re-checked a second later.
         #expect(deadline <= Date().addingTimeInterval(1.5))
 
         product.gestures.wasAtTheTerminal(of: 4242, at: t0.addingTimeInterval(6))
@@ -1175,8 +1049,7 @@ struct AntigravityConformanceTests {
             "a row that has left is waiting for nothing"
         )
 
-        // Retiring the row is not retiring the conversation: the next turn
-        // draws its own, and a stale gesture cannot retire that one.
+        // Retiring the row is not retiring the conversation; a stale gesture cannot retire the next.
         try product.deliver(
             "PreInvocation",
             invocation(0, of: conversation),
@@ -1189,15 +1062,8 @@ struct AntigravityConformanceTests {
         #expect(await product.provider.fetchSnapshot().sessions.count == 1)
     }
 
-    /// A gesture at a terminal nobody was in front of is not a reading.
-    ///
-    /// The pairing ``ControllingTerminalGestureReporting`` documents, kept here
-    /// rather than assumed: the access time is one scalar, and this product
-    /// asks its terminal for neither focus reports nor mouse reports (measured
-    /// 2026-09-12: the TUI writes `?1049h`, `?25l` and `?2004h` and nothing
-    /// else), so the bytes behind a gesture are a keystroke or a paste. That
-    /// makes the front narrower than it is for Claude Code and no less
-    /// required — a row is retired on somebody being *there*.
+    /// See ``ControllingTerminalGestureReporting``. This TUI requests no focus or mouse reports
+    /// (measured 2026-09-12: only `?1049h`, `?25l`, `?2004h`), so a gesture is a keystroke or paste.
     @Test
     func aGestureAtATerminalNobodyWasInFrontOfIsNotAReading() async throws {
         let product = try Product()
@@ -1219,16 +1085,8 @@ struct AntigravityConformanceTests {
         )
     }
 
-    /// A conversation nothing can ever speak for keeps its row and books
-    /// nothing.
-    ///
-    /// Two shapes of it, and the distinction is the one CR-Fable-036 was:
-    /// `nil` is a conversation with no controlling terminal at all — a `-p` run
-    /// with its output piped — and a reading whose host can never hold the
-    /// front is one under `tmux`, `screen` or `ssh`, whose ancestry reaches
-    /// `launchd` without passing an application. Both are questions with no
-    /// possible answer, so neither may be re-asked once a second for the life
-    /// of the session.
+    /// Two shapes (CR-Fable-036): `nil`, no controlling terminal (a piped `-p` run); and a host that
+    /// can never hold the front (`tmux`, `screen`, `ssh`). Neither may be re-asked every second.
     @Test
     func aConversationNothingCanSpeakForKeepsItsRowAndBooksNothing() async throws {
         let product = try Product()
@@ -1250,15 +1108,8 @@ struct AntigravityConformanceTests {
         #expect(await product.provider.nextRefreshDeadline() == nil)
     }
 
-    /// A row the user has waved away is judged by nobody, and still reported.
-    ///
-    /// Both halves matter. The reading is not taken, because a row that has
-    /// already left the list at the user's asking cannot be improved on by one
-    /// and an entry in the gate books a re-check a second either way
-    /// (CR-Fable-003). And the row is still listed, because what this product
-    /// reports is what it knows about: a Provider that stopped listing the Turn
-    /// would be telling the store the Turn had ended, which is the one thing
-    /// that makes it forget the removal (CR-Fable-004).
+    /// Not read, since gate entries book a re-check a second (CR-Fable-003); still listed, since
+    /// dropping the Turn would make the store forget the removal (CR-Fable-004).
     @Test
     func aRowTheUserHasWavedAwayIsJudgedByNobody() async throws {
         let product = try Product()
@@ -1279,15 +1130,8 @@ struct AntigravityConformanceTests {
         #expect(await product.provider.nextRefreshDeadline() == nil)
     }
 
-    /// A row waiting to be read waits on the screen coming back, not on a
-    /// re-check nobody could act on.
-    ///
-    /// Every route that could retire this row needs a screen somebody can see,
-    /// so through a sleeping display or a locked screen the answer is knowably
-    /// "no" before the work is done and the sample is not a sample of anything
-    /// (CR-Fable-018). The row is not abandoned: the same evidence carries the
-    /// edge for the screen coming back, and it is merged into this Provider's
-    /// change events.
+    /// With a sleeping display or locked screen nothing can retire the row (CR-Fable-018); the
+    /// screen-back edge is merged into this Provider's change events.
     @Test
     func anUnreadRowWaitsOnTheScreenComingBackRatherThanOnAReCheck() async throws {
         let product = try Product()
@@ -1307,8 +1151,7 @@ struct AntigravityConformanceTests {
         #expect(await product.provider.nextRefreshDeadline() != nil)
     }
 
-    /// The scanner answers from one reading for the two questions the refresh
-    /// asks and the third a click asks, and reads again once it has aged.
+    /// One reading answers the refresh's two questions and a click's, until it ages.
     @Test
     func oneReadingAnswersUntilItAges() async throws {
         let table = TableStub()
@@ -1325,16 +1168,8 @@ struct AntigravityConformanceTests {
 
     // MARK: - Registry and Settings
 
-    /// **The footer names the product and claims nothing about it.**
-    ///
-    /// An outer row and no inner ones, which is `quota-footer-v2.md` §5's form
-    /// for a connected product this app reads no quota for. The store's side
-    /// of that rule was written and tested with a hand-built snapshot; this
-    /// product is the first to produce one, and until 2026-09-11 it produced
-    /// ``QuotaSnapshot/unavailable`` instead — the *single-window* form — so a
-    /// live Antigravity drew one `-- left` line under its name on every
-    /// render, for ever, saying a reading had not come back for a window that
-    /// does not exist. Found by running a turn through the built app.
+    /// An outer row and no inner ones: `quota-footer-v2.md` §5's form for a product with no quota
+    /// reading. ``QuotaSnapshot/unavailable`` is the single-window form and drew a false `-- left`.
     @Test @MainActor
     func theFooterNamesTheProductAndClaimsNothingAboutIt() async throws {
         let product = try Product()
@@ -1344,8 +1179,7 @@ struct AntigravityConformanceTests {
         try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
 
         let store = MonitorStore(services: [])
-        // A fresh store carries the preview's own Codex answer; a closed one
-        // takes it back out, so the footer below is this product's alone.
+        // A fresh store carries the preview's Codex answer; closing both leaves this product's footer.
         for agent in [AgentKind.codex, .claudeCode] {
             store.applyForTesting(
                 AgentSnapshot(
@@ -1366,8 +1200,6 @@ struct AntigravityConformanceTests {
         #expect(rule.today.text == "-- today")
     }
 
-    /// The product is one descriptor: its file, its two definitions, no trust
-    /// step, and the unsupported capabilities Settings declares for this L3 product.
     @Test
     func theDescriptorSaysWhatTheProductIsAndIsNot() {
         let descriptor = ProductRegistry.descriptor(for: .antigravity)
@@ -1379,8 +1211,6 @@ struct AntigravityConformanceTests {
         #expect(descriptor.setup.managedHooks!.backupName == "hooks.json.notchline-backup")
         #expect(descriptor.setup.managedHooks!.switchHelp.contains("2 lifecycle definitions in ~/.gemini/config/hooks.json"))
         #expect(descriptor.watches == "Antigravity Desktop and Antigravity CLI.")
-        // What an L3 product's rows cannot say: no wait, a Working... that can
-        // outlast a stopped Turn, and no quota.
         #expect(descriptor.notShown?.hasPrefix("Approvals and questions.") == true)
         #expect(descriptor.notShown?.contains("stopped early may keep reading it") == true)
         #expect(descriptor.notShown?.contains("Usage quota") == true)
@@ -1394,15 +1224,12 @@ struct AntigravityConformanceTests {
     }
 }
 
-/// ``AntigravityTranscriptFile`` against transcripts written the way `agy`
-/// 1.2.2 writes them — the shapes measured 2026-09-12 on this machine, with
-/// the requests of the fixture rather than of any conversation.
+/// ``AntigravityTranscriptFile`` against transcripts as `agy` 1.2.2 writes them (measured
+/// 2026-09-12).
 @Suite
 struct AntigravityTranscriptFileTests {
     private let reader = AntigravityTranscriptFile()
 
-    /// One step as the product appends it, with the envelope it wraps a
-    /// request in and the metadata it appends after it.
     private func userStep(_ index: Int, request: String) -> [String: Any] {
         [
             "step_index": index,
@@ -1428,8 +1255,6 @@ struct AntigravityTranscriptFileTests {
         return url.path
     }
 
-    /// The request comes out of its envelope, without the metadata the product
-    /// appends for its own model.
     @Test
     func theRequestComesOutOfItsEnvelopeWithoutTheMetadata() throws {
         let path = try write([userStep(0, request: "List the files in the current directory, then say done.")])
@@ -1440,8 +1265,6 @@ struct AntigravityTranscriptFileTests {
         )
     }
 
-    /// A conversation's later turns append their own steps, and the last
-    /// request is the one a row is named for.
     @Test
     func theLastRequestInTheFileIsTheOneRead() throws {
         let path = try write([
@@ -1457,8 +1280,6 @@ struct AntigravityTranscriptFileTests {
         #expect(reader.tail(ofTranscriptAt: path).latestUserRequest == "Reply with exactly the word two.")
     }
 
-    /// One model response as the product appends it: the words the user sees
-    /// in `content`, reasoning beside them, and the tool it went on to call.
     private func modelStep(_ index: Int, says content: String, calls tool: String? = nil) -> [String: Any] {
         var step: [String: Any] = [
             "step_index": index,
@@ -1475,9 +1296,8 @@ struct AntigravityTranscriptFileTests {
         return step
     }
 
-    /// The newest words since the request are read, a call that only called a
-    /// tool is passed over, and neither the tool's output, the product's own
-    /// message nor the model's reasoning is taken for them.
+    /// A tool-only call is passed over; tool output, the product's own message and reasoning are
+    /// never taken for the words.
     @Test
     func theModelsNewestWordsAreItsLastResponseThatSaidAnything() throws {
         let path = try write([
@@ -1499,9 +1319,6 @@ struct AntigravityTranscriptFileTests {
         #expect(tail.latestUserRequest == "Run sleep 12, then tell me it finished.", "and one read answers both")
     }
 
-    /// The walk back stops at the user's step: what the model said before it
-    /// was said to an earlier turn, and a turn that has just been asked has
-    /// said nothing yet.
     @Test
     func wordsFromBeforeTheLatestRequestAreNotThisTurns() throws {
         let path = try write([
@@ -1514,8 +1331,7 @@ struct AntigravityTranscriptFileTests {
         #expect(tail.latestModelText == nil)
         #expect(tail.latestUserRequest == "Reply with exactly the word two.")
 
-        // And a step with no index cannot be told from the next one, so it is
-        // not handed over as a message at all.
+        // A step with no index cannot be told from the next, so it is not handed over.
         var unnumbered = modelStep(3, says: "two")
         unnumbered.removeValue(forKey: "step_index")
         let withoutIndex = try write([userStep(0, request: "Reply with exactly the word two."), unnumbered])
@@ -1523,8 +1339,6 @@ struct AntigravityTranscriptFileTests {
         #expect(reader.tail(ofTranscriptAt: withoutIndex).latestModelText == nil)
     }
 
-    /// The product's own message to its model is not a request, however much
-    /// its first sentence reads like one.
     @Test
     func aSystemMessageIsNotAUserRequest() throws {
         let path = try write([
@@ -1540,8 +1354,6 @@ struct AntigravityTranscriptFileTests {
         #expect(reader.tail(ofTranscriptAt: path).latestUserRequest == "Wait ten seconds, then fetch a page.")
     }
 
-    /// A file that is not there, is empty, or holds no request at all is
-    /// nothing to draw — never an empty title and never a crash.
     @Test
     func nothingReadableIsNoRequest() throws {
         #expect(reader.tail(ofTranscriptAt: "/nonexistent/transcript_full.jsonl").latestUserRequest == nil)
@@ -1556,8 +1368,7 @@ struct AntigravityTranscriptFileTests {
         defer { try? FileManager.default.removeItem(atPath: modelOnly) }
         #expect(reader.tail(ofTranscriptAt: modelOnly).latestUserRequest == nil)
 
-        // A step whose content carries no envelope is skipped rather than
-        // drawn whole: the envelope is what says which part is the user's.
+        // The envelope is what says which part is the user's, so an unwrapped step is skipped.
         let unwrapped = try write([
             [
                 "step_index": 0, "source": "USER_EXPLICIT", "type": "USER_INPUT", "status": "DONE",
@@ -1568,9 +1379,7 @@ struct AntigravityTranscriptFileTests {
         #expect(reader.tail(ofTranscriptAt: unwrapped).latestUserRequest == nil)
     }
 
-    /// Only the tail is read, and the half-line the window opens on is not
-    /// mistaken for a step. A request past the window is not found, which is
-    /// the bound working rather than failing.
+    /// A request past the window not being found is the bound working.
     @Test
     func onlyTheTailIsRead() throws {
         let filler = String(repeating: "x", count: 4_000)
@@ -1587,8 +1396,6 @@ struct AntigravityTranscriptFileTests {
         #expect((size ?? 0) > AntigravityTranscriptFile.tailBytes, "the fixture has to exceed the window")
         #expect(reader.tail(ofTranscriptAt: farBack).latestUserRequest == nil)
 
-        // The same file with a request inside the window is found, so the nil
-        // above is the bound and not a parse failure.
         steps.append(userStep(101, request: "The thing asked just now"))
         let inWindow = try write(steps)
         defer { try? FileManager.default.removeItem(atPath: inWindow) }

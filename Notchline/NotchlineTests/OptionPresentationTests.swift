@@ -74,15 +74,8 @@ struct OptionPresentationTests {
         #expect(store.answerDraftGeneration > generation)
     }
 
-    /// A tall open question is given the room the panel was sized for.
-    ///
-    /// §4.1: a question's body may take `300`, which puts its open row at
-    /// `400` — past the `240` three closed rows are billed at — and the live
-    /// viewport grows to fit that row. The window was sized from the metric
-    /// while the list drew itself at the bare cap, so the panel stood open
-    /// `160` taller than anything painted into it: the last option clipped
-    /// under the footer, and a strip of empty panel below it. Both readings
-    /// come off the store now, so there is one height rather than two.
+    /// A tall open question (§4.1: body up to `300`, row `400`, past the `240` cap) gets the
+    /// panel height it was sized for; window and list read one height from the store.
     @Test @MainActor
     func aTallOpenQuestionIsGivenTheRoomThePanelWasSizedFor() throws {
         let description = String(
@@ -102,53 +95,29 @@ struct OptionPresentationTests {
         let store = MonitorStore(displays: [], services: [], initialSnapshot: snapshot, preferences: nil)
         store.toggleOpenRow(try #require(snapshot.sessions.first))
 
-        // The row is the tallest a question can make: the fixed heading and
-        // answer footer, and a body at its own cap rather than the approval's.
         let row = try #require(store.openRowHeight)
         #expect(row == PanelMetrics.openRowFixedHeight + PanelMetrics.questionBodyMaximumHeight)
         #expect(row > PanelMetrics.sessionViewportCap)
 
-        // The one open row is the whole of the list, and the list is given all
-        // of it: nothing is left below the fold for a rail to offer. **Plus
-        // its block's heading** — the list is one block per product at every
-        // count since 2026-09-09, and a heading is chrome that is never paid
-        // for out of the row (`expanded-panel-v2.md` §4.3 rule 07), so it is
-        // added to both sides rather than taken out of the row's own room.
+        // A block heading is chrome never paid out of the row (`expanded-panel-v2.md` §4.3 rule 07).
         let headed = row + PanelMetrics.groupHeadingsHeight(count: 1)
         #expect(store.sessionListContentHeight == headed)
         #expect(store.sessionViewportHeight == headed)
         #expect(!(store.sessionListContentHeight > store.sessionViewportHeight))
 
-        // And the panel is that room and its footer, with nothing unpainted.
         #expect(
             store.expandedContentHeight
                 == store.sessionViewportHeight + store.expandedFooterHeight
         )
 
-        // Laid out rather than taken from the metric: the metric was already
-        // right when this broke, and only the drawn list disagreed with it.
+        // Laid out rather than taken from the metric: the drawn list was what disagreed.
         let host = NSHostingView(rootView: ActiveSessionList().environmentObject(store))
         host.layoutSubtreeIfNeeded()
         #expect(abs(host.fittingSize.height - headed) < 0.5)
     }
 
-    /// The open row's body is laid out once per change, never once per read.
-    ///
-    /// **Every read used to be a full text layout**, and the panel is made of
-    /// reads: the row's body, its position, its header and its accessibility
-    /// text, the three heights the window is sized by
-    /// (``MonitorStore/openRowHeight``,
-    /// ``MonitorStore/sessionListContentHeight``,
-    /// ``MonitorStore/sessionViewportHeight``), and
-    /// ``MonitorStore/canSubmitCurrentAnswer`` on every control that reads it.
-    /// Measured on Release on 2026-09-07, against one four-option question:
-    /// **48** layouts to open the row, **26** for one option click, **24** over
-    /// a second of scrolling the list past it, and **one per keystroke** — at
-    /// `14 ms` each, which is the whole of why the row was slow.
-    ///
-    /// The two halves of that are pinned separately here. Reading lays out
-    /// nothing, and neither does an answer: what a person ticks or types is not
-    /// an input to the drawn lines, and only what changes them costs a layout.
+    /// The open row's body is laid out once per change, not per read. Measured Release
+    /// 2026-09-07: 48 layouts to open, 26 per click, one per keystroke, at `14 ms` each.
     @Test @MainActor
     func theOpenRowsBodyIsLaidOutOncePerChangeRatherThanOncePerRead() async throws {
         let description = String(
@@ -169,7 +138,6 @@ struct OptionPresentationTests {
         ], quota: .unavailable, diagnostic: nil)
         let store = MonitorStore(displays: [], services: [], initialSnapshot: snapshot, preferences: nil)
         store.toggleOpenRow(try #require(snapshot.sessions.first))
-        // §6.3: nothing answers until the row has finished arriving.
         let deadline = Date().addingTimeInterval(5)
         while !store.isAffirmativeArmed && Date() < deadline {
             try await Task.sleep(for: .milliseconds(10))
@@ -177,8 +145,6 @@ struct OptionPresentationTests {
         #expect(store.isAffirmativeArmed)
         _ = store.openRowBody
 
-        // Everything the panel reads while drawing one pass, several times
-        // over, is one layout's worth of work and no more.
         let afterOpening = store.bodyLayoutCount
         for _ in 0..<20 {
             _ = store.openRowBody
@@ -192,15 +158,12 @@ struct OptionPresentationTests {
         }
         #expect(store.bodyLayoutCount == afterOpening)
 
-        // Nor does answering: a tick and a keystroke change what will be sent,
-        // not the lines that are drawn.
         store.answerDraftChanged(to: "a typed answer")
         store.answerDraftChanged(to: "a typed answer of some length")
         store.takeAnswer(.option(1))
         #expect(store.isOptionTicked(1))
         #expect(store.bodyLayoutCount == afterOpening)
 
-        // A disclosure and a step do change them, and cost exactly one each.
         store.toggleOptionDescription(1)
         #expect(store.openRowBody?.optionLayouts.first?.isExpanded == true)
         #expect(store.bodyLayoutCount == afterOpening + 1)
@@ -209,8 +172,6 @@ struct OptionPresentationTests {
         #expect(store.bodyLayoutCount == afterOpening + 2)
         #expect(store.openSession?.request?.id == "cost")
 
-        // And drawing the list really does read through all of that: one pass
-        // over the whole panel, and still nothing laid out again.
         let drawn = store.bodyLayoutCount
         let host = NSHostingView(rootView: ActiveSessionList().environmentObject(store))
         host.layoutSubtreeIfNeeded()
@@ -221,21 +182,9 @@ struct OptionPresentationTests {
 }
 
 extension OptionPresentationTests {
-    /// **The lit rectangle and the target are one rectangle** (§6.6). A card
-    /// fills under the pointer over the whole of its `10` pt inset ring, and
-    /// until 2026-09-07 it took a click only over its words: the button sat
-    /// *inside* the padding rather than around it, and the disclosure was its
-    /// sibling, so the ring and the whole of `Show more`'s line either side of
-    /// two words answered the pointer and refused the click. Measured at
-    /// `579 × 100`, that was `44%` of an expandable card's lit area — a click
-    /// that did nothing, on the object the panel exists to let a person choose.
-    ///
-    /// **It is driven with real events at a real hosting view, because that is
-    /// the only thing that measures it.** The hit order between a button, its
-    /// padding and a control drawn over it is decided inside SwiftUI at
-    /// dispatch time; the view tree reports nothing about it, and the same
-    /// blindness once let a wheel catcher ship as a `.background` that took no
-    /// events at all.
+    /// The lit rectangle and the click target are one rectangle (§6.6), including the `10` pt
+    /// inset ring. Driven with real events at a hosting view: SwiftUI decides hit order at
+    /// dispatch and the view tree does not report it.
     @Test @MainActor
     func everyPointUnderAnOptionsFillTakesItsClick() async throws {
         let options = [
@@ -258,13 +207,8 @@ extension OptionPresentationTests {
         let layout = try #require(RequestBodyLayout.laidOut(request, expandedOptions: [], width: width))
         let host = NSHostingView(rootView: RequestBodyView(layout: layout).environmentObject(store).frame(width: width))
         host.setFrameSize(NSSize(width: width, height: layout.contentHeight))
-        // **Ordered in, and twenty thousand points off the left of every
-        // screen.** A window that has never been ordered in has no window
-        // number, and an `NSEvent` carrying that number is dropped before it
-        // reaches anything — the whole card reads as dead and the test passes
-        // or fails on nothing at all. This suite is hosted by the app itself
-        // (`AppProcess.isHostingTests`), so where it is put matters: it is put
-        // where no display reaches.
+        // Ordered in (an unnumbered window's events are dropped) and far offscreen, since this suite
+        // is hosted by the app (`AppProcess.isHostingTests`).
         let window = NSWindow(contentRect: NSRect(x: -20_000, y: 0, width: width, height: layout.contentHeight), styleMask: [.borderless], backing: .buffered, defer: false)
         window.contentView = host
         window.orderFront(nil)
@@ -284,8 +228,7 @@ extension OptionPresentationTests {
             RunLoop.current.run(until: Date().addingTimeInterval(0.002))
         }
 
-        /// The card each option was drawn on, taken from the list's own foot so
-        /// the arithmetic is the layout's rather than this test's.
+        /// Card frames from the layout's own arithmetic, not this test's.
         var cards: [Int: CGRect] = [:]
         var top = layout.contentHeight
             - layout.optionLayouts.map(\.height).reduce(0, +)
@@ -304,9 +247,7 @@ extension OptionPresentationTests {
             return store.isOptionTicked(id)
         }
 
-        // Two points in from each edge, because the fill's own boundary is
-        // decided a fraction of a point either way and this is a test about
-        // ten-point bands, not about the last pixel of a rounded corner.
+        // Two points in from each edge: this tests ten-point bands, not a corner's last pixel.
         for (id, card) in [(7, expandable), (11, plain)] {
             for point in [
                 CGPoint(x: card.minX + 2, y: card.minY + 2),
@@ -322,8 +263,7 @@ extension OptionPresentationTests {
             }
         }
 
-        // The disclosure's line is the card's everywhere but under its two
-        // words, which are its own target and change nothing else.
+        // The disclosure line selects the card everywhere except its own two words.
         let disclosureY = expandable.maxY - PanelMetrics.optionInset - PanelMetrics.optionDisclosureHeight / 2
         #expect(selects(7, at: CGPoint(x: expandable.minX + 5, y: disclosureY)))
         #expect(selects(7, at: CGPoint(x: expandable.maxX - 5, y: disclosureY)))

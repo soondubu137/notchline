@@ -1,40 +1,16 @@
-// Renders the two README anatomy specimens — the collapsed pill and the
-// expanded panel — to PNG, from the product's own views.
+// Renders the README anatomy specimens to PNG from the product's own views: `NotchOverlayView`
+// over a `MonitorStore` of fixed snapshots, at `PanelMetrics` sizes.
 //
-// **The figures are the product, not pictures of it**, on exactly
-// `OnboardingAnatomy.swift`'s terms: each specimen is `NotchOverlayView` over a
-// `MonitorStore` built from fixed snapshots, at the size `PanelMetrics`
-// composes for that state. Nothing is redrawn for the README, so a change to
-// the mark, a row's shape or the footer's arithmetic reaches the figure on the
-// build it reaches the notch on.
-//
-// Opt-in, because it writes files and takes a window: it does nothing unless
-// `~/.notchline-anatomy-out` names a directory to write into, and it deletes
-// that file as it starts, so the switch is good for exactly one run.
+// Opt-in: runs only when `~/.notchline-anatomy-out` names an output directory, and deletes that
+// file on start. Run it alone (it holds the main actor for seconds; ~27 answering tests time
+// out beside it) and from a clean tree:
 //
 //   echo -n /path/to/out > ~/.notchline-anatomy-out
 //   xcodebuild test -project Notchline/Notchline.xcodeproj -scheme Notchline \
 //     -destination 'platform=macOS' \
 //     '-only-testing:NotchlineTests/AnatomyFigureRenderer/writesTheReadmeAnatomyFigures()'
 //
-// **Run it on its own, which is what `-only-testing` above is for.** Composing
-// five specimens holds the main actor for a few seconds, and Swift Testing runs
-// the rest of the suite beside it: the answering tests poll for a `200` ms
-// arming window on a deadline of their own (`eventually`), and roughly `27` of
-// them time out while this one is drawing. Nothing is wrong with either — they
-// simply cannot share an actor. With the switch off, which is every ordinary
-// run, this test returns before it allocates anything.
-//
-// **A file rather than an environment variable, and rather than a `print`.**
-// Unit tests here run inside the app, and `TEST_RUNNER_`-prefixed variables do
-// not reach it -- nor does anything it writes to stdout. A run gated on one
-// passed in `0.000` s having written nothing, which is indistinguishable from a
-// run that worked. `sizes.txt` beside the PNGs is the report, for the same
-// reason.
-//
-// **Render it from a clean tree.** The figure is a drawing of `master`; taken
-// with somebody else's work in progress in the tree it draws that instead. The
-// panel's whole content shifted half a point the first time this was ignored.
+// `sizes.txt` beside the PNGs is the report (stdout does not reach tests hosted in the app).
 import AppKit
 import SwiftUI
 import Testing
@@ -43,13 +19,7 @@ import Testing
 
 @MainActor
 struct AnatomyFigureRenderer {
-    /// A display that is not a display: no notch, so both figures draw the
-    /// self-contained pill rather than a shape that only reads wrapped around a
-    /// cut-out.
-    ///
-    /// The bar height is the figure's own. `panelBandHeight` on a display with
-    /// no cut-out is its menu bar, so it is set by the visible frame and by the
-    /// fallback together.
+    /// No notch, so both figures draw the self-contained pill.
     static func display(bandHeight: CGFloat) -> DisplayOption {
         DisplayOption(
             id: "anatomy-\(Int(bandHeight))",
@@ -65,26 +35,14 @@ struct AnatomyFigureRenderer {
         )
     }
 
-    /// The pill is drawn on a `32` pt bar. At the `46` pt reference it is `241`
-    /// wide and `46` tall, which reads as a slab rather than as something that
-    /// hugs a menu bar; the width is composed from the wing and the reading and
-    /// does not move with the height, so the whole of the change is proportion.
+    /// The pill is drawn on a `32` pt bar; at the `46` pt reference it reads as a slab.
     static let compactDisplay = display(bandHeight: 32)
-    /// The panel keeps the reference bar, which is what its band is measured at
-    /// everywhere else in the documents.
     static let panelDisplay = display(bandHeight: PanelMetrics.referenceCompactHeight)
 
     // MARK: - The staged moment
 
-    /// The preferences every staged store is given.
-    ///
-    /// **Never `nil`.** `hasCompletedOnboarding` then reads `false`, the
-    /// first-run `Window` scene is presented, and it holds key status for the
-    /// rest of the process — which inside the test host costs `27` failures in
-    /// the answering suite, every one of them a row that never became first
-    /// responder. A throwaway suite carries that one key and nothing else, so
-    /// every other preference still falls back to the same default a `nil`
-    /// store used and the figures are unchanged.
+    /// Never `nil`: `hasCompletedOnboarding` would read `false` and the first-run window would
+    /// hold key status, failing `27` answering tests. A throwaway suite carries only that key.
     static let preferences: UserDefaults = {
         let defaults = UserDefaults(suiteName: "notchline.anatomy.figure")!
         defaults.set(true, forKey: "hasCompletedOnboarding")
@@ -92,11 +50,7 @@ struct AnatomyFigureRenderer {
     }()
 
 
-    /// The approval the leading row is stopped on.
-    ///
-    /// A ticket is what makes ``AgentRequest/canBeAnswered`` true, and that is
-    /// what puts `Approve` where the row's reading would be. Nothing can click
-    /// it: the figure is rendered with hit testing off.
+    /// A ticket makes ``AgentRequest/canBeAnswered`` true, which draws `Approve`.
     static func approvalRequest() -> AgentRequest {
         AgentRequest(
             id: "anatomy-approval",
@@ -106,11 +60,8 @@ struct AnatomyFigureRenderer {
         )
     }
 
-    /// The three live rows both figures are staged from, plus the finished one
-    /// the collapsed bar's dot speaks for.
     static func sessions(at now: Date, buriedFinish: Bool) -> [MonitoredSession] {
         var rows: [MonitoredSession] = [
-            // Stopped on an approval a person could give here.
             MonitoredSession(
                 agent: .codex,
                 threadID: "anatomy-approval-thread",
@@ -122,17 +73,9 @@ struct AnatomyFigureRenderer {
                 startedAt: now.addingTimeInterval(-158),
                 request: approvalRequest()
             ),
-            // Working, and the longest of them — which is what the collapsed
-            // reading draws.
-            //
-            // **Codex's, and it used to be Claude Code's.** With the list
-            // grouped by product a row's place on the figure is decided by its
-            // block, and the key names three rows by position: the approval,
-            // the one carrying a timer, and the one carrying a subagent badge.
-            // Two rows in the first block and the badge at the head of the
-            // second is the arrangement that leaves all three drawn — and it
-            // is also `32 + 80 + 80 + 32 + 80`, the grouped viewport exactly,
-            // so the second heading is on the figure rather than under it.
+            // Working, and the longest — the collapsed reading. Codex's so that, grouped by product, the
+            // approval, timer and subagent badge rows are all drawn: `32 + 80 + 80 + 32 + 80` fills the
+            // grouped viewport exactly.
             MonitoredSession(
                 agent: .codex,
                 threadID: "anatomy-running-thread",
@@ -143,9 +86,7 @@ struct AnatomyFigureRenderer {
                 status: .running,
                 startedAt: now.addingTimeInterval(-74)
             ),
-            // Finished, with two subagents still in flight — the one row that
-            // draws a badge where a reading would be. A subagent outlives the
-            // turn that spawned it, so this thread still counts as running.
+            // Finished with two subagents in flight, so the thread still counts as running.
             MonitoredSession(
                 agent: .claudeCode,
                 threadID: "anatomy-subagent-thread",
@@ -161,9 +102,7 @@ struct AnatomyFigureRenderer {
         ]
         if buriedFinish {
             rows.append(
-                // The row the rail is reporting and the collapsed dot speaks
-                // for: last in the second block, and the one thing below the
-                // fold.
+                // The row the rail reports and the collapsed dot speaks for; the one thing below the fold.
                 MonitoredSession(
                     agent: .claudeCode,
                     threadID: "anatomy-finished-thread",
@@ -180,9 +119,6 @@ struct AnatomyFigureRenderer {
         return rows
     }
 
-    /// One product's rate-limit windows and what it has spent today: Codex
-    /// publishes one window, Claude Code two, and the table draws each
-    /// product's own rather than one number standing for both.
     static func quota(at now: Date) -> [AgentKind: QuotaSnapshot] {
         [
             .codex: QuotaSnapshot(
@@ -221,9 +157,7 @@ struct AnatomyFigureRenderer {
     ) -> MonitorStore {
         let rows = sessions(at: now, buriedFinish: buriedFinish)
         let quotas = quota(at: now)
-        // No services and no preferences: nothing is watched, no socket bound,
-        // no file of the user's read, and the drawing cannot be changed by
-        // whatever they happen to have chosen in Settings.
+        // No services and no preferences: nothing watched, no socket, no user file or Settings read.
         let store = MonitorStore(
             displays: [display],
             services: [],
@@ -244,9 +178,7 @@ struct AnatomyFigureRenderer {
         return store
     }
 
-    /// The Recent queue: three rows that left at three different ages, staged
-    /// directly because a queue fed through the ordinary arrow would have every
-    /// row departing at one instant and reading one age.
+    /// Staged directly: the ordinary path would give every row one departure instant.
     static func departures(at now: Date) -> [RecentDeparture] {
         let left: [(id: String, project: String, title: String, ago: TimeInterval)] = [
             ("cache", "acme-api", "Cache the product catalogue", 3 * 60),
@@ -274,7 +206,6 @@ struct AnatomyFigureRenderer {
 
     // MARK: - Rendering
 
-    /// The specimen at its own size, drawing nothing but itself.
     struct Specimen: View {
         let store: MonitorStore
 
@@ -291,15 +222,8 @@ struct AnatomyFigureRenderer {
         }
     }
 
-    /// Draws a view into a PNG at the backing scale of the window it is hosted
-    /// in.
-    ///
-    /// **A real window and `cacheDisplay`, not `ImageRenderer`.** The renderer
-    /// takes a scale directly and needs no window, and it draws neither of the
-    /// two things this figure exists for: a `ScrollView`'s content comes out
-    /// empty, so every session row and every retired row was blank, and
-    /// `NotchStatusMatrix` came out as SwiftUI's unsupported-view placeholder.
-    /// What is left is the product's own AppKit draw of its own view tree.
+    /// Not `ImageRenderer`: it draws `ScrollView` content empty and `NotchStatusMatrix` as a
+    /// placeholder.
     @discardableResult
     static func png<Content: View>(
         _ content: Content,
@@ -318,20 +242,12 @@ struct AnatomyFigureRenderer {
         window.contentView = host
         window.backgroundColor = .clear
         window.isOpaque = false
-        // The overlay hangs over the menu bar and is dark whatever the user
-        // runs; pinning the appearance keeps a figure from changing with
-        // whatever the machine rendering it happens to be set to.
+        // Pinned dark so the figure does not follow the rendering machine's appearance.
         window.appearance = NSAppearance(named: .darkAqua)
-        // **The window is never ordered in.** It exists to give the hosting
-        // view an appearance and a backing scale; `cacheDisplay` draws the view
-        // tree itself and does not need it on screen -- the figure is byte for
-        // byte the same either way. Ordering it front cost 27 failures
-        // elsewhere in the suite, on the tests that synthesise events at their
-        // own offscreen hosting views: a real window in front of them takes the
-        // hit that was meant for theirs.
+        // Never ordered in: `cacheDisplay` does not need it, and a front window stole hits from other
+        // tests' offscreen hosting views (27 failures).
         host.layoutSubtreeIfNeeded()
-        // Turns of the loop, so SwiftUI has committed a layout pass and the
-        // lists have filled before anything is cached out of them.
+        // Let SwiftUI commit a layout pass and fill the lists before caching.
         RunLoop.current.run(until: Date().addingTimeInterval(0.6))
         host.layoutSubtreeIfNeeded()
         host.displayIfNeeded()
@@ -339,14 +255,8 @@ struct AnatomyFigureRenderer {
         let rep = try #require(host.bitmapImageRepForCachingDisplay(in: host.bounds))
         host.cacheDisplay(in: host.bounds, to: rep)
 
-        // The hosted views go before the window does: a specimen of an open row
-        // carries the real answer field, which is an `NSTextView`.
-        //
-        // **Not `close()`.** `isReleasedWhenClosed` is `true` on a window built
-        // this way, so closing one held only by a local reference over-releases
-        // it and takes the test host with it — 301 failures, this test among
-        // them. Dropping the last reference is what deallocates a window that
-        // was never ordered in.
+        // Hosted views go first (an open row carries an `NSTextView`). Not `close()`:
+        // `isReleasedWhenClosed` over-releases a locally held window and crashes the test host.
         window.contentView = nil
 
         let data = try #require(rep.representation(using: .png, properties: [:]))
@@ -354,7 +264,6 @@ struct AnatomyFigureRenderer {
         return CGSize(width: rep.pixelsWide, height: rep.pixelsHigh)
     }
 
-    /// How tall a view wants to be at a given width.
     static func fittingHeight<Content: View>(_ content: Content, width: CGFloat) throws -> CGFloat {
         let host = NSHostingView(rootView: content.frame(width: width))
         host.layoutSubtreeIfNeeded()
@@ -365,17 +274,12 @@ struct AnatomyFigureRenderer {
 
     @Test
     func writesTheReadmeAnatomyFigures() throws {
-        // The destination, named by a file rather than by an environment
-        // variable: `TEST_RUNNER_`-prefixed variables do not reach a unit test
-        // hosted inside this app, and neither does anything it prints -- so a
-        // run gated on one passed in 0.000 s and wrote nothing, which is
-        // indistinguishable from a run that worked.
+        // A file, not an env var: `TEST_RUNNER_` variables and stdout do not reach tests hosted in the
+        // app, so a gated run passed in 0.000 s having written nothing.
         let marker = URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent(".notchline-anatomy-out")
         guard let named = try? String(contentsOf: marker, encoding: .utf8) else { return }
-        // **Spent as it is read.** The switch costs the answering tests their
-        // timing for as long as it is set, so it is good for one run and has to
-        // be put back deliberately rather than left lying in a home directory.
+        // Spent as read: the switch costs the answering tests their timing while set.
         try? FileManager.default.removeItem(at: marker)
         let directory = named.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !directory.isEmpty else { return }
@@ -385,8 +289,6 @@ struct AnatomyFigureRenderer {
         let now = Date()
         var report: [String] = []
 
-        // The collapsed pill: the mark, the counts, the Project, the dot for a
-        // finished turn nobody has read, and the longest running turn.
         let compact = Self.store(
             isExpanded: false,
             buriedFinish: true,
@@ -404,10 +306,7 @@ struct AnatomyFigureRenderer {
         )
         report.append("compact: \(compactSize.width) x \(compactSize.height) -> \(compactPixels.width) x \(compactPixels.height)")
 
-        // The expanded panel, with both folds open, staged from the same
-        // moment the pill is: the counts on the two figures are one reading,
-        // and the fourth row -- the finished one the pill's dot speaks for --
-        // is the one the rail says is below.
+        // Staged from the same moment as the pill, so both figures show one reading.
         let panel = Self.store(
             isExpanded: true,
             buriedFinish: true,
@@ -428,7 +327,6 @@ struct AnatomyFigureRenderer {
         )
         report.append("expanded: \(panelSize.width) x \(panelSize.height) -> \(panelPixels.width) x \(panelPixels.height)")
 
-        // And the card the README carries: both figures, named.
         let card = ReadmeAnatomyCard(compact: compact, expanded: panel)
         let cardWidth = ReadmeAnatomyCard.width(compact: compact, expanded: panel)
         let cardHeight = try Self.fittingHeight(card, width: cardWidth)
@@ -439,7 +337,6 @@ struct AnatomyFigureRenderer {
         )
         report.append("anatomy: \(cardWidth) x \(cardHeight) -> \(cardPixels.width) x \(cardPixels.height)")
 
-        // The two shapes a request opens in, side by side and unlabelled.
         let answering = ApprovalSpecimens.staged(at: now)
         let answeringCard = ReadmeAnsweringCard(staged: answering)
         let answeringWidth = ReadmeAnsweringCard.width(answering)
