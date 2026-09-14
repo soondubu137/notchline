@@ -18,7 +18,7 @@ enum DesktopProjectResolution: Equatable, Sendable {
         case .chats:
             RowContentFallback.projectName
         case .unavailable:
-            DesktopProjectMetadataSnapshot.unavailableProjectName
+            RowContentFallback.unavailableProjectName
         }
     }
 }
@@ -37,8 +37,6 @@ struct DesktopProjectMetadataSnapshot: Equatable, Sendable {
             return false
         }
     }
-
-    nonisolated static let unavailableProjectName = "Project unavailable"
 
     let projectNamesByThreadID: [String: String]
     let projectlessThreadIDs: Set<String>

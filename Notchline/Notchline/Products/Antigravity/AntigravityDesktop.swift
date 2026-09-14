@@ -53,7 +53,7 @@ nonisolated enum AntigravityDesktopProjectResolution: Equatable, Sendable {
         case .standalone:
             RowContentFallback.projectName
         case .unavailable:
-            DesktopProjectMetadataSnapshot.unavailableProjectName
+            RowContentFallback.unavailableProjectName
         }
     }
 }

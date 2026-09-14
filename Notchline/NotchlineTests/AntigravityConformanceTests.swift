@@ -795,7 +795,7 @@ struct AntigravityConformanceTests {
         product.projects.file(conversation, .unavailable)
         #expect(
             try #require(await product.provider.fetchSnapshot().sessions.first).projectName
-                == DesktopProjectMetadataSnapshot.unavailableProjectName
+                == RowContentFallback.unavailableProjectName
         )
     }
 

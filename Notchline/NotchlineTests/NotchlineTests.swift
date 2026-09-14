@@ -8476,7 +8476,7 @@ struct NotchlineTests {
         #expect(snapshot.resolution(for: "explicit-chat").displayName == RowContentFallback.projectName)
         #expect(
             snapshot.resolution(for: "missing").displayName
-                == DesktopProjectMetadataSnapshot.unavailableProjectName
+                == RowContentFallback.unavailableProjectName
         )
     }
 

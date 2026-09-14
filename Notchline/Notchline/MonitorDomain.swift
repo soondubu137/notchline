@@ -311,6 +311,9 @@ nonisolated enum AgentDiskFootprintReport: Sendable, Equatable {
 /// ``MonitorStore/previewLine(for:)``.
 enum RowContentFallback {
     nonisolated static let projectName = "Untitled Project"
+    /// A Project the product has but could not be read: fails closed instead of reading as
+    /// ``projectName``. Supplied by the product's own resolution, not the initialiser.
+    nonisolated static let unavailableProjectName = "Project unavailable"
     nonisolated static let title = "Untitled Session"
     /// Matches ``SessionStatus/displayName`` for `running`.
     nonisolated static let liveProgress = "Working..."

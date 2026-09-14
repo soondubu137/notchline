@@ -1190,7 +1190,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         metadata: DesktopProjectMetadataSnapshot
     ) -> String? {
         let unavailableCount = sessions.filter {
-            $0.projectName == DesktopProjectMetadataSnapshot.unavailableProjectName
+            $0.projectName == RowContentFallback.unavailableProjectName
         }.count
         let unresolvedDiagnostic = unavailableCount > 0
             ? "\(unavailableCount) sessions have no verifiable Desktop Project mapping; they were not fallen back to Chats."
