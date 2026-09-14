@@ -8,6 +8,8 @@ actor CodexHookActivation {
     nonisolated private let configuration: DirectoryChangeWatcher
     nonisolated private let definitions: DirectoryChangeWatcher
     private var generation = 0
+    /// Bumped only by `stop`: a read retired by a newer one joins it, one retired by a disconnect stops.
+    private var lifetime = 0
     private var cached: (revision: [UInt64], verified: Bool?, retryAt: Date?)?
     private var pending: Task<Bool?, Never>?
     private var pendingRevision: [UInt64]?
@@ -44,6 +46,7 @@ actor CodexHookActivation {
 
     func stop() {
         invalidate()
+        lifetime += 1
         configuration.pause()
         definitions.pause()
     }
@@ -53,43 +56,52 @@ actor CodexHookActivation {
     /// Unsupported servers retain the legacy delivery-based activation rule. An available API
     /// that reports incomplete setup, malformed data or a failed read never verifies activation.
     func verified(using client: any CodexAppServerCommunicating) async -> Bool? {
-        let stamp = revision()
-        if let cached, cached.revision == stamp,
-           cached.retryAt.map({ $0 > clock.now() }) ?? true {
-            return cached.verified
-        }
-        if pending != nil, pendingRevision != stamp { invalidate() }
-        let epoch = generation
-        let paths = paths
-        let request = pending ?? Task<Bool?, Never> {
-            do {
-                let response = try await client.request(
-                    method: "hooks/list",
-                    params: .object(["cwds": .array([
-                        .string(paths.hooksConfiguration.deletingLastPathComponent().path)
-                    ])]),
-                    timeoutNanoseconds: 3_000_000_000
-                )
-                return Self.allManagedHooksAreTrusted(in: response, paths: paths)
-            } catch let error as CodexAppServerError where error.isUnsupportedMethod {
-                return nil
-            } catch {
+        let life = lifetime
+        // A retired read reported `false`, drawing a trusted row `not yet verified` for up to the
+        // request's 3 s; join the read that retired it instead, as `ProductConnectionMonitor` does.
+        for _ in 0..<3 {
+            let stamp = revision()
+            if let cached, cached.revision == stamp,
+               cached.retryAt.map({ $0 > clock.now() }) ?? true {
+                return cached.verified
+            }
+            if pending != nil, pendingRevision != stamp { invalidate() }
+            let epoch = generation
+            let paths = paths
+            let request = pending ?? Task<Bool?, Never> {
+                do {
+                    let response = try await client.request(
+                        method: "hooks/list",
+                        params: .object(["cwds": .array([
+                            .string(paths.hooksConfiguration.deletingLastPathComponent().path)
+                        ])]),
+                        timeoutNanoseconds: 3_000_000_000
+                    )
+                    return Self.allManagedHooksAreTrusted(in: response, paths: paths)
+                } catch let error as CodexAppServerError where error.isUnsupportedMethod {
+                    return nil
+                } catch {
+                    return false
+                }
+            }
+            pending = request
+            pendingRevision = stamp
+            let value = await request.value
+            guard generation == epoch else {
+                guard life == lifetime, !Task.isCancelled else { break }
+                continue
+            }
+            pending = nil
+            pendingRevision = nil
+            // An edit during the request invalidates that response, even if it said "trusted".
+            guard revision() == stamp else {
+                cached = (revision(), false, clock.now().addingTimeInterval(5))
                 return false
             }
+            cached = (stamp, value, value == false ? clock.now().addingTimeInterval(5) : nil)
+            return value
         }
-        pending = request
-        pendingRevision = stamp
-        let value = await request.value
-        guard generation == epoch else { return false }
-        pending = nil
-        pendingRevision = nil
-        // An edit during the request invalidates that response, even if it said "trusted".
-        guard revision() == stamp else {
-            cached = (revision(), false, clock.now().addingTimeInterval(5))
-            return false
-        }
-        cached = (stamp, value, value == false ? clock.now().addingTimeInterval(5) : nil)
-        return value
+        return false
     }
 
     nonisolated static func allManagedHooksAreTrusted(in response: JSONValue,

@@ -163,6 +163,8 @@ actor ProductConnectionMonitor {
     private var discovery: (Date, ProductInstallationReading)?
     private var pending: Task<ProductInstallationReading, Never>?
     private var generation = 0
+    /// Bumped only by `reset`: a check retired by a newer one joins it, one retired by a disconnect stops.
+    private var lifetime = 0
     private var failureSince: Date?
     private var wasConnected = false
     private var lastPresence: AgentPresence?
@@ -194,7 +196,7 @@ actor ProductConnectionMonitor {
     func invalidate() {
         generation += 1; discovery = nil; pending?.cancel(); pending = nil
     }
-    func reset() { invalidate(); failureSince = nil; wasConnected = false; lastPresence = nil }
+    func reset() { invalidate(); lifetime += 1; failureSince = nil; wasConnected = false; lastPresence = nil }
     func nextDeadline() -> Date? {
         guard let since = failureSince else { return nil }
         let end = since.addingTimeInterval(10)
@@ -204,16 +206,24 @@ actor ProductConnectionMonitor {
     func installation(presence: AgentPresence) async -> ProductInstallationReading {
         startWakeups()
         if presence != lastPresence { invalidate(); lastPresence = presence }
-        let epoch = generation
-        let now = clock.now()
-        if let cached = discovery, now.timeIntervalSince(cached.0) < 30 { return cached.1 }
-        let task = pending ?? Task { await discover() }
-        pending = task
-        let reading = await task.value
-        guard epoch == generation else { return .unknown("The product changed during the check. Check again.") }
-        pending = nil; discovery = (now, reading)
-        wakeups?.watchInstallation(reading)
-        return reading
+        let life = lifetime
+        // A retired result is never returned. Reporting it as unknown drew `Unable to check` until
+        // the next refresh, so join the check that retired it; a bound stops an edge storm holding it.
+        for _ in 0..<3 {
+            let epoch = generation
+            let now = clock.now()
+            if let cached = discovery, now.timeIntervalSince(cached.0) < 30 { return cached.1 }
+            let task = pending ?? Task { await discover() }
+            pending = task
+            let reading = await task.value
+            if epoch == generation {
+                pending = nil; discovery = (now, reading)
+                wakeups?.watchInstallation(reading)
+                return reading
+            }
+            guard life == lifetime, !Task.isCancelled else { break }
+        }
+        return .unknown("The product changed during the check. Check again.")
     }
 
     func inspect(_ snapshot: AgentSnapshot) async -> AgentSnapshot {

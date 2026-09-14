@@ -118,7 +118,8 @@ struct CodexHookActivationTests {
         await service.disconnect()
     }
 
-    @Test func cachesVerifiedReadsAndRejectsLateReadsAfterReset() async throws {
+    /// A late read retired by a recheck answers with the newer read, never its own response.
+    @Test func cachesVerifiedReadsAndLateReadsJoinTheNewerRead() async throws {
         let paths = paths()
         defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
         try FileManager.default.createDirectory(at: paths.hooksConfiguration.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -129,12 +130,33 @@ struct CodexHookActivationTests {
         #expect(await client.hookReads == 1)
         #expect(await reader.nextDeadline() == nil)
         await reader.invalidate()
+        await client.setResponse(.null)
         await client.setDelay(true)
         let late = Task { await reader.verified(using: client) }
         while await client.hookReads < 2 { await Task.yield() }
         await reader.invalidate()
+        await client.setResponse(response(paths))
+        await client.setDelay(false)
+        await client.release()
+        #expect(await late.value == true, "the retired untrusted response became current")
+        #expect(await client.hookReads == 3)
+        #expect(await reader.nextDeadline() == nil)
+    }
+
+    @Test func aReadRetiredByStopDoesNotReadAgain() async throws {
+        let paths = paths()
+        defer { try? FileManager.default.removeItem(at: paths.supportDirectory.deletingLastPathComponent()) }
+        try FileManager.default.createDirectory(at: paths.hooksConfiguration.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let reader = CodexHookActivation(paths: paths, clock: SystemMonitorClock())
+        let client = ActivationClient(response: response(paths))
+        await client.setDelay(true)
+        let late = Task { await reader.verified(using: client) }
+        while await client.hookReads < 1 { await Task.yield() }
+        await reader.stop()
+        await client.setDelay(false)
         await client.release()
         #expect(await late.value == false)
+        #expect(await client.hookReads == 1)
         #expect(await reader.nextDeadline() == nil)
     }
 
@@ -171,9 +193,11 @@ private actor ActivationClient: CodexAppServerCommunicating {
     func request(method: String, params: JSONValue?, timeoutNanoseconds: UInt64?) async throws -> JSONValue {
         if method == "hooks/list" {
             hookReads += 1
+            // Answered as the server stood when asked, so a held read keeps its own response.
+            let answer = response
             if delayed { await withCheckedContinuation { held = $0 } }
             if unsupported { throw CodexAppServerError.remote(code: -32601, message: "Method not found") }
-            return response
+            return answer
         }
         if method == "thread/list" { return .object(["data": .array([]), "nextCursor": .null]) }
         return .object([:])

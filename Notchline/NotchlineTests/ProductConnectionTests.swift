@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import Foundation
 import SwiftUI
 import Testing
@@ -157,26 +158,73 @@ struct ProductConnectionTests {
         store.stopMonitoring()
     }
 
-    @Test func invalidationRejectsAnOlderDiscoveryResult() async {
-        let (starts, started) = AsyncStream.makeStream(of: Void.self)
-        let discovery = SuspendedDiscovery(started: started)
-        let checker = ProductConnectionMonitor { await discovery.read() }
-        var iterator = starts.makeAsyncIterator()
-        let old = Task { await checker.installation(presence: .open) }
-        _ = await iterator.next()
-        await checker.invalidate()
-        let fresh = Task { await checker.installation(presence: .open) }
-        _ = await iterator.next()
-        await discovery.finish(index: 1, with: .notFound)
-        #expect(await fresh.value == .notFound)
-        await discovery.finish(index: 0, with: .found([.init(url: URL(fileURLWithPath: "/old.app"), version: nil, surface: "Desktop")]))
-        guard case .unknown = await old.value else { Issue.record("A retired discovery became current"); return }
-        #expect(await checker.installation(presence: .open) == .notFound)
+    /// The retired caller gets the newer check's reading, whichever discovery finishes first.
+    @Test func aRetiredDiscoveryJoinsTheNewerCheckAndNeverBecomesCurrent() async {
+        let retired = ProductInstallationReading.found([.init(url: URL(fileURLWithPath: "/old.app"), version: nil, surface: "Desktop")])
+        for retiredFinishesFirst in [false, true] {
+            let (starts, started) = AsyncStream.makeStream(of: Void.self)
+            let discovery = SuspendedDiscovery(started: started)
+            let checker = ProductConnectionMonitor { await discovery.read() }
+            var iterator = starts.makeAsyncIterator()
+            let old = Task { await checker.installation(presence: .open) }
+            _ = await iterator.next()
+            await checker.invalidate()
+            let fresh = Task { await checker.installation(presence: .open) }
+            _ = await iterator.next()
+            if retiredFinishesFirst { await discovery.finish(index: 0, with: retired) }
+            await discovery.finish(index: 1, with: .notFound)
+            if !retiredFinishesFirst { await discovery.finish(index: 0, with: retired) }
+            #expect(await fresh.value == .notFound)
+            #expect(await old.value == .notFound, "A retired discovery became current")
+            #expect(await checker.installation(presence: .open) == .notFound)
+        }
     }
 
-    /// Launch leaves the cold first check alone (`invalidationRejectsAnOlderDiscoveryResult`);
-    /// coming back to page one rechecks, as opening Products does.
-    @Test @MainActor func onboardingRechecksOnlyWhenTheUserReturnsToConnect() async throws {
+    @Test func aDiscoveryRetiredByDisconnectStopsInsteadOfCheckingAgain() async throws {
+        let discovery = HeldFirstDiscovery()
+        let checker = ProductConnectionMonitor { await discovery.read() }
+        let old = Task { await checker.installation(presence: .open) }
+        while await discovery.reads == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        await checker.reset()
+        await discovery.release()
+        guard case .unknown = await old.value else { Issue.record("A disconnected check read again"); return }
+        #expect(await discovery.reads == 1)
+    }
+
+    /// Every status the row draws while a recheck lands on a refresh whose discovery is in flight.
+    @Test @MainActor func aRecheckDuringACheckNeverDrawsUnableToCheck() async throws {
+        let discovery = HeldFirstDiscovery()
+        let service = DiscoveringService(monitor: ProductConnectionMonitor { await discovery.read() })
+        let store = MonitorStore(displays: [], services: [service], preferences: nil)
+        defer { store.stopMonitoring() }
+        let descriptor = try #require(ProductRegistry.builtIn.first { $0.kind == .trae })
+        var drawn: [String] = []
+        // After each publish lands: a main-queue block queued in `willSet` runs before any later job.
+        let watch = store.objectWillChange.sink { _ in
+            DispatchQueue.main.async {
+                let copy = ProductSettingsCopy(
+                    descriptor: descriptor, setup: store.setupStatus(for: .trae),
+                    availability: store.agentAvailability(for: .trae), diagnostic: store.diagnostic(for: .trae),
+                    snapshot: store.productSnapshot(for: .trae), intent: store.monitoringIntent(for: .trae))
+                if drawn.last != copy.status { drawn.append(copy.status) }
+            }
+        }
+        defer { watch.cancel() }
+
+        while await discovery.reads == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        let recheck = Task { await store.recheckIntegrationAndWait() }
+        while await service.rechecks == 0 { try await Task.sleep(for: .milliseconds(5)) }
+        await discovery.release()
+        await recheck.value
+        try await Task.sleep(for: .milliseconds(50))
+
+        #expect(drawn.last == "Connected")
+        #expect(!drawn.contains("Unable to check"), "drawn: \(drawn)")
+    }
+
+    /// Page one rechecks as opening Products does: at launch, which is safe while the first check is
+    /// in flight (`aRecheckDuringACheckNeverDrawsUnableToCheck`), and again on return from page two.
+    @Test @MainActor func onboardingRechecksEachTimeTheConnectPageAppears() async throws {
         let service = RecheckCounter()
         let store = MonitorStore(displays: [], services: [service], preferences: nil)
         defer { store.stopMonitoring() }
@@ -196,9 +244,9 @@ struct ProductConnectionTests {
         }
 
         let launch = host(.connect)
-        try await Task.sleep(for: .milliseconds(300))
+        try await settle { await service.rechecks > 0 }
         launch.orderOut(nil)
-        #expect(await service.rechecks == 0)
+        #expect(await service.rechecks == 1)
 
         let later = host(.read)
         defer { later.orderOut(nil) }
@@ -217,8 +265,8 @@ struct ProductConnectionTests {
                 pressure: type == .leftMouseDown ? 1 : 0))
             later.sendEvent(event)
         }
-        try await settle { await service.rechecks > 0 }
-        #expect(await service.rechecks == 1)
+        try await settle { await service.rechecks > 1 }
+        #expect(await service.rechecks == 2)
     }
 
     @Test func applicationMetadataIsFreshAndCorruptionIsNotUninstallation() throws {
@@ -295,6 +343,32 @@ private actor RecheckCounter: AgentMonitoring {
     func nextRefreshDeadline() -> Date? { nil }
     func disconnect() {}
     func recheckConnection() { rechecks += 1 }
+}
+/// The first discovery waits for `release()`; later ones answer at once.
+private actor HeldFirstDiscovery {
+    var reads = 0
+    private var held: CheckedContinuation<Void, Never>?
+    private var released = false
+    func read() async -> ProductInstallationReading {
+        reads += 1
+        if reads == 1, !released { await withCheckedContinuation { held = $0 } }
+        return .found([.init(url: URL(fileURLWithPath: "/Applications/Trae.app"), version: "3.5.91", surface: "Desktop")])
+    }
+    func release() { released = true; held?.resume(); held = nil }
+}
+private actor DiscoveringService: AgentMonitoring {
+    nonisolated let agent = AgentKind.trae
+    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+    let monitor: ProductConnectionMonitor
+    var rechecks = 0
+    init(monitor: ProductConnectionMonitor) { self.monitor = monitor }
+    func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
+        await monitor.inspect(AgentSnapshot(agent: .trae, availability: .ready, sessions: [], quota: .noneReported,
+                                            diagnostic: nil, setupStatus: .active, presence: .open))
+    }
+    func nextRefreshDeadline() -> Date? { nil }
+    func disconnect() async { await monitor.reset() }
+    func recheckConnection() async { await monitor.invalidate(); rechecks += 1 }
 }
 private actor SuspendedDiscovery {
     let started: AsyncStream<Void>.Continuation

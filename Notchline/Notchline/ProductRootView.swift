@@ -68,9 +68,6 @@ enum QuestionLesson: String, CaseIterable {
 struct OnboardingView: View {
     @EnvironmentObject private var store: MonitorStore
     @State private var page: Page = .connect
-    /// Page one's first appearance is at launch, while every product's first check is still cold;
-    /// a recheck then retires that check and the row reads `Unable to check` until the next one.
-    @State private var hasLeftConnectPage: Bool
     @State private var answerLesson: AnswerLesson
     @State private var questionLesson: QuestionLesson
 
@@ -82,7 +79,6 @@ struct OnboardingView: View {
 
     init(page: Page = .connect, answerLesson: AnswerLesson = .permission, questionLesson: QuestionLesson = .singleChoice) {
         _page = State(initialValue: page)
-        _hasLeftConnectPage = State(initialValue: page != .connect)
         _answerLesson = State(initialValue: answerLesson)
         _questionLesson = State(initialValue: questionLesson)
     }
@@ -132,9 +128,7 @@ struct OnboardingView: View {
 
             Button(page == .answer ? "Start" : "Continue") {
                 switch page {
-                case .connect:
-                    hasLeftConnectPage = true
-                    page = .read
+                case .connect: page = .read
                 case .read: page = .answer
                 case .answer: store.completeOnboarding()
                 }
@@ -165,7 +159,7 @@ struct OnboardingView: View {
 
     /// The connections, in the rows Settings uses. `Recheck` is in the footnote: Codex asks the user
     /// to trust hooks before running them; the Provider verifies activation through `hooks/list`.
-    /// Returning here rechecks, as opening the Products pane does.
+    /// Each appearance rechecks, returning from page two included, as opening the Products pane does.
     private var connectGroup: some View {
         SettingsGroup(header: "Connect your agents") {
             ProductConnectionRows()
@@ -179,10 +173,7 @@ struct OnboardingView: View {
                 RecheckButton()
             }
         }
-        .task {
-            guard hasLeftConnectPage else { return }
-            await store.recheckIntegrationAndWait()
-        }
+        .task { await store.recheckIntegrationAndWait() }
     }
 
     /// The whole of what the notch draws: shut, the five states, hovered. The bar and panel are the
