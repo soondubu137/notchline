@@ -4,6 +4,20 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## 0.5.1 Beta — 2026-09-14
+
+**A malformed number from Codex can no longer crash Notchline, and this is the first version 0.5.0 installs by itself.** About offers it after the daily check or Check for Updates. After Install, it relaunches once no Turn is running or waiting for an answer. (`docs/technical-explorations/self-update/README.md` §12.)
+
+### Fixed
+
+- **A number too large for an integer no longer ends the process.** Every message from Codex's App Server reads its request id, error code and quota figures through one conversion, which crashed on valid JSON such as `1e300`. Such a number now reads as missing, and the paths that already ignore a malformed message take it from there. Fractions are still truncated, so quota readings are unchanged. (Issue #69.)
+
+### Known limitations
+
+- **Automation may not be asked for again after all.** `0.5.0` said the permission given to earlier versions does not carry over. On macOS 26.6 it carried over twice, between builds signed with different certificates, so moving up from `0.4.3` may ask once or not at all. (`docs/technical-explorations/self-update/README.md` §12.)
+
+Everything else listed under `0.5.0` and earlier still stands, unchanged.
+
 ## 0.5.0 Beta — 2026-09-14
 
 **Notchline now finds, installs and relaunches into its own updates, and tells you on the notch rather than in a window.** This is the first Beta. The copy you install by hand is the last one you have to. (`docs/updates-on-the-notch.md`, `docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md`.)
