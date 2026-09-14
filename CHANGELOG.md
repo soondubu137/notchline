@@ -4,12 +4,34 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
-## Unreleased
+## 0.4.3 Alpha — 2026-09-13
 
-- Products separates installation, setup, presence and observation. Closed products no longer show warnings or requests to reopen; unreadable setup is no longer reported as absent.
-- Product switches retain monitoring intent across launches and external configuration changes. Explicit Repair and per-product operation retries replace switching off a broken setup. Recheck refreshes evidence without reinstalling configuration; onboarding's connection page now says so too, and rechecks each time it opens.
-- Turning a product's switch off, in Settings or onboarding, now asks first. It removes that product's hooks or Trae's companion and takes its rows off the notch, so one stray click could undo setup, and for Codex could mean trusting the hooks again. Cancelling changes nothing; turning a switch on is still one click. (`docs/integration-settings-behaviour.md` §3.)
-- Application discovery uses running instances and Launch Services as well as conventional locations. Trae registration also verifies the actual companion package; partial connection notices are restricted to discovered peers. See [Product connection checks](docs/product-connections.md) for discovery and activation limits.
+**A product's switch now records whether you want it watched, and its row says what is actually wrong, if anything.** Products keeps installation, setup, presence and observation apart: a closed app is no longer a warning, an unused one is no longer Connected, and a broken setup offers Repair instead of switching itself off. (`docs/product-connections.md`, `docs/integration-settings-behaviour.md`.)
+
+### Added
+
+- **Repair and Retry removal.** A switch keeps your choice across launches and edits made outside Notchline. When a product's hooks file or Trae's companion has been changed or deleted, the row offers `Repair…` and nothing is rewritten until you press it. A failed turn-off stays off and offers `Retry removal`. Recheck only reads. (`docs/product-connections.md`.)
+- **Turning a product's switch off asks first**, in Settings and onboarding. It removes that product's hooks or Trae's companion and takes its rows off the notch, so one stray click could undo setup, and for Codex could mean trusting the hooks again. Cancelling changes nothing; turning a switch on is still one click. (`docs/integration-settings-behaviour.md` §3.)
+
+### Changed
+
+- **Products tells an unused product from broken monitoring.** A closed app shows no warning or reopen advice, and unreadable setup is no longer reported as absent. A confirmed failure warns only after ten seconds without recovery. Discovery also asks running apps and Launch Services, and Trae's check reads the companion package itself, not just Trae's list. (`docs/product-connections.md`.)
+- **Codex reads Connected as soon as its hooks are trusted**, with no Turn needed first. Notchline checks all seven definitions through Codex's public `hooks/list`, and never reads Codex's private trust state.
+- **Hide Notchline works on a display without a notch.** It was `Hide the wings`, which did nothing there. The pill now slides up into the top edge, leaving a 4 pt lip; an approval, a question or an unread finish brings it back, and hovering the lip opens the panel. Your existing choice carries over.
+- **Rows with nothing to say use the same words for every product:** `Untitled Project`, `Untitled Session` and `Working...`, instead of Codex's `Chats`, Antigravity's `Standalone` or Claude Code's `Untitled folder`.
+- **The ⓘ popover's `Show in Finder` responds to the pointer**, dimming and showing a pointing hand like the other controls in Settings.
+
+### Fixed
+
+- **A recheck no longer flashes `Unable to check` before `Connected`.** A recheck that landed on a check already running discarded it, so opening Products, pressing Recheck or launching onboarding could show the wrong state; a trusted Codex setup read `Set up · not yet verified` for up to 3 s. It now waits for the fresh reading. Onboarding's connection page rechecks whenever it appears.
+
+### Known limitations
+
+- **Discovery is bounded.** `App not found` is weaker than "not installed": an app outside the places Notchline looks, and not running, cannot be found.
+- **Trae's check reads only the default local extension profile**, and a partial-coverage notice names only the windows its transport has discovered.
+- **A Codex without `hooks/list`** (verified against CLI `0.154.0-alpha.6.2`) keeps the old behaviour: Products waits for a hook to fire before calling the setup verified.
+
+Everything listed under `0.4.2` and earlier still stands, unchanged.
 
 ## 0.4.2 Alpha — 2026-09-13
 

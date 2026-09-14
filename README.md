@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/platform-macOS%2026.5%2B-lightgrey" alt="macOS 26.5 or later">
   <img src="https://img.shields.io/badge/built%20with-SwiftUI%20%2B%20AppKit-orange" alt="SwiftUI and AppKit">
   <img src="https://img.shields.io/badge/status-in%20development-yellow" alt="In development">
-  <img src="https://img.shields.io/badge/version-0.4.2-blue" alt="Version 0.4.2">
+  <img src="https://img.shields.io/badge/version-0.4.3-blue" alt="Version 0.4.3">
   <img src="https://img.shields.io/badge/licence-GPL--3.0--or--later-green" alt="Licensed under GPL 3.0 or later">
 </p>
 
