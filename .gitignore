@@ -21,6 +21,9 @@ xcuserdata/
 # Local screen recordings
 *.mov
 
+# Local test scratch
+/tests/
+
 # Header lockup variants the README does not use
 /design/assets/07-readme/notchline-readme-header-black.png
 /design/assets/07-readme/notchline-readme-header-white.png
