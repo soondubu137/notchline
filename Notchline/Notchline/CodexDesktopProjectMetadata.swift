@@ -14,8 +14,11 @@ enum DesktopProjectResolution: Equatable, Sendable {
         switch self {
         case let .project(name):
             name
+        // Was `Chats`, Codex's own heading for these -- replaced so a row
+        // with no Project reads the same regardless of which product left it
+        // that way (``RowContentFallback``).
         case .chats:
-            "Chats"
+            RowContentFallback.projectName
         case .unavailable:
             DesktopProjectMetadataSnapshot.unavailableProjectName
         }

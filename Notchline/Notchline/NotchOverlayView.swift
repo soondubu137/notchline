@@ -1928,7 +1928,7 @@ private struct SessionRow: View {
     }
 
     private var accessibilityText: String {
-        let preview = session.preview.map { ", current content: \($0)" } ?? ""
+        let preview = ", current content: \(store.previewLine(for: session))"
         // Spoken form, not the drawn "12:34" — VoiceOver reads that as a clock
         // time. The row draws the elapsed value, so the label must carry it too.
         let elapsed = store.spokenElapsedText(for: session).map { ", running for \($0)" }
@@ -3911,7 +3911,9 @@ struct SessionRowContent: View {
                     // **The last thing said about this row**, which is the
                     // product's own preview until an answer leaves from here
                     // and this app has something newer to say (§8 states 02
-                    // and 03). One line, in one ink, either way.
+                    // and 03), or ``RowContentFallback/liveProgress`` when the
+                    // product has said nothing at all yet. One line, in one
+                    // ink, always drawn -- see ``MonitorStore/previewLine(for:)``.
                     //
                     // **Covered, the line is asked for anyway and thrown
                     // away.** A cover that also dropped the row's third line
@@ -3919,29 +3921,26 @@ struct SessionRowContent: View {
                     // panel would change height at the moment somebody
                     // reached for the gesture -- with an audience watching,
                     // which is the one thing `cover-the-words.md` §4.2
-                    // arranges never to happen. A row that has no preview
-                    // draws no bar, exactly as it draws no line.
-                    if store.previewLine(for: session) != nil {
-                        if isCovered {
-                            // **The searchlight crosses the cover too.** It is
-                            // the channel that answers *live or finished* --
-                            // the one thing on this panel readable without
-                            // looking straight at it -- and covering takes the
-                            // content away, not the reading.
-                            CoverBar(
-                                length: PanelMetrics.coverBarPreviewLength,
-                                lineHeight: PanelMetrics.sessionRowPreviewHeight,
-                                sweeps: sweepsBody
-                            )
-                        } else if let preview = store.previewLine(for: session) {
-                            SessionRowText(
-                                text: preview,
-                                font: .systemFont(ofSize: 13, weight: .light),
-                                color: NotchPalette.labelDrawingColor,
-                                lineHeight: PanelMetrics.sessionRowPreviewHeight,
-                                sweeps: sweepsBody
-                            )
-                        }
+                    // arranges never to happen.
+                    if isCovered {
+                        // **The searchlight crosses the cover too.** It is
+                        // the channel that answers *live or finished* --
+                        // the one thing on this panel readable without
+                        // looking straight at it -- and covering takes the
+                        // content away, not the reading.
+                        CoverBar(
+                            length: PanelMetrics.coverBarPreviewLength,
+                            lineHeight: PanelMetrics.sessionRowPreviewHeight,
+                            sweeps: sweepsBody
+                        )
+                    } else {
+                        SessionRowText(
+                            text: store.previewLine(for: session),
+                            font: .systemFont(ofSize: 13, weight: .light),
+                            color: NotchPalette.labelDrawingColor,
+                            lineHeight: PanelMetrics.sessionRowPreviewHeight,
+                            sweeps: sweepsBody
+                        )
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

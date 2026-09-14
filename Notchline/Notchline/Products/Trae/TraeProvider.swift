@@ -101,7 +101,9 @@ nonisolated final class TraeSource: MonitoringLifecycleSource, ProductSessionRea
             guard let row = current[turn.threadID], row.turnID == turn.turnID else { continue }
             content[turn.threadID] = RowContent(
                 projectName: WorkingDirectoryRowContent.projectName(forWorkingDirectory: row.folder),
-                title: row.title.isEmpty ? "Untitled" : row.title,
+                // Empty when Trae has none; ``MonitoredSession/init``
+                // supplies ``RowContentFallback/title`` for the row.
+                title: row.title,
                 preview: row.preview)
         }
         return content

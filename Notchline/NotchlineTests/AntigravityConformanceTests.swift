@@ -563,7 +563,7 @@ struct AntigravityConformanceTests {
     /// Under `-p` the product sends no workspace, and the row says so rather
     /// than guessing one.
     @Test
-    func aPrintModeTurnIsAnUntitledFolder() async throws {
+    func aPrintModeTurnIsAnUntitledProject() async throws {
         let product = try Product()
         defer { Task { await product.tearDown() } }
         try await product.provider.installIntegration()
@@ -571,7 +571,7 @@ struct AntigravityConformanceTests {
 
         try product.deliver("PreInvocation", invocation(0, of: conversation, workspaces: []), at: t0)
         let row = try #require(await product.provider.fetchSnapshot().sessions.first)
-        #expect(row.projectName == "Untitled folder")
+        #expect(row.projectName == RowContentFallback.projectName)
     }
 
     // MARK: - The prompt, read out of the transcript the payload names
@@ -626,7 +626,7 @@ struct AntigravityConformanceTests {
 
         try product.deliver("PreInvocation", invocation(0, of: conversation), at: t0)
         let early = try #require(await product.provider.fetchSnapshot().sessions.first)
-        #expect(early.title == "Untitled")
+        #expect(early.title == RowContentFallback.title)
 
         product.transcripts.holds("Fix the row that always says Untitled")
         try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(6))
@@ -678,8 +678,8 @@ struct AntigravityConformanceTests {
         try product.deliver("Stop", stop(of: conversation), at: t0.addingTimeInterval(6))
 
         let row = try #require(await product.provider.fetchSnapshot().sessions.first)
-        #expect(row.title == "Untitled")
-        #expect(row.preview == nil, "and a transcript with no words in it draws no line")
+        #expect(row.title == RowContentFallback.title)
+        #expect(row.preview == nil, "a transcript with no words in it leaves the model's own preview nil; the row's fallback line is drawn from that, not stored in it")
         #expect(
             product.transcripts.asked.count == 3,
             "the boundary, the one model call and the end, and nothing for the duplicate"
@@ -880,10 +880,11 @@ struct AntigravityConformanceTests {
         #expect(done.status == .completed)
         #expect(done.preview == "Done.")
 
-        // A conversation in no Project says so in Desktop's own word, and one
-        // whose assignment cannot be read says that instead.
+        // A conversation in no Project reads the app's own generic word
+        // (``RowContentFallback/projectName``), not Desktop's `Standalone`;
+        // one whose assignment cannot be read says that instead.
         product.projects.file(conversation, .standalone)
-        #expect(try #require(await product.provider.fetchSnapshot().sessions.first).projectName == "Standalone")
+        #expect(try #require(await product.provider.fetchSnapshot().sessions.first).projectName == RowContentFallback.projectName)
         product.projects.file(conversation, .unavailable)
         #expect(
             try #require(await product.provider.fetchSnapshot().sessions.first).projectName
@@ -1052,7 +1053,7 @@ struct AntigravityConformanceTests {
                 threadID: threadID,
                 turnID: "local:1",
                 projectName: "Demo",
-                title: "Untitled",
+                title: RowContentFallback.title,
                 preview: nil,
                 status: .completed,
                 startedAt: t0

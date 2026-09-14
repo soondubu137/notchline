@@ -434,6 +434,25 @@ nonisolated enum AgentDiskFootprintReport: Sendable, Equatable {
     }
 }
 
+/// The words this app supplies when a product cannot name its own project,
+/// title, or live progress.
+///
+/// **One vocabulary, applied once, for every product.** A product used to
+/// pick its own word for "nothing to say here" — Claude Code's empty working
+/// directory read `Untitled folder`, Codex's projectless thread read `Chats`,
+/// Antigravity's read `Standalone` — so the same blank looked like a different
+/// decision depending on which integration happened to leave it. Applying it
+/// centrally, in ``MonitoredSession/init(agent:threadID:turnID:projectName:title:preview:status:startedAt:runningSubagentCount:subagentsAwaitingApprovalCount:isPausedForBackgroundWork:finishedAt:request:requests:)``
+/// and in ``MonitorStore/previewLine(for:)``, means a future product gets this
+/// for free rather than having to invent its own fallback word.
+enum RowContentFallback {
+    nonisolated static let projectName = "Untitled Project"
+    nonisolated static let title = "Untitled Session"
+    /// The same word ``SessionStatus/displayName`` gives `running`: this app
+    /// already uses it to mean "no more specific progress to report."
+    nonisolated static let liveProgress = "Working..."
+}
+
 struct MonitoredSession: Identifiable, Equatable, Sendable {
     let agent: AgentKind
     let threadID: String
@@ -552,8 +571,8 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
         self.agent = agent
         self.threadID = threadID
         self.turnID = turnID
-        self.projectName = projectName
-        self.title = title
+        self.projectName = projectName.isEmpty ? RowContentFallback.projectName : projectName
+        self.title = title.isEmpty ? RowContentFallback.title : title
         self.preview = preview
         self.status = status
         self.startedAt = startedAt

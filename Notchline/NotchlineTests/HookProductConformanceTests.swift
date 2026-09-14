@@ -303,12 +303,14 @@ struct HookProductConformanceTests {
         #expect(snapshot.sessions.first?.status == .running)
     }
 
-    /// A submission directory the product did not send is not guessed.
+    /// A submission directory the product did not send is not guessed: the
+    /// row's fallback (``RowContentFallback/projectName``) is
+    /// ``MonitoredSession/init``'s to supply, not this reader's.
     @Test
-    func aMissingDirectoryIsAnUntitledFolderNotAGuess() throws {
-        #expect(HookProductProvider.projectName(forWorkingDirectory: nil) == "Untitled folder")
-        #expect(HookProductProvider.projectName(forWorkingDirectory: "") == "Untitled folder")
-        #expect(HookProductProvider.projectName(forWorkingDirectory: "/") == "Untitled folder")
+    func aMissingDirectoryIsEmptyNotAGuess() throws {
+        #expect(HookProductProvider.projectName(forWorkingDirectory: nil) == "")
+        #expect(HookProductProvider.projectName(forWorkingDirectory: "") == "")
+        #expect(HookProductProvider.projectName(forWorkingDirectory: "/") == "")
         #expect(HookProductProvider.projectName(forWorkingDirectory: "/Users/x/Projects/demo/") == "demo")
     }
 

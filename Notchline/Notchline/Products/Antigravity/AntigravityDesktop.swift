@@ -59,8 +59,11 @@ nonisolated enum AntigravityDesktopProjectResolution: Equatable, Sendable {
         switch self {
         case let .project(name):
             name
+        // Was `Standalone`, Desktop's own heading for these -- replaced so a
+        // row with no Project reads the same regardless of which product
+        // left it that way (``RowContentFallback``).
         case .standalone:
-            "Standalone"
+            RowContentFallback.projectName
         case .unavailable:
             DesktopProjectMetadataSnapshot.unavailableProjectName
         }

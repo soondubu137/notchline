@@ -5481,7 +5481,7 @@ struct NotchlineTests {
                     MonitoredSession(
                         threadID: "approval",
                         turnID: "turn",
-                        projectName: "Chats",
+                        projectName: RowContentFallback.projectName,
                         title: "Question",
                         preview: nil,
                         status: .approvalNeeded,
@@ -8210,7 +8210,7 @@ struct NotchlineTests {
                     MonitoredSession(
                         threadID: "running",
                         turnID: "turn-running",
-                        projectName: "Chats",
+                        projectName: RowContentFallback.projectName,
                         title: "Running task",
                         preview: nil,
                         status: .running,
@@ -8239,7 +8239,7 @@ struct NotchlineTests {
                     MonitoredSession(
                         threadID: "input",
                         turnID: "turn",
-                        projectName: "Chats",
+                        projectName: RowContentFallback.projectName,
                         title: "Question",
                         preview: nil,
                         status: .inputNeeded,
@@ -8271,7 +8271,7 @@ struct NotchlineTests {
         let finished = MonitoredSession(
             threadID: "thread",
             turnID: "turn-1",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Finished turn",
             preview: nil,
             status: .completed,
@@ -8303,7 +8303,7 @@ struct NotchlineTests {
         let nextTurn = MonitoredSession(
             threadID: "thread",
             turnID: "turn-2",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Next turn",
             preview: nil,
             status: .running,
@@ -8337,7 +8337,7 @@ struct NotchlineTests {
         let finished = MonitoredSession(
             threadID: "thread",
             turnID: "turn-1",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Finished turn",
             preview: nil,
             status: .completed,
@@ -8401,7 +8401,7 @@ struct NotchlineTests {
         let finished = MonitoredSession(
             threadID: "thread",
             turnID: "turn-1",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Finished turn",
             preview: nil,
             status: .completed,
@@ -8449,7 +8449,7 @@ struct NotchlineTests {
             agent: .claudeCode,
             threadID: "session",
             turnID: "turn-1",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Finished turn",
             preview: nil,
             status: .completed,
@@ -8492,7 +8492,7 @@ struct NotchlineTests {
         let finished = MonitoredSession(
             threadID: "thread",
             turnID: "turn-1",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Finished turn",
             preview: nil,
             status: .completed,
@@ -8535,7 +8535,7 @@ struct NotchlineTests {
             let live = MonitoredSession(
                 threadID: "thread-\(status)",
                 turnID: "turn",
-                projectName: "Chats",
+                projectName: RowContentFallback.projectName,
                 title: "Live turn",
                 preview: nil,
                 status: status,
@@ -8557,7 +8557,7 @@ struct NotchlineTests {
             let next = MonitoredSession(
                 threadID: live.threadID,
                 turnID: "turn-2",
-                projectName: "Chats",
+                projectName: RowContentFallback.projectName,
                 title: "Live turn",
                 preview: nil,
                 status: status,
@@ -8587,7 +8587,7 @@ struct NotchlineTests {
             agent: .claudeCode,
             threadID: "session",
             turnID: "turn",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Finished turn",
             preview: nil,
             status: .completed,
@@ -8622,7 +8622,7 @@ struct NotchlineTests {
         let finished = MonitoredSession(
             threadID: "thread",
             turnID: "turn",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Finished turn",
             preview: nil,
             status: .completed,
@@ -9496,7 +9496,7 @@ struct NotchlineTests {
         let session = MonitoredSession(
             threadID: "thread",
             turnID: "turn",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Stale task",
             preview: nil,
             status: .running,
@@ -9547,7 +9547,7 @@ struct NotchlineTests {
                 agent: agent,
                 threadID: "thread",
                 turnID: "turn",
-                projectName: "Chats",
+                projectName: RowContentFallback.projectName,
                 title: "Task",
                 preview: nil,
                 status: .running,
@@ -9773,7 +9773,7 @@ struct NotchlineTests {
         let running = MonitoredSession(
             threadID: "thread",
             turnID: "turn",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Running task",
             preview: nil,
             status: .running,
@@ -9856,7 +9856,7 @@ struct NotchlineTests {
             MonitoredSession(
                 threadID: "thread-\(index)",
                 turnID: "turn",
-                projectName: "Chats",
+                projectName: RowContentFallback.projectName,
                 title: "Task \(index)",
                 preview: nil,
                 status: index.isMultiple(of: 2) ? .running : .completed,
@@ -9940,7 +9940,7 @@ struct NotchlineTests {
         let session = MonitoredSession(
             threadID: "thread",
             turnID: "turn",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Running task",
             preview: nil,
             status: .running,
@@ -10060,7 +10060,7 @@ struct NotchlineTests {
         let running = MonitoredSession(
             threadID: "running",
             turnID: "turn-running",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Running",
             preview: nil,
             status: .running,
@@ -10459,7 +10459,7 @@ struct NotchlineTests {
         )
         let snapshot = await repository.snapshot()
 
-        #expect(snapshot.resolution(for: "explicit-chat").displayName == "Chats")
+        #expect(snapshot.resolution(for: "explicit-chat").displayName == RowContentFallback.projectName)
         #expect(
             snapshot.resolution(for: "missing").displayName
                 == DesktopProjectMetadataSnapshot.unavailableProjectName
@@ -10865,7 +10865,7 @@ struct NotchlineTests {
             CodexSnapshotParser.session(
                 from: state(.approvalNeeded),
                 thread: codexRootThread(id: "thread-auto"),
-                projectName: "Chats",
+                projectName: RowContentFallback.projectName,
                 approvalsReachTheUser: false
             )?.status == .running
         )
@@ -10874,7 +10874,7 @@ struct NotchlineTests {
             CodexSnapshotParser.session(
                 from: state(.approvalNeeded),
                 thread: codexRootThread(id: "thread-auto"),
-                projectName: "Chats",
+                projectName: RowContentFallback.projectName,
                 approvalsReachTheUser: true
             )?.status == .approvalNeeded
         )
@@ -10884,7 +10884,7 @@ struct NotchlineTests {
             CodexSnapshotParser.session(
                 from: state(.inputNeeded),
                 thread: codexRootThread(id: "thread-auto"),
-                projectName: "Chats",
+                projectName: RowContentFallback.projectName,
                 approvalsReachTheUser: false
             )?.status == .inputNeeded
         )
@@ -10893,7 +10893,7 @@ struct NotchlineTests {
             CodexSnapshotParser.session(
                 from: state(.completed),
                 thread: codexRootThread(id: "thread-auto"),
-                projectName: "Chats",
+                projectName: RowContentFallback.projectName,
                 approvalsReachTheUser: false
             )?.status == .completed
         )
@@ -11713,7 +11713,7 @@ struct NotchlineTests {
         let session = CodexSnapshotParser.session(
             from: state,
             thread: thread,
-            projectName: "Chats"
+            projectName: RowContentFallback.projectName
         )
         #expect(session?.status == .running)
         #expect(session?.title == "Eligible but unowned")
@@ -11876,7 +11876,7 @@ struct NotchlineTests {
         let session = MonitoredSession(
             threadID: "thread-123",
             turnID: "turn-123",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Open this chat",
             preview: nil,
             status: .completed,
@@ -20695,7 +20695,7 @@ for line in sys.stdin:
         let done = MonitoredSession(
             threadID: "t",
             turnID: "u",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Done",
             preview: nil,
             status: .completed,
@@ -20712,7 +20712,7 @@ for line in sys.stdin:
         let running = MonitoredSession(
             threadID: "t",
             turnID: "u",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Running",
             preview: nil,
             status: .running,
@@ -20727,7 +20727,7 @@ for line in sys.stdin:
         let unobserved = MonitoredSession(
             threadID: "t",
             turnID: "u",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Done",
             preview: nil,
             status: .completed,
@@ -20780,7 +20780,7 @@ for line in sys.stdin:
             agent: agent,
             threadID: threadID,
             turnID: "turn-\(threadID)",
-            projectName: "Chats",
+            projectName: RowContentFallback.projectName,
             title: "Timed turn",
             preview: nil,
             status: status,
@@ -26260,7 +26260,7 @@ for line in sys.stdin:
         // ban on deriving one from a path binds Codex only.
         #expect(alive.projectName == "notch")
         // No title source yet, and the folder name is never allowed to stand in.
-        #expect(alive.title == "Untitled")
+        #expect(alive.title == RowContentFallback.title)
         // No preview either, and since CC-015 that means something narrower
         // than it used to: not "this product cannot receive text", but "this
         // session has not said anything since we started listening".
@@ -30011,7 +30011,9 @@ for line in sys.stdin:
         await service.release(with: .sent)
         #expect(await eventually { !store.isAnswerInFlight })
         #expect(store.answerNotices[row.id] == nil)
-        #expect(store.previewLine(for: try #require(store.sessions.first)) == row.preview)
+        // The fixture's own preview is nil either way, so the line reverts to
+        // ``RowContentFallback/liveProgress`` rather than to nothing.
+        #expect(store.previewLine(for: try #require(store.sessions.first)) == (row.preview ?? RowContentFallback.liveProgress))
         // And the replacement is answerable in its own right, on its own handle.
         #expect(await eventually { store.openSession?.request?.id == "c-2" || store.openRowID == nil })
         if store.openRowID == nil { store.toggleOpenRow(try #require(store.sessions.first)) }
@@ -38729,7 +38731,7 @@ extension NotchlineTests {
             threadID: turn.threadID,
             turnID: turn.turnID,
             projectName: "notchline",
-            title: "Untitled",
+            title: RowContentFallback.title,
             preview: nil,
             status: turn.status,
             startedAt: turn.startedAt,
@@ -39016,7 +39018,7 @@ extension NotchlineTests {
             threadID: turn.threadID,
             turnID: turn.turnID,
             projectName: "notchline",
-            title: "Untitled",
+            title: RowContentFallback.title,
             preview: nil,
             status: turn.status,
             startedAt: turn.startedAt,
@@ -40011,7 +40013,7 @@ extension NotchlineTests {
                 threadID: turn.threadID,
                 turnID: turn.turnID,
                 projectName: "notchline",
-                title: "Untitled",
+                title: RowContentFallback.title,
                 preview: nil,
                 status: turn.status,
                 startedAt: turn.startedAt,

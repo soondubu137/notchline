@@ -31,7 +31,7 @@ struct SyntheticProductConformanceTests {
         }
         func content(for turns: [MonitoredTurnState], messages: TurnMessageReading) -> [String: RowContent] {
             Dictionary(uniqueKeysWithValues: turns.map {
-                ($0.threadID, RowContent(projectName: "Synthetic", title: $0.promptPreview ?? "Untitled", preview: "Step \(reads)"))
+                ($0.threadID, RowContent(projectName: "Synthetic", title: $0.promptPreview ?? "", preview: "Step \(reads)"))
             })
         }
         func stopMonitoring() {}

@@ -222,7 +222,10 @@ struct WorkingDirectoryRowContent: RowContentSource {
                     turn.threadID,
                     RowContent(
                         projectName: Self.projectName(forWorkingDirectory: turn.workingDirectory),
-                        title: turn.promptPreview ?? "Untitled",
+                        // Empty when the Turn has not printed a prompt either;
+                        // ``MonitoredSession/init`` supplies
+                        // ``RowContentFallback/title`` for the row.
+                        title: turn.promptPreview ?? "",
                         // The closing words once the Turn has ended with some,
                         // and until then the newest message this Turn has said,
                         // for a product whose vocabulary names a message event.
@@ -238,10 +241,11 @@ struct WorkingDirectoryRowContent: RowContentSource {
     }
 
     /// The submission directory's last component, which `tech-design.md` §5
-    /// permits as a project name; `Untitled folder` when there is none.
+    /// permits as a project name; empty when there is none, which
+    /// ``MonitoredSession/init`` reads as ``RowContentFallback/projectName``.
     nonisolated static func projectName(forWorkingDirectory path: String?) -> String {
         let component = path.map { URL(fileURLWithPath: $0).lastPathComponent } ?? ""
-        return component.isEmpty || component == "/" ? "Untitled folder" : component
+        return component == "/" ? "" : component
     }
 }
 

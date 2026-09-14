@@ -2107,10 +2107,12 @@ enum CodexSnapshotParser {
         }
 
         let threadPreview = normalizedPreview(thread["preview"]?.stringValue)
+        // Empty when nothing above answers; ``MonitoredSession/init`` supplies
+        // ``RowContentFallback/title`` for the row.
         let title = normalizedTitle(thread["name"]?.stringValue)
             ?? threadPreview
             ?? normalizedPreview(state.promptPreview)
-            ?? "Untitled"
+            ?? ""
         // Only the approval wait is answered elsewhere. `request_user_input`
         // still asks the person -- the automatic reviewer decides approvals
         // and nothing else -- so Input needed is left exactly as it was.

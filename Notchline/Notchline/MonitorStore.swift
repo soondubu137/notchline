@@ -4066,9 +4066,11 @@ final class MonitorStore: ObservableObject {
     @Published private(set) var answerNotices: [String: AnswerNotice] = [:]
 
     /// What one row's preview line draws: the last thing this app said about
-    /// it, or the product's own preview.
-    func previewLine(for session: MonitoredSession) -> String? {
-        answerNotices[session.id]?.text ?? session.preview
+    /// it, the product's own preview, or ``RowContentFallback/liveProgress``
+    /// when neither exists — so the line is never empty on a row that draws
+    /// one at all.
+    func previewLine(for session: MonitoredSession) -> String {
+        answerNotices[session.id]?.text ?? session.preview ?? RowContentFallback.liveProgress
     }
 
     /// What is in the open row's field, for the view that draws it.

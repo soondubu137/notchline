@@ -39,13 +39,14 @@ struct ClaudeCodeRowContent: RowContentSource {
             guard let session = listed[turn.threadID] else { continue }
             content[turn.threadID] = RowContent(
                 projectName: Self.projectName(for: session),
-                // `Untitled` is the contract's answer for a title that cannot
-                // be obtained, and the folder name is never allowed to stand in
-                // for one.
+                // Empty when a title cannot be obtained -- the folder name is
+                // never allowed to stand in for one -- and
+                // ``MonitoredSession/init`` supplies
+                // ``RowContentFallback/title`` for the row.
                 title: await transcripts.title(
                     forSession: session.sessionID,
                     workingDirectory: session.workingDirectory
-                ) ?? "Untitled",
+                ) ?? "",
                 // The beginning of the newest message *this turn* printed, and
                 // the prompt it started from until it has printed one. The first
                 // half reads the same in every state: when a turn stops it is
@@ -78,9 +79,10 @@ struct ClaudeCodeRowContent: RowContentSource {
     /// Project is the working directory (ADR 0009). The ban on deriving a
     /// Project from a path binds Codex only: there a path approximates a
     /// grouping the user made, here the directory *is* the grouping -- it is
-    /// what Claude Code itself files transcripts by.
+    /// what Claude Code itself files transcripts by. Empty when there is no
+    /// working directory, which ``MonitoredSession/init`` reads as
+    /// ``RowContentFallback/projectName``.
     nonisolated static func projectName(for session: ClaudeCodeSession) -> String {
-        let component = session.workingDirectory.lastPathComponent
-        return component.isEmpty ? "Untitled folder" : component
+        session.workingDirectory.lastPathComponent
     }
 }
