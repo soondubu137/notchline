@@ -887,7 +887,7 @@ private struct AboutUpdateReading: View {
     }
 }
 
-/// The quota meter's shape: a `120 × 3` capsule, track `hairline`, fill `themeInk.on`.
+/// The download meter (`updates-on-the-notch.md` §3): a `120 × 3` capsule, track `hairline`, fill `themeInk.on`.
 private struct UpdateMeter: View {
     let fraction: Double
 
