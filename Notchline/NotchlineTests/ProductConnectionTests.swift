@@ -1,4 +1,6 @@
+import AppKit
 import Foundation
+import SwiftUI
 import Testing
 @testable import Notchline
 
@@ -172,6 +174,53 @@ struct ProductConnectionTests {
         #expect(await checker.installation(presence: .open) == .notFound)
     }
 
+    /// Launch leaves the cold first check alone (`invalidationRejectsAnOlderDiscoveryResult`);
+    /// coming back to page one rechecks, as opening Products does.
+    @Test @MainActor func onboardingRechecksOnlyWhenTheUserReturnsToConnect() async throws {
+        let service = RecheckCounter()
+        let store = MonitorStore(displays: [], services: [service], preferences: nil)
+        defer { store.stopMonitoring() }
+
+        func host(_ page: OnboardingView.Page) -> NSWindow {
+            let size = NSSize(width: OnboardingLayout.width, height: OnboardingLayout.height)
+            let window = NSWindow(contentRect: NSRect(origin: CGPoint(x: -20_000, y: 0), size: size),
+                                  styleMask: [.borderless], backing: .buffered, defer: false)
+            window.contentView = NSHostingView(rootView: OnboardingView(page: page).environmentObject(store))
+            window.orderFront(nil)
+            window.contentView?.layoutSubtreeIfNeeded()
+            return window
+        }
+        func settle(until done: () async -> Bool) async throws {
+            let deadline = Date().addingTimeInterval(2)
+            while await !done(), Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
+        }
+
+        let launch = host(.connect)
+        try await Task.sleep(for: .milliseconds(300))
+        launch.orderOut(nil)
+        #expect(await service.rechecks == 0)
+
+        let later = host(.read)
+        defer { later.orderOut(nil) }
+        let content = try #require(later.contentView)
+        // The navigation row ends at x = 556, y = 818 (`figma-design.md` §7); Back sits 16 pt left
+        // of Continue. The accessibility tree is empty in this host, so press it by position.
+        func size(_ button: some View) -> NSSize { NSHostingView(rootView: button).fittingSize }
+        let next = size(Button("Continue") {}.buttonStyle(.borderedProminent).buttonBorderShape(.capsule))
+        let previous = size(Button("Back") {}.buttonStyle(.bordered).buttonBorderShape(.capsule))
+        let top = CGPoint(x: 556 - next.width - 16 - previous.width / 2, y: 818 - previous.height / 2)
+        let point = content.convert(content.isFlipped ? top : CGPoint(x: top.x, y: content.bounds.height - top.y), to: nil)
+        for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
+            let event = try #require(NSEvent.mouseEvent(
+                with: type, location: point, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
+                windowNumber: later.windowNumber, context: nil, eventNumber: 0, clickCount: 1,
+                pressure: type == .leftMouseDown ? 1 : 0))
+            later.sendEvent(event)
+        }
+        try await settle { await service.rechecks > 0 }
+        #expect(await service.rechecks == 1)
+    }
+
     @Test func applicationMetadataIsFreshAndCorruptionIsNotUninstallation() throws {
         let app = FileManager.default.temporaryDirectory.appendingPathComponent("NotchlineMetadata-\(UUID().uuidString).app")
         defer { try? FileManager.default.removeItem(at: app) }
@@ -235,6 +284,17 @@ private actor ConnectionOperationStub: AgentMonitoring, IntegrationConfiguring {
     func removeIntegration() throws {
         if fails { throw CocoaError(.fileWriteNoPermission) }
     }
+}
+private actor RecheckCounter: AgentMonitoring {
+    nonisolated let agent = AgentKind.trae
+    nonisolated let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+    var rechecks = 0
+    func fetchSnapshot(dismissedRowIDs: Set<String>) -> AgentSnapshot {
+        AgentSnapshot(agent: .trae, availability: .ready, sessions: [], quota: .noneReported, diagnostic: nil)
+    }
+    func nextRefreshDeadline() -> Date? { nil }
+    func disconnect() {}
+    func recheckConnection() { rechecks += 1 }
 }
 private actor SuspendedDiscovery {
     let started: AsyncStream<Void>.Continuation
