@@ -289,6 +289,7 @@ nonisolated struct ManagedHooksConfiguration: Sendable {
     /// silently, and `absent` invites a second registration.
     nonisolated func registration(in root: [String: Any]?) -> HookRegistration {
         guard let root else { return .absent }
+        guard (try? validatedHooks(in: root)) != nil else { return .unreadable }
         if isFullyInstalled(in: root) { return .complete }
         if Self.containsAnyMarker(of: self, in: root) { return .mismatched }
         return .absent

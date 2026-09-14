@@ -134,7 +134,7 @@ nonisolated enum TraeBridgeError: Error, LocalizedError {
         switch self {
         case .schema: "Trae's displayed data could not be verified. Reopen its window to reconnect."
         case .version: "This integration requires Trae 3.5.91 with the verified application build."
-        case .unavailable: "Trae's companion is not connected. Reopen the Trae window after installing it."
+        case .unavailable: "Trae’s companion connection is unavailable."
         case let .installation(message): message
         }
     }

@@ -73,6 +73,7 @@ struct HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDeliv
     init(
         agent: AgentKind,
         hooks: HookLifecycleSource,
+        connectionMonitor: ProductConnectionMonitor? = nil,
         sessions: any ProductSessionReading,
         turnEvidence: [any TurnEvidenceSource] = [],
         rowContent: any RowContentSource = WorkingDirectoryRowContent(),
@@ -86,7 +87,7 @@ struct HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDeliv
         self.agent = agent
         self.hooks = hooks
         runtime = ProductMonitoringRuntime(
-            agent: agent, lifecycle: hooks, sessions: sessions,
+            agent: agent, connectionMonitor: connectionMonitor, lifecycle: hooks, sessions: sessions,
             turnEvidence: turnEvidence, rowContent: rowContent,
             readEvidence: readEvidence, usage: usage, footprint: footprint,
             clock: clock, timing: timing, changeEvents: changeEvents
@@ -100,6 +101,7 @@ struct HookProductProvider: AgentMonitoring, IntegrationConfiguring, AnswerDeliv
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         await runtime.fetchSnapshot(dismissedRowIDs: dismissedRowIDs)
     }
+    func recheckConnection() async { await runtime.recheckConnection() }
     func nextRefreshDeadline() async -> Date? { await runtime.nextRefreshDeadline() }
     func disconnect() async { await runtime.disconnect() }
     func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> AnswerOutcome {

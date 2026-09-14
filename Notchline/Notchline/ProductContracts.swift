@@ -20,9 +20,12 @@ protocol AgentMonitoring: Sendable {
     /// instead of polling.
     func nextRefreshDeadline() async -> Date?
     func disconnect() async
+    /// Invalidates read-only connection checks; never installs or repairs settings.
+    func recheckConnection() async
 }
 
 extension AgentMonitoring {
+    func recheckConnection() async {}
     /// Nothing removed; the store holds the only removal record.
     func fetchSnapshot() async -> AgentSnapshot {
         await fetchSnapshot(dismissedRowIDs: [])

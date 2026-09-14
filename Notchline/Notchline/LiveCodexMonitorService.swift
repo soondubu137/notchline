@@ -28,6 +28,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         let eventStamp: Date
     }
 
+    private let connectionMonitor: ProductConnectionMonitor?
+    private var connectionRevision = 0
     private let clock: any MonitorClock
     private let timing: MonitorTiming
     private let client: any CodexAppServerCommunicating
@@ -117,6 +119,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
 
     init(
         client: any CodexAppServerCommunicating = CodexAppServerClient(),
+        connectionMonitor: ProductConnectionMonitor? = nil,
         hookEvents: HookEventRepository = HookEventRepository(),
         hookRegistrar: CodexHookRegistrar = CodexHookRegistrar(),
         hookListener: AgentHookListener? = nil,
@@ -139,6 +142,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             )
         }
     ) {
+        self.connectionMonitor = connectionMonitor
         self.clock = clock
         self.timing = timing
         self.client = client
@@ -186,14 +190,30 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             // what matters (``rolloutWatcher``).
             rolloutEvidence.rolloutWatcher.events(),
             invalidations
-        ])
+        ] + (connectionMonitor.map { [$0.changes.events()] } ?? []))
         self.terminalUnreadMembershipGate = TerminalUnreadRowFilter(timing: timing)
         self.presence = RunningApplicationPresence(
             processIdentifier: desktopProcessIdentifierProvider
         )
     }
 
+    func recheckConnection() async {
+        await hookRegistrar.invalidateRegistration()
+        await connectionMonitor?.invalidate()
+    }
+
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
+        let revision = connectionRevision
+        let snapshot = await fetchMonitoringSnapshot(dismissedRowIDs: dismissedRowIDs)
+        let checked = await connectionMonitor?.inspect(snapshot) ?? snapshot
+        guard revision == connectionRevision else {
+            return AgentSnapshot(agent: .codex, availability: .disconnected, sessions: [], quota: .unavailable,
+                                 diagnostic: nil, setupStatus: snapshot.setupStatus, presence: .unknown)
+        }
+        return checked
+    }
+
+    private func fetchMonitoringSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         observationStopped = false
         // Before the status gate: an already-running Codex fires trusted definitions immediately.
         await hooks.prepareTransport()
@@ -436,6 +456,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     func nextRefreshDeadline() async -> Date? {
         guard !observationStopped else { return nil }
         var deadlines: [Date] = []
+        if let deadline = await connectionMonitor?.nextDeadline() { deadlines.append(deadline) }
         // Asked once, so both entries that consult it agree with their schedulers.
         let screenIsAvailable = screenAvailability.isAvailable()
 
@@ -506,6 +527,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     }
 
     func disconnect() async {
+        connectionRevision += 1
+        await connectionMonitor?.reset()
         observationStopped = true
         hooks.disconnect()
         await hookEvents.resetIntegrationObservation(clearTurns: true, preserveBoundaryObservation: true)

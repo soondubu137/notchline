@@ -31,6 +31,7 @@ nonisolated struct ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfigu
 
     init(
         paths: HookIntegrationPaths = .liveClaudeCode(),
+        connectionMonitor: ProductConnectionMonitor? = nil,
         setup: ManagedHooksSetup? = nil,
         hookEvents: HookEventRepository? = nil,
         sessions: (any ClaudeCodeSessionListing)? = nil,
@@ -128,6 +129,7 @@ nonisolated struct ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfigu
         runtime = HookProductProvider(
             agent: .claudeCode,
             hooks: hooks,
+            connectionMonitor: connectionMonitor,
             sessions: sessionSource,
             turnEvidence: [turnEvidence],
             rowContent: ClaudeCodeRowContent(sessions: sessionSource, transcripts: transcripts),
@@ -142,6 +144,8 @@ nonisolated struct ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfigu
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         await runtime.fetchSnapshot(dismissedRowIDs: dismissedRowIDs)
     }
+
+    func recheckConnection() async { await runtime.recheckConnection() }
 
     func nextRefreshDeadline() async -> Date? {
         await runtime.nextRefreshDeadline()

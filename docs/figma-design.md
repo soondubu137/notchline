@@ -1016,3 +1016,7 @@ The open request row gains a 24 pt navigation strip below the Thread title only 
 Settings draws a fourth registry row, **Trae Desktop**, with companion-installation help and declared local IDE/version limitations. The row has no Hooks-file link. Overlay attribution uses the existing product badge and shared colour/geometry. Its requests use the existing reading-only command/question forms, with measured native reading hints and the same return action; no new Figma variant or answer control is required. Actual SwiftUI row and Settings renders are part of [Trae acceptance](trae-integration.md).
 
 With four product rows, Settings scrolls vertically within a 580 pt-wide window, capped at 860 pt or 80 pt below the smallest connected display’s visible height (minimum 420 pt). This keeps Display controls and Quit reachable on shorter screens.
+
+## Products connection states
+
+The shared Products/onboarding rows use the [connection display matrix](product-connections.md#display-rules). One status line uses neutral, healthy or warning tone. Optional informational text has no warning triangle; only warning notices include the triangle and its accessibility label. Repair, Recheck and Retry removal are explicit row actions; the existing native switch represents monitoring intent and remains on when setup needs repair. Normal closure has no second line. This replaces the earlier registration-derived switch and blanket diagnostic-warning rules in this document.

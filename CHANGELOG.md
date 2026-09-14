@@ -4,6 +4,12 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## Unreleased
+
+- Products separates installation, setup, presence and observation. Closed products no longer show warnings or requests to reopen; unreadable setup is no longer reported as absent.
+- Product switches retain monitoring intent across launches and external configuration changes. Explicit Repair and per-product operation retries replace switching off a broken setup. Recheck refreshes evidence without reinstalling configuration.
+- Application discovery uses running instances and Launch Services as well as conventional locations. Trae registration also verifies the actual companion package; partial connection notices are restricted to discovered peers. See [Product connection checks](docs/product-connections.md) for discovery and activation limits.
+
 ## 0.4.2 Alpha — 2026-09-13
 
 **Trae's own extension state is now the source of truth, and a running Turn shows a prompt, real progress and a final answer.** Installation, progress and removal all used to trust something Notchline remembered rather than what Trae itself currently says. (`docs/trae-integration.md`.)

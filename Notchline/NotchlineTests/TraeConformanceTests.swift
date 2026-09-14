@@ -136,7 +136,7 @@ struct TraeConformanceTests {
         let descriptor = ProductRegistry.descriptor(for: .trae)
         #expect(descriptor.setup.isConfigurable)
         #expect(descriptor.setup.managedHooks == nil)
-        #expect(descriptor.setup.installedMessage.contains("Reopen Trae"))
+        #expect(descriptor.setup.installedMessage.contains("when Trae’s windows next open"))
         #expect(descriptor.watches?.contains("3.5.91") == true)
         #expect(descriptor.notShown?.contains("SOLO") == true)
     }
@@ -148,11 +148,11 @@ struct TraeConformanceTests {
         let waiting = ProductSettingsCopy(descriptor: descriptor, setup: .reviewRequired, availability: .disconnected, diagnostic: nil)
         // A companion Trae's manifest disagrees with reads the mismatched-registration recovery sentence.
         let stale = ProductSettingsCopy(descriptor: descriptor, setup: .repairRequired, availability: .setupRequired, diagnostic: nil)
-        #expect(off.status == "Integration is off")
-        #expect(active.status == "Connected · companion installed")
+        #expect(off.status == "Not set up")
+        #expect(active.status == "Connected")
         #expect(incompatible.status == "Version unsupported")
-        #expect(waiting.status.contains("reopen"))
-        #expect(stale.status == "Reinstall the companion")
+        #expect(!waiting.status.contains("reopen"))
+        #expect(stale.status == "Setup needs repair")
         #expect(!IntegrationSetupStatus.repairRequired.isIntegrationEnabled)
     }
 
@@ -223,22 +223,38 @@ struct TraeConformanceTests {
         #expect(boundary.observedThreadIDs == [id(1)])
     }
 
-    @Test func registrationReadsTraesOwnManifestRatherThanARememberedBelief() throws {
+    @Test func registrationReadsTraesOwnManifestRatherThanARememberedBelief() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("notchline-trae-manifest-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let manifest = root.appendingPathComponent("extensions.json")
-        let installation = TraeInstallation(directory: root, extensionsManifest: manifest)
-        // A missing, corrupt or unrelated manifest reads as absent.
+        let installation = TraeInstallation(application: URL(fileURLWithPath: "/nonexistent/Trae.app"),
+                                            directory: root, extensionsManifest: manifest)
+        // Missing and unrelated manifests are absent; corruption is an unknown check.
         #expect(installation.registration == .absent)
-        for value in ["{", "[]", #"[{"identifier":{"id":"someone.else"},"version":"1.2.0"}]"#] {
+        try Data("{".utf8).write(to: manifest)
+        #expect(installation.registration == .unreadable)
+        for value in ["[]", #"[{"identifier":{"id":"someone.else"},"version":"1.2.0"}]"#] {
             try Data(value.utf8).write(to: manifest); #expect(installation.registration == .absent)
         }
         try Data(#"[{"identifier":{"id":"notchline.trae-companion"},"version":"1.1.0"}]"#.utf8).write(to: manifest)
         #expect(installation.registration == .mismatched)
         // Trae's extension host lower-cases VSIX identifiers; the read tolerates any case.
         try Data(#"[{"identifier":{"id":"NOTCHLINE.TRAE-COMPANION"},"version":"1.2.1"}]"#.utf8).write(to: manifest)
+        #expect(installation.registration == .mismatched, "a manifest entry alone cannot prove the package exists")
+        let package = root.appendingPathComponent("notchline.trae-companion-1.2.1/package.json")
+        try FileManager.default.createDirectory(at: package.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.1"}"#.utf8).write(to: package)
         #expect(installation.registration == .current)
+        try Data("{".utf8).write(to: package)
+        #expect(installation.registration == .unreadable)
+        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"9.0.0"}"#.utf8).write(to: package)
+        #expect(installation.registration == .mismatched)
+        // Corruption is never an invitation to coerce or overwrite the product's manifest.
+        try Data("{".utf8).write(to: manifest)
+        await #expect(throws: (any Error).self) { try await installation.remove() }
+        #expect(try String(contentsOf: manifest, encoding: .utf8) == "{")
+
     }
 
     @Test func removalFallsBackToEditingTraesManifestWhenTheCLIFails() async throws {
@@ -264,6 +280,8 @@ struct TraeConformanceTests {
             directory: root,
             extensionsManifest: manifest
         )
+        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.1"}"#.utf8)
+            .write(to: companionFolder.appendingPathComponent("package.json"))
         #expect(installation.registration == .current)
         try await installation.remove()
         #expect(installation.registration == .absent)

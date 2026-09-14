@@ -4,6 +4,7 @@ import Foundation
 /// Trae's own extension manifest entry for ``TraeInstallation/extensionID``, read fresh.
 nonisolated enum TraeCompanionRegistration: Sendable, Equatable {
     case absent
+    case unreadable
     case mismatched
     case current
 }
@@ -30,19 +31,41 @@ nonisolated struct TraeInstallation: Sendable {
         self.extensionsManifest = extensionsManifest
     }
     var registration: TraeCompanionRegistration {
-        guard let data = try? Data(contentsOf: extensionsManifest),
-              let entries = try? JSONDecoder().decode([ManifestEntry].self, from: data),
-              let installed = entries.first(where: { $0.identifier.id.caseInsensitiveCompare(Self.extensionID) == .orderedSame })
-        else { return .absent }
-        return installed.version == Self.companionVersion ? .current : .mismatched
+        let entries: [ManifestEntry]
+        do {
+            let data = try Data(contentsOf: extensionsManifest)
+            entries = try JSONDecoder().decode([ManifestEntry].self, from: data)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile { return .absent }
+        catch { return .unreadable }
+        let matching = entries.filter { $0.identifier.id.caseInsensitiveCompare(Self.extensionID) == .orderedSame }
+        guard let installed = matching.first else { return .absent }
+        guard matching.count == 1, installed.version == Self.companionVersion else { return .mismatched }
+        let folder = installed.relativeLocation ?? "\(Self.extensionID)-\(installed.version)"
+        let base = extensionsManifest.deletingLastPathComponent().standardizedFileURL
+        let location = base.appendingPathComponent(folder).standardizedFileURL
+        guard location.path.hasPrefix(base.path + "/") else { return .unreadable }
+        do {
+            let data = try Data(contentsOf: location.appendingPathComponent("package.json"))
+            guard let manifest = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  manifest["version"] as? String == Self.companionVersion,
+                  manifest["name"] as? String == "trae-companion",
+                  manifest["publisher"] as? String == "notchline" else { return .mismatched }
+            return .current
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile { return .mismatched }
+        catch { return .unreadable }
+    }
+    var applicationReading: ProductInstallationReading {
+        ProductInstallationDiscovery.metadata(at: application, bundleID: "com.trae.app")
     }
     var compatible: Bool {
-        Bundle(url: application)?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String == Self.traeVersion
+        guard case let .found(instances) = applicationReading else { return false }
+        return instances.first?.version == Self.traeVersion
     }
     private struct ManifestEntry: Decodable {
         struct Identifier: Decodable { let id: String }
         let identifier: Identifier
         let version: String
+        let relativeLocation: String?
     }
 
     func install() async throws {

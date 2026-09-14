@@ -73,7 +73,7 @@ actor ManagedHooksSetup: HookRegistrationSetup {
     /// reports connected directly.
     func status() -> IntegrationSetupStatus {
         IntegrationSetupStatus.card(
-            registration: configuration.registration(in: readSettings()),
+            registration: paths.readRegistration(configuration: configuration, fileManager: fileManager),
             hasObservedEvent: true
         )
     }

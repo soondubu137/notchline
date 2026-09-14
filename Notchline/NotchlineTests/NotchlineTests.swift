@@ -7720,13 +7720,13 @@ struct NotchlineTests {
             descriptor: codex, setup: .reviewRequired, availability: .ready, diagnostic: nil
         )
         #expect(!untrusted.status.contains("Connected"))
-        #expect(untrusted.status.contains("/hooks"))
+        #expect(untrusted.diagnostic?.contains("/hooks") == true)
 
         let unreachable = ProductSettingsCopy(
             descriptor: codex, setup: .active, availability: .disconnected, diagnostic: nil
         )
         #expect(!unreachable.status.contains("Connected"))
-        #expect(unreachable.status.contains("Codex"))
+        #expect(unreachable.status == "Connection unavailable")
 
         let unanswered = ProductSettingsCopy(
             descriptor: codex, setup: .active, availability: nil, diagnostic: nil
@@ -7737,18 +7737,18 @@ struct NotchlineTests {
         let registered = ProductSettingsCopy(
             descriptor: claudeCode, setup: .reviewRequired, availability: .ready, diagnostic: nil
         )
-        #expect(registered.status == "Connected · hooks installed")
+        #expect(registered.status == "Set up · not yet verified")
 
         for descriptor in ProductRegistry.builtIn {
             let off = ProductSettingsCopy(
                 descriptor: descriptor, setup: .notInstalled, availability: .setupRequired, diagnostic: nil
             )
-            #expect(off.status == "Integration is off")
+            #expect(off.status == "Not set up")
             // The row's label is the product name; the status must not repeat it.
             let connected = ProductSettingsCopy(
                 descriptor: descriptor, setup: .active, availability: .ready, diagnostic: nil
             )
-            #expect(connected.status.hasPrefix("Connected · "))
+            #expect(connected.status == "Connected")
             #expect(!connected.status.contains(descriptor.settingsTitle))
         }
     }
@@ -7783,7 +7783,7 @@ struct NotchlineTests {
 
         let trae = ProductInfoContent(descriptor: ProductRegistry.descriptor(for: .trae))
         #expect(trae.setup.map(\.heading) == ["Companion"])
-        #expect(trae.setup.first?.text.contains("Reopen Trae’s windows") == true)
+        #expect(trae.setup.first?.text.contains("when Trae’s windows next open") == true)
     }
 
     /// Every caption is one line (`figma-design.md` §8.0), measured against the narrowest column:
@@ -9933,8 +9933,11 @@ struct NotchlineTests {
         #expect(ready.sessions.isEmpty)
         // Presence is stated, not left to whether Codex Desktop is open on this machine.
         #expect(ready.presence == .open)
-        // With no rows the merge falls through to presence: Connected, not Running.
-        #expect(AgentSnapshotMerge.merge([ready]).status == .connected)
+        // The App Server answered, but this newly written setup has no activation evidence.
+        // Both settings and the summary withhold Connected until that separate fact is verified.
+        #expect(ready.setupStatus == .reviewRequired)
+        #expect(!ready.isConnected)
+        #expect(AgentSnapshotMerge.merge([ready]).status == .disconnected)
         // Startup still proves the App Server answers a real read.
         #expect(requestedMethods.contains("thread/list"))
         #expect(!requestedMethods.contains("thread/loaded/list"))
@@ -22233,7 +22236,7 @@ for line in sys.stdin:
 
     /// A settings file this app cannot parse is reported, never rewritten.
     @Test @MainActor
-    func anUnreadableSettingsFileReadsAsNotInstalledRatherThanCrashing() async throws {
+    func anUnreadableSettingsFileIsNotMistakenForMissingSetup() async throws {
         let root = URL(fileURLWithPath: "/tmp")
             .appendingPathComponent("cin-cc-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -22251,7 +22254,7 @@ for line in sys.stdin:
                 ),
                 vocabulary: ClaudeCodeHookVocabulary()
             )
-            #expect(await setup.status() == .notInstalled)
+            #expect(await setup.status() == .unreadable)
             #expect(
                 String(decoding: try Data(contentsOf: settings), as: UTF8.self) == contents
             )
@@ -24795,7 +24798,10 @@ for line in sys.stdin:
         store.refreshNow()
         #expect(await eventually { store.sessions.first?.requests.count == 1 })
         await service.release(with: .sent)
-        #expect(await eventually { !store.isAnswerInFlight && store.openRequest?.identity == second.identity })
+        // openRequest can already project the remaining request while the follow-up refresh is
+        // still reconciling its saved draft. Wait for that completed reconciliation as well.
+        #expect(await eventually { !store.isAnswerInFlight && store.openRequest?.identity == second.identity
+            && store.answerDraft == "draft B" })
         #expect(store.answerDraft == "draft B")
         #expect(store.answerNotices["claudeCode:t-1:u-1"] == nil)
         #expect(await service.handlesUsed() == [AnswerHandle(ticket: 1)])
@@ -25926,7 +25932,7 @@ for line in sys.stdin:
             diagnostic: store.diagnostic(for: .codex)
         )
         #expect(codex.diagnostic == reported)
-        #expect(codex.status == "Connected · compatible version")
+        #expect(codex.status == "Connected")
         #expect(!codex.status.contains("Codex Desktop"))
 
         let claudeCode = ProductSettingsCopy(
@@ -25935,7 +25941,7 @@ for line in sys.stdin:
             availability: .ready,
             diagnostic: store.diagnostic(for: .claudeCode)
         )
-        #expect(claudeCode.status == "Connected · hooks installed")
+        #expect(claudeCode.status == "Connected")
         // No failure, no line: an empty reserved line reads as a failure.
         #expect(claudeCode.diagnostic == nil)
 
@@ -25946,8 +25952,8 @@ for line in sys.stdin:
             availability: .ready,
             diagnostic: reported
         )
-        #expect(stale.status.contains("out of date"))
-        #expect(stale.diagnostic == reported)
+        #expect(stale.status == "Setup needs repair")
+        #expect(stale.action == .repair)
     }
 
     /// Claude Desktop installs the `claude` command as a separate step, and a Finder-launched app

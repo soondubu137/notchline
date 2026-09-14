@@ -51,6 +51,7 @@ Each document owns a scope. A change landing in one of these scopes updates that
 | [`docs/product-generalisation-plan.md`](docs/product-generalisation-plan.md) | Executable five-package generalisation plan, implementation status and handover acceptance cases |
 | [`docs/trae-integration.md`](docs/trae-integration.md) | Trae local IDE companion: pinned build, request scope, private source and native acceptance |
 | [`docs/tech-design.md`](docs/tech-design.md) | Interfaces, protocols, data flow, failure recovery |
+| [`docs/product-connections.md`](docs/product-connections.md) | Product discovery, monitoring intent, setup integrity, connection checks and Settings presentation |
 | [`docs/integration-settings-behaviour.md`](docs/integration-settings-behaviour.md) | What the settings toggles actually do to the user's hook configuration |
 | [`docs/artifacts.md`](docs/artifacts.md) | Every file this app creates or edits, inside its container and outside it |
 | [`CHANGELOG.md`](CHANGELOG.md) | What each released version contains, and the known limitations it ships with |

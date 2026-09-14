@@ -1343,6 +1343,10 @@ final class MonitorStore: ObservableObject {
     private var refreshTask: Task<Void, Never>?
     private var desiredIntegrationEnabled: [AgentKind: Bool] = [:]
     /// One per product, so a slow write on one side cannot hold the other side's switch.
+    @Published private var connectionReadings: [AgentKind: AgentSnapshot] = [:]
+    @Published private(set) var productOperationFailures: [AgentKind: ProductOperationFailure] = [:]
+    private var integrationIntentRevisions: [AgentKind: Int] = [:]
+    private var monitoringIntents: [AgentKind: ProductMonitoringIntent] = [:]
     private var integrationTasks: [AgentKind: Task<Void, Never>] = [:]
     private var isNavigationInFlight = false
     /// How long a row stays reachable after it leaves the list. A constant, not a setting
@@ -1445,6 +1449,13 @@ final class MonitorStore: ObservableObject {
         self.lastIntegrationMessage = snapshots.first?.diagnostic
             ?? "Waiting for the first refresh"
 
+        for agent in AgentKind.allCases {
+            if let raw = preferences?.string(forKey: "productMonitoringIntent." + agent.rawValue),
+               let intent = ProductMonitoringIntent(rawValue: raw) {
+                monitoringIntents[agent] = intent
+                integrationSwitchIsOnByAgent[agent] = intent == .enabled
+            }
+        }
         if !services.isEmpty {
             startMonitoring()
         }
@@ -2899,6 +2910,7 @@ final class MonitorStore: ObservableObject {
     }
 
     func recheckIntegrationAndWait() async {
+        for service in services { await service.recheckConnection() }
         await refreshAndWait()
     }
 
@@ -2918,9 +2930,17 @@ final class MonitorStore: ObservableObject {
             return
         }
 
+        integrationIntentRevisions[agent, default: 0] += 1
+        productOperationFailures[agent] = nil
+        saveMonitoringIntent(isEnabled ? .enabled : .disabled, for: agent)
         desiredIntegrationEnabled[agent] = isEnabled
         setSwitch(isEnabled, for: agent)
         startIntegrationConvergenceIfNeeded(for: agent)
+        if !isEnabled {
+            record(AgentSnapshot(agent: agent, availability: .setupRequired, sessions: [],
+                quota: .unavailable, diagnostic: nil, setupStatus: setupStatus(for: agent),
+                presence: latestByAgent[agent]?.presence ?? .unknown), observedAt: clock.now())
+        }
     }
 
     @discardableResult
@@ -2963,10 +2983,11 @@ final class MonitorStore: ObservableObject {
             if let configurer = configurer(for: agent) {
                 let status = await configurer.setupStatus()
                 setSetupStatus(status, for: agent)
-                setSwitch(status.isIntegrationEnabled, for: agent)
+                setSwitch(desired, for: agent)
             }
         } else {
-            setSwitch(!desired, for: agent)
+            // Keep the requested intent visible; failure is an operation result, not a user flip.
+            setSwitch(desired, for: agent)
         }
     }
 
@@ -2976,17 +2997,27 @@ final class MonitorStore: ObservableObject {
               !integrationBusyAgents.contains(agent) else {
             return false
         }
+        integrationIntentRevisions[agent, default: 0] += 1
         integrationBusyAgents.insert(agent)
-        defer { integrationBusyAgents.remove(agent) }
+        defer { integrationBusyAgents.remove(agent); requestRefresh() }
 
         do {
             try await configurer.installIntegration()
             let status = await configurer.setupStatus()
+            guard status.isIntegrationEnabled || status == .notRequired else {
+                throw ManagedHooksConfigurationError.verificationFailed
+            }
             setSetupStatus(status, for: agent)
-            setSwitch(status.isIntegrationEnabled, for: agent)
+            if desiredIntegrationEnabled[agent] != false {
+                saveMonitoringIntent(.enabled, for: agent)
+                setSwitch(true, for: agent)
+            }
+            productOperationFailures[agent] = nil
+            await services.first(where: { $0.agent == agent })?.recheckConnection()
             lastIntegrationMessage = ProductRegistry.descriptor(for: agent).setup.installedMessage
             return true
         } catch {
+            productOperationFailures[agent] = .init(status: "Setup failed", message: error.localizedDescription, action: .repair)
             lastIntegrationMessage = "Could not install the integration: \(error.localizedDescription)"
             return false
         }
@@ -3004,8 +3035,9 @@ final class MonitorStore: ObservableObject {
               !integrationBusyAgents.contains(agent) else {
             return false
         }
+        integrationIntentRevisions[agent, default: 0] += 1
         integrationBusyAgents.insert(agent)
-        defer { integrationBusyAgents.remove(agent) }
+        defer { integrationBusyAgents.remove(agent); requestRefresh() }
 
         do {
             try await configurer.removeIntegration()
@@ -3024,10 +3056,16 @@ final class MonitorStore: ObservableObject {
                 ),
                 observedAt: clock.now()
             )
-            setSwitch(false, for: agent)
+            if desiredIntegrationEnabled[agent] != true {
+                saveMonitoringIntent(.disabled, for: agent)
+                setSwitch(false, for: agent)
+            }
+            productOperationFailures[agent] = nil
             lastIntegrationMessage = ProductRegistry.descriptor(for: agent).setup.removedMessage
             return true
         } catch {
+            await services.first(where: { $0.agent == agent })?.disconnect()
+            productOperationFailures[agent] = .init(status: "Removal failed", message: error.localizedDescription, action: .remove)
             lastIntegrationMessage = "Could not remove the integration: \(error.localizedDescription)"
             return false
         }
@@ -3409,6 +3447,7 @@ final class MonitorStore: ObservableObject {
     /// product keeps its last trusted answer.
     private func record(_ snapshot: AgentSnapshot, observedAt: Date) {
         let agent = snapshot.agent
+        if connectionReadings[agent] != snapshot { connectionReadings[agent] = snapshot }
         var gate = stabilityGates[agent] ?? ConnectionStabilityGate(
             gracePeriod: timing.disconnectGracePeriod
         )
@@ -3442,6 +3481,30 @@ final class MonitorStore: ObservableObject {
 
     func setupStatus(for agent: AgentKind) -> IntegrationSetupStatus {
         setupStatusByAgent[agent] ?? .notInstalled
+    }
+
+    func productSnapshot(for agent: AgentKind) -> AgentSnapshot? { connectionReadings[agent] ?? latestByAgent[agent] }
+    func monitoringIntent(for agent: AgentKind) -> ProductMonitoringIntent? { monitoringIntents[agent] }
+
+    private func saveMonitoringIntent(_ intent: ProductMonitoringIntent, for agent: AgentKind) {
+        monitoringIntents[agent] = intent
+        preferences?.set(intent.rawValue, forKey: "productMonitoringIntent." + agent.rawValue)
+    }
+
+    func repairIntegration(for agent: AgentKind) {
+        Task { [weak self] in
+            guard let self else { return }
+            _ = await self.installIntegrationHooksAndWait(for: agent)
+            await self.recheckIntegrationAndWait()
+        }
+    }
+
+    func recheckProduct(_ agent: AgentKind) {
+        Task { [weak self] in
+            guard let self else { return }
+            await self.services.first(where: { $0.agent == agent })?.recheckConnection()
+            await self.refreshAndWait()
+        }
     }
 
     func integrationSwitchIsOn(for agent: AgentKind) -> Bool {
@@ -3501,7 +3564,11 @@ final class MonitorStore: ObservableObject {
               !integrationBusyAgents.contains(agent) else {
             return
         }
-        setSwitch(refreshed.isIntegrationEnabled, for: agent)
+        if monitoringIntents[agent] == nil, refreshed.isIntegrationEnabled {
+            // Adopt an existing complete setup once. Absence cannot reconstruct past intent.
+            saveMonitoringIntent(.enabled, for: agent)
+        }
+        setSwitch(monitoringIntents[agent] == .enabled, for: agent)
     }
 
     /// Each provider's next deadline, dropping a provider that reports the same overdue instant
@@ -3511,6 +3578,7 @@ final class MonitorStore: ObservableObject {
         let now = clock.now()
         for service in services {
             let agent = service.agent
+            guard monitoringIntents[agent] != .disabled else { continue }
             guard let deadline = await service.nextRefreshDeadline() else {
                 stuckDeadlines[agent] = nil
                 continue
@@ -3566,16 +3634,31 @@ final class MonitorStore: ObservableObject {
             for service in services {
                 group.addTask { @MainActor [weak self] in
                     guard let self else { return }
+                    guard self.monitoringIntents[service.agent] != .disabled else {
+                        await service.disconnect()
+                        return
+                    }
                     // Dismissed rows travel with every request so the provider stops paying for them
                     // (CR-Fable-003).
+                    let intentRevision = self.integrationIntentRevisions[service.agent, default: 0]
                     let snapshot = await service.fetchSnapshot(
                         dismissedRowIDs: self.dismissedSessionIDsByAgent[
                             service.agent
                         ] ?? []
                     )
-                    guard !Task.isCancelled else { return }
-                    // The snapshot already carries this refresh's health; asking again would drain it twice.
-                    self.record(snapshot, observedAt: self.clock.now())
+                    if await MainActor.run(body: { self.monitoringIntents[service.agent] == .disabled }) {
+                        // A pre-disable fetch may have resumed and restarted a passive source after
+                        // removal completed. Stop that late work as well as dropping its snapshot.
+                        await service.disconnect()
+                        return
+                    }
+                    // The explicit hop also covers the connection reading's published properties
+                    // when Release resumes this task away from the main actor.
+                    await MainActor.run {
+                        guard !Task.isCancelled, self.monitoringIntents[service.agent] != .disabled,
+                              self.integrationIntentRevisions[service.agent, default: 0] == intentRevision else { return }
+                        self.record(snapshot, observedAt: self.clock.now())
+                    }
                 }
             }
         }

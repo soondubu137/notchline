@@ -6,7 +6,7 @@ nonisolated enum MonitoringSourceGate: Sendable {
     case closed(
         availability: MonitorAvailability,
         setupStatus: IntegrationSetupStatus?,
-        diagnostic: String
+        diagnostic: String?
     )
 }
 

@@ -7,31 +7,82 @@ import Foundation
 struct TraeProvider: AgentMonitoring, IntegrationConfiguring {
     nonisolated let agent = AgentKind.trae
     private let runtime: ProductMonitoringRuntime
+    private let connectionMonitor: ProductConnectionMonitor
     let source: TraeSource
+    private let discoversApplication: Bool
     nonisolated var stateChangeEvents: AsyncStream<Void> { runtime.stateChangeEvents }
 
-    init(installation: TraeInstallation = TraeInstallation()) {
-        let source = TraeSource(installation: installation)
+    init(installation: TraeInstallation? = nil) {
+        discoversApplication = installation == nil
+        connectionMonitor = ProductInstallationDiscovery.live(.trae)
+        let source = TraeSource(installation: installation ?? TraeInstallation())
         self.source = source
         let readEvidence = TraeReadEvidence(screen: ScreenAvailabilityWatcher(),
             foreground: DesktopReadingWatcher(bundleIdentifier: "com.trae.app"), transport: source.transport)
         runtime = ProductMonitoringRuntime(agent: .trae, lifecycle: source, sessions: source,
                                            rowContent: source, readEvidence: readEvidence,
-                                           changeEvents: [source.transport.changes.events()])
+                                           changeEvents: [source.transport.changes.events(), connectionMonitor.changes.events()])
     }
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
-        await runtime.fetchSnapshot(dismissedRowIDs: dismissedRowIDs)
+        if discoversApplication {
+            await resolveApplication()
+        }
+        let snapshot = await runtime.fetchSnapshot(dismissedRowIDs: dismissedRowIDs)
+        let present = await source.currentPresence()
+        let transport = await source.transport.connectionFacts()
+        if transport.healthy > 0 { source.confirmActivation() }
+        var facts = snapshot.connection
+        facts.notice = nil
+        facts.activation = transport.healthy > 0 ? .verified
+            : await source.needsWindowReload() ? .reloadRequired : .unverified
+        facts.health = transport.healthy > 0 ? .available : .checking
+        if transport.healthy > 0 && transport.failed > 0 {
+            facts.health = .partial
+            facts.notice = .init(severity: .warning, scope: .observation,
+                                 message: "Some discovered Trae windows could not connect.")
+        }
+        // Presence comes from the application even when its observation gate is closed.
+        let reading = AgentSnapshot(agent: .trae,
+            availability: snapshot.availability == .ready && transport.healthy == 0 && present == .open
+                ? .disconnected : snapshot.availability,
+            sessions: snapshot.sessions, quota: snapshot.quota,
+            diagnostic: snapshot.availability == .disconnected ? transport.diagnostic
+                : MonitorDiagnostics.combined(transport.diagnostic, snapshot.diagnostic),
+            setupStatus: snapshot.setupStatus, presence: present, connection: facts)
+        return await connectionMonitor.inspect(reading)
     }
-    func nextRefreshDeadline() async -> Date? { await runtime.nextRefreshDeadline() }
-    func disconnect() async { await runtime.disconnect() }
+    func recheckConnection() async { await connectionMonitor.invalidate() }
+    func nextRefreshDeadline() async -> Date? {
+        [await runtime.nextRefreshDeadline(), await connectionMonitor.nextDeadline()].compactMap { $0 }.min()
+    }
+    func disconnect() async { await connectionMonitor.reset(); await runtime.disconnect() }
     func setupStatus() async -> IntegrationSetupStatus {
         switch source.installation.registration {
+        case .unreadable: return .unreadable
         case .absent: return .notInstalled
         case .mismatched: return .repairRequired
         case .current: return await source.transport.reading().0 ? .active : .reviewRequired
         }
     }
-    func installIntegration() async throws { try await source.installation.install() }
+    private func resolveApplication() async {
+        let reading = await connectionMonitor.installation(presence: await source.currentPresence())
+        if case let .found(instances) = reading, instances.count == 1, let instance = instances.first {
+            source.useApplication(instance.url)
+        }
+    }
+    func installIntegration() async throws {
+        if discoversApplication {
+            await connectionMonitor.invalidate()
+            let reading = await connectionMonitor.installation(presence: await source.currentPresence())
+            guard case let .found(instances) = reading, instances.count == 1, let instance = instances.first else {
+                throw TraeBridgeError.installation("A single Trae installation could not be identified. Open the intended Trae application and try again.")
+            }
+            source.useApplication(instance.url)
+        }
+        try await source.installation.install()
+        await source.recordInstalledIntoOpenApplication()
+        await connectionMonitor.invalidate()
+    }
     func removeIntegration() async throws {
         await runtime.disconnect()
         try await source.installation.remove()
@@ -40,32 +91,55 @@ struct TraeProvider: AgentMonitoring, IntegrationConfiguring {
 
 nonisolated final class TraeSource: MonitoringLifecycleSource, ProductSessionReading, RowContentSource, @unchecked Sendable {
     let repository = MonitoringRepository(policy: .explicit)
-    let installation: TraeInstallation
+    private var installedLocation: TraeInstallation
+    var installation: TraeInstallation {
+        identityLock.lock(); defer { identityLock.unlock() }
+        return installedLocation
+    }
+    func useApplication(_ url: URL) {
+        identityLock.lock(); defer { identityLock.unlock() }
+        let old = installedLocation
+        installedLocation = TraeInstallation(application: url, directory: old.directory,
+                                            resources: old.resources, extensionsManifest: old.extensionsManifest)
+    }
     let transport: TraeBridgeTransport
     private let identityLock = NSLock()
     private var productPID: Int32?
+    private var installedIntoPID: Int32?
     private let presence: RunningApplicationPresence
     @MainActor
     init(installation: TraeInstallation) {
-        self.installation = installation
+        self.installedLocation = installation
         presence = RunningApplicationPresence(bundleIdentifiers: ["com.trae.app"])
         transport = TraeBridgeTransport(directory: installation.directory, repository: repository)
     }
     func gate(productName: String) async -> MonitoringSourceGate {
         switch installation.registration {
+        case .unreadable:
+            return .closed(availability: .setupRequired, setupStatus: .unreadable,
+                           diagnostic: "Trae’s extension manifest could not be read or its format is unrecognised.")
         case .absent:
             return .closed(availability: .setupRequired, setupStatus: .notInstalled,
                            diagnostic: "Switch Trae on to install its companion extension.")
         case .mismatched:
             return .closed(availability: .setupRequired, setupStatus: .repairRequired,
-                           diagnostic: "Trae has a different version of the companion installed. "
-                               + "Turn the switch off, then on, to reinstall it.")
+                           diagnostic: "Trae’s companion installation is incomplete or out of date. "
+                               + "Use Repair in Products to reinstall it.")
         case .current:
             break
         }
-        guard installation.compatible else {
-            return .closed(availability: .unsupportedVersion, setupStatus: .reviewRequired,
-                           diagnostic: TraeBridgeError.version.localizedDescription)
+        switch installation.applicationReading {
+        case .notFound:
+            return .closed(availability: .disconnected, setupStatus: .reviewRequired, diagnostic: nil)
+        case let .unknown(reason):
+            return .closed(availability: .disconnected, setupStatus: .reviewRequired, diagnostic: reason)
+        case let .found(instances):
+            guard instances.first?.version == TraeInstallation.traeVersion else {
+                return .closed(availability: .unsupportedVersion, setupStatus: .reviewRequired,
+                    diagnostic: "Trae \(instances.first?.version ?? "(version unavailable)") is not supported. This build supports Trae \(TraeInstallation.traeVersion).")
+            }
+        case .notChecked:
+            return .closed(availability: .disconnected, setupStatus: .reviewRequired, diagnostic: nil)
         }
         let pid = await presence.processIdentifier()
         if replaceProcess(pid) {
@@ -74,11 +148,30 @@ nonisolated final class TraeSource: MonitoringLifecycleSource, ProductSessionRea
         }
         guard pid != nil else {
             return .closed(availability: .disconnected, setupStatus: .reviewRequired,
-                           diagnostic: "Open Trae to connect its companion.")
+                           diagnostic: nil)
         }
         transport.start()
         return .open(await transport.reading().0 ? .active : .reviewRequired)
     }
+    func currentPresence() async -> AgentPresence { await presence.presence() }
+
+    func confirmActivation() { recordInstallationPID(nil) }
+    func recordInstalledIntoOpenApplication() async {
+        let pid = await presence.processIdentifier()
+        recordInstallationPID(pid)
+    }
+    private func recordInstallationPID(_ pid: Int32?) {
+        identityLock.lock(); defer { identityLock.unlock() }; installedIntoPID = pid
+    }
+    func needsWindowReload() async -> Bool {
+        let pid = await presence.processIdentifier()
+        return matchesInstallationPID(pid)
+    }
+    private func matchesInstallationPID(_ pid: Int32?) -> Bool {
+        identityLock.lock(); defer { identityLock.unlock() }
+        return pid != nil && installedIntoPID == pid
+    }
+
     private func replaceProcess(_ pid: Int32?) -> Bool {
         identityLock.lock(); defer { identityLock.unlock() }
         let changed = productPID != nil && productPID != pid
@@ -92,7 +185,7 @@ nonisolated final class TraeSource: MonitoringLifecycleSource, ProductSessionRea
         if present == .closed { return SessionReading(presence: .closed, admission: .unknown) }
         let (healthy, diagnostic) = await transport.reading()
         return SessionReading(presence: healthy ? .open : .unknown, admission: .unknown,
-                              unwatchableReason: diagnostic ?? TraeBridgeError.unavailable.localizedDescription)
+                              unwatchableReason: diagnostic)
     }
     func content(for turns: [MonitoredTurnState], messages: TurnMessageReading) async -> [String: RowContent] {
         let current = await transport.content()

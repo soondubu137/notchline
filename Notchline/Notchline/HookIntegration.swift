@@ -4,6 +4,7 @@ import Foundation
 /// Whether Codex runs the hooks is a separate fact (``IntegrationSetupStatus``).
 nonisolated enum HookRegistration: Sendable, Equatable {
     case absent
+    case unreadable
     /// Something of this app's is registered, but not what this build needs (partial, older, or
     /// Python-era). Repair is offered so a second registration is not added beside it.
     case mismatched
@@ -15,6 +16,7 @@ nonisolated enum HookRegistration: Sendable, Equatable {
 /// and delivery (arriving events).
 enum IntegrationSetupStatus: Equatable, Sendable {
     case notRequired
+    case unreadable
     case notInstalled
     case repairRequired
     case reviewRequired
@@ -25,6 +27,8 @@ enum IntegrationSetupStatus: Equatable, Sendable {
         hasObservedEvent: Bool
     ) -> IntegrationSetupStatus {
         switch registration {
+        case .unreadable:
+            .unreadable
         case .absent:
             .notInstalled
         case .mismatched:
@@ -36,7 +40,8 @@ enum IntegrationSetupStatus: Equatable, Sendable {
 
     nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         switch (lhs, rhs) {
-        case (.notRequired, .notRequired),
+        case (.unreadable, .unreadable),
+             (.notRequired, .notRequired),
              (.notInstalled, .notInstalled),
              (.repairRequired, .repairRequired),
              (.reviewRequired, .reviewRequired),
@@ -49,14 +54,16 @@ enum IntegrationSetupStatus: Equatable, Sendable {
 
     var displayName: String {
         switch self {
+        case .unreadable:
+            "Unable to check setup"
         case .notRequired:
             "No setup required"
         case .notInstalled:
             "Not installed"
         case .repairRequired:
-            "Installation incomplete; turn the main switch on to repair it"
+            "Setup needs repair"
         case .reviewRequired:
-            "Installed; trust it under /hooks in Codex"
+            "Set up; not yet verified"
         case .active:
             "Connected"
         }
@@ -66,7 +73,7 @@ enum IntegrationSetupStatus: Equatable, Sendable {
         switch self {
         case .reviewRequired, .active:
             true
-        case .notRequired, .notInstalled, .repairRequired:
+        case .unreadable, .notRequired, .notInstalled, .repairRequired:
             false
         }
     }
@@ -155,6 +162,15 @@ nonisolated struct HookIntegrationPaths: Sendable {
             return nil
         }
         return decoded as? [String: Any]
+    }
+
+    nonisolated func readRegistration(configuration: ManagedHooksConfiguration, fileManager: FileManager) -> HookRegistration {
+        do {
+            let data = try Data(contentsOf: hooksConfiguration)
+            guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return .unreadable }
+            return configuration.registration(in: root)
+        } catch let error as CocoaError where error.code == .fileReadNoSuchFile { return .absent }
+        catch { return .unreadable }
     }
 
     /// The Codex paths, as the no-argument spelling has always meant.
@@ -840,9 +856,7 @@ actor CodexHookRegistrar: HookRegistrationSetup {
         if let cachedRegistration, cachedRegistration.changeCount == changeCount {
             return cachedRegistration.health
         }
-        let scanned = managedConfiguration.registration(
-            in: readConfigurationRoot()
-        )
+        let scanned = paths.readRegistration(configuration: managedConfiguration, fileManager: fileManager)
         cachedRegistration = (changeCount, scanned)
         return scanned
     }

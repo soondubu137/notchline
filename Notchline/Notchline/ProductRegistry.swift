@@ -15,7 +15,7 @@ enum ProductSetup: Sendable {
         switch self {
         case .none: "This product needs no setup."
         case let .managedHooks(description): description.installedMessage
-        case .companionExtension: "Companion installed. Reopen Trae’s windows to connect."
+        case .companionExtension: "Companion installed. It will load when Trae’s windows next open."
         }
     }
     var removedMessage: String {
@@ -30,7 +30,7 @@ enum ProductSetup: Sendable {
         switch self {
         case .none: "This product needs no setup."
         case let .managedHooks(description): description.switchHelp
-        case .companionExtension: "Installs or removes Notchline’s companion extension in Trae. Reopen Trae’s windows after installation."
+        case .companionExtension: "Enables monitoring and installs Notchline’s companion in Trae; switching off removes it. The companion loads when Trae’s windows next open."
         }
     }
 
@@ -149,7 +149,7 @@ enum ProductRegistry {
                 connectedDetail: "compatible version"
             )),
             make: {
-                let service = LiveCodexMonitorService()
+                let service = LiveCodexMonitorService(connectionMonitor: ProductInstallationDiscovery.live(.codex))
                 return ProductModule(
                     service: service,
                     navigator: CodexDesktopNavigator(targetChecker: service)
@@ -166,7 +166,7 @@ enum ProductRegistry {
                 connectedDetail: "hooks installed"
             )),
             make: {
-                let service = ClaudeCodeMonitorService()
+                let service = ClaudeCodeMonitorService(connectionMonitor: ProductInstallationDiscovery.live(.claudeCode))
                 return ProductModule(
                     service: service,
                     // Raises the host rather than reopening the session: the declared boundary (ADR 0004).
@@ -203,6 +203,7 @@ enum ProductRegistry {
                             translator: AntigravityPayloadTranslator(surfaces: surfaces)
                         )
                     ),
+                    connectionMonitor: ProductInstallationDiscovery.live(.antigravity),
                     sessions: sessions,
                     // Desktop files a conversation under a Project of its own.
                     rowContent: AntigravityRowContent(surfaces: surfaces, projects: AntigravityDesktopProjects()),

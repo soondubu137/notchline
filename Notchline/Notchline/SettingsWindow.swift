@@ -138,6 +138,7 @@ struct SettingsClosingRow: View {
 
 /// One headerless card of rows from ``ProductRegistry/builtIn``.
 struct ProductsSettingsPane: View {
+    @EnvironmentObject private var store: MonitorStore
     var body: some View {
         SettingsGroup {
             ProductConnectionRows()
@@ -146,6 +147,7 @@ struct ProductsSettingsPane: View {
                 RecheckButton()
             }
         }
+        .task { await store.recheckIntegrationAndWait() }
     }
 }
 
@@ -168,7 +170,7 @@ struct RecheckButton: View {
 
         var body: some View {
             Button("Recheck") {
-                store.refreshNow()
+                Task { await store.recheckIntegrationAndWait() }
             }
             .buttonStyle(.bordered)
             .buttonBorderShape(.capsule)
@@ -512,7 +514,7 @@ struct QuotaSettingsGroups: View, Equatable {
 /// Captions and footnotes not read off a product's state, so a test can hold each to one line
 /// at `580` pt.
 enum SettingsCaption {
-    static let productsFootnote = "Switches edit only Notchline’s hooks, after a .notchline-backup copy."
+    static let productsFootnote = "Switches manage Notchline’s setup. Recheck only checks."
     static let privacyMode = "Draws every name and line as a bar. Secondary-click Notchline to toggle."
     static let outline = "A hairline edge, for dark wallpapers."
     static let groupByProduct = "One block per product, each headed by its badge."
@@ -579,7 +581,10 @@ struct ProductConnectionRows: View {
             descriptor: descriptor,
             setup: store.setupStatus(for: descriptor.kind),
             availability: store.agentAvailability(for: descriptor.kind),
-            diagnostic: store.diagnostic(for: descriptor.kind)
+            diagnostic: store.diagnostic(for: descriptor.kind),
+            snapshot: store.productSnapshot(for: descriptor.kind),
+            intent: store.monitoringIntent(for: descriptor.kind),
+            failure: store.productOperationFailures[descriptor.kind]
         )
     }
 }
@@ -604,11 +609,21 @@ struct ProductConnectionRow: View, Equatable {
         SettingsRow(
             title: descriptor.settingsTitle,
             status: SettingsRowStatus(color: copy.color, text: copy.status),
-            diagnostic: copy.diagnostic
+            diagnostic: copy.diagnostic,
+            diagnosticSeverity: copy.noticeSeverity
         ) {
             HStack(spacing: 6) {
+                if let action = copy.action {
+                    Button(action == .repair ? "Repair…" : action == .remove ? "Retry removal" : "Recheck") {
+                        if action == .repair { store.repairIntegration(for: descriptor.kind) }
+                        else if action == .remove { store.removeIntegration(for: descriptor.kind) }
+                        else { store.recheckProduct(descriptor.kind) }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(isBusy)
+                }
                 if descriptor.setup.isConfigurable {
-                    Toggle("\(descriptor.displayName) integration", isOn: integrationSelection)
+                    Toggle("Monitor \(descriptor.displayName)", isOn: integrationSelection)
                         .labelsHidden()
                         .toggleStyle(.switch)
                         .disabled(isBusy)
@@ -672,7 +687,7 @@ struct ProductInfoContent: Equatable {
         case .companionExtension:
             setup = [Paragraph(
                 heading: "Companion",
-                text: "The switch installs a companion extension in Trae. Reopen Trae’s windows afterwards to connect."
+                text: "The switch installs a companion extension in Trae. It loads when Trae’s windows next open."
             )]
             hooksFile = nil
         }
@@ -845,91 +860,37 @@ nonisolated enum FinderRevealTarget: Equatable {
     }
 }
 
-/// What one product's row in Settings says; a value so a test can assert it (CR-029). The status
-/// never repeats the product name. Top to bottom:
-///
-/// 1. A registration not matching this build gets its own sentence: it fails silently (e.g. a
-///    pre-ADR 0013 `http` handler). The switch reads off, so it says to turn it on.
-/// 2. Off is off.
-/// 3. Written but never seen to fire, with a trust step (Codex only): names the step.
-/// 4. Registered: `Connected` needs `.ready`; `.disconnected` is one neutral headline, with the
-///    boundary's own diagnostic underneath.
+/// The view receives the shared connection projection, including notice severity and action.
 struct ProductSettingsCopy: Equatable {
-    /// The caption line the status dot starts.
     let status: String
     let color: Color
-    /// Shown under the status line only when present; an empty line reads as a failure.
     let diagnostic: String?
+    let noticeSeverity: ProductConnectionNotice.Severity
+    let action: ProductConnectionAction?
 
-    init(
-        descriptor: ProductDescriptor,
-        setup: IntegrationSetupStatus,
-        availability: MonitorAvailability?,
-        diagnostic: String?
-    ) {
-        self.diagnostic = diagnostic
-        if !descriptor.setup.isConfigurable {
-            switch availability {
-            case .ready: status = "Connected"; color = MacOSWindowColor.statusHealthy
-            case .connecting, nil: status = "Connecting…"; color = MacOSWindowColor.statusPending
-            case .updateAgent: status = "Update \(descriptor.settingsTitle)"; color = MacOSWindowColor.statusBlocked
-            case .unsupportedVersion: status = "Version unsupported"; color = MacOSWindowColor.statusBlocked
-            case .setupRequired, .disconnected:
-                status = "Not watching \(descriptor.displayName)"; color = MacOSWindowColor.statusWarning
-            }
+    init(descriptor: ProductDescriptor, setup: IntegrationSetupStatus,
+         availability: MonitorAvailability?, diagnostic: String?,
+         snapshot: AgentSnapshot? = nil, intent: ProductMonitoringIntent? = nil,
+         failure: ProductOperationFailure? = nil) {
+        if let failure {
+            status = failure.status; color = MacOSWindowColor.statusWarning
+            self.diagnostic = failure.message; noticeSeverity = .warning; action = failure.action
             return
         }
-        if case .companionExtension = descriptor.setup {
-            switch setup {
-            case .notInstalled: status = "Integration is off"; color = MacOSWindowColor.statusIdle
-            case .repairRequired: status = "Reinstall the companion"; color = MacOSWindowColor.statusWarning
-            case .notRequired: status = "No setup required"; color = MacOSWindowColor.statusIdle
-            case .reviewRequired, .active:
-                if availability == .unsupportedVersion {
-                    status = "Version unsupported"; color = MacOSWindowColor.statusBlocked
-                } else if availability == .ready {
-                    status = "Connected · companion installed"; color = MacOSWindowColor.statusHealthy
-                } else {
-                    status = "Installed · reopen the Trae window to connect"; color = MacOSWindowColor.statusPending
-                }
-            }
-            return
+        let reading = snapshot ?? AgentSnapshot(agent: descriptor.kind,
+            availability: availability ?? .connecting, sessions: [], quota: .unavailable,
+            diagnostic: diagnostic, setupStatus: setup)
+        let presentation = ProductConnectionPresentation.make(
+            snapshot: reading, intent: intent, configurable: descriptor.setup.isConfigurable)
+        status = presentation.status
+        color = switch presentation.tone {
+        case .neutral: MacOSWindowColor.statusIdle
+        case .healthy: MacOSWindowColor.statusHealthy
+        case .warning: MacOSWindowColor.statusWarning
         }
-        switch setup {
-        case .notRequired:
-            status = "No setup required"
-            color = MacOSWindowColor.statusIdle
-        case .repairRequired:
-            status = "Registration is out of date · turn the switch on to rewrite it"
-            color = MacOSWindowColor.statusWarning
-        case .notInstalled:
-            status = "Integration is off"
-            color = MacOSWindowColor.statusIdle
-        case .reviewRequired where descriptor.setup.managedHooks?.trustStep != nil:
-            status = "Installed · \(descriptor.setup.managedHooks?.trustStep ?? "")"
-            color = MacOSWindowColor.statusPending
-        case .reviewRequired, .active:
-            switch availability {
-            case .ready:
-                status = "Connected · \(descriptor.setup.managedHooks?.connectedDetail ?? "")"
-                color = MacOSWindowColor.statusHealthy
-            case .connecting, nil:
-                status = "Connecting…"
-                color = MacOSWindowColor.statusPending
-            case .setupRequired:
-                status = "Integration not installed"
-                color = MacOSWindowColor.statusIdle
-            case .updateAgent:
-                status = "Update \(descriptor.settingsTitle)"
-                color = MacOSWindowColor.statusBlocked
-            case .unsupportedVersion:
-                status = "Version unsupported"
-                color = MacOSWindowColor.statusBlocked
-            case .disconnected:
-                status = "Registered · not watching \(descriptor.displayName)"
-                color = MacOSWindowColor.statusWarning
-            }
-        }
+        self.diagnostic = presentation.notice?.message
+        noticeSeverity = presentation.notice?.severity ?? .information
+        action = presentation.action
     }
 }
 
@@ -1002,6 +963,7 @@ struct SettingsRow<Control: View>: View {
     var caption: String?
     var status: SettingsRowStatus?
     var diagnostic: String?
+    var diagnosticSeverity: ProductConnectionNotice.Severity = .warning
     var help: String?
     @ViewBuilder let control: () -> Control
 
@@ -1027,10 +989,12 @@ struct SettingsRow<Control: View>: View {
 
                 if let diagnostic {
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(MacOSWindowColor.statusWarning)
-                            .accessibilityLabel("Warning")
+                        if diagnosticSeverity == .warning {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(MacOSWindowColor.statusWarning)
+                                .accessibilityLabel("Warning")
+                        }
                         Text(diagnostic)
                             .font(.system(size: 11))
                             .foregroundStyle(MacOSWindowColor.primaryText)

@@ -565,6 +565,7 @@ struct AgentSnapshot: Equatable, Sendable {
     /// Whether the product itself is open, independent of observability: Codex from the
     /// running-application list, Claude Code from its live session list.
     let presence: AgentPresence
+    let connection: ProductConnectionFacts
 
     nonisolated init(
         agent: AgentKind = .codex,
@@ -573,7 +574,8 @@ struct AgentSnapshot: Equatable, Sendable {
         quota: QuotaSnapshot,
         diagnostic: String?,
         setupStatus: IntegrationSetupStatus = .active,
-        presence: AgentPresence = .open
+        presence: AgentPresence = .open,
+        connection: ProductConnectionFacts? = nil
     ) {
         self.agent = agent
         self.availability = availability
@@ -582,12 +584,15 @@ struct AgentSnapshot: Equatable, Sendable {
         self.diagnostic = diagnostic
         self.setupStatus = setupStatus
         self.presence = presence
+        self.connection = connection ?? ProductConnectionFacts.observed(
+            setup: setupStatus, availability: availability, diagnostic: diagnostic)
     }
 
     /// Open and observable. Open but unregistered is an ordinary first run and reads disconnected.
     /// `.connecting` is not connected: reporting an unmade connection would be guessing.
     nonisolated var isConnected: Bool {
         presence.isOpen && availability == .ready
+            && connection.activation != .unverified && connection.activation != .reloadRequired
     }
 
     static let connecting = AgentSnapshot(

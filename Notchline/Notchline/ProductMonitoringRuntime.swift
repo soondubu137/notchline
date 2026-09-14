@@ -190,6 +190,7 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
     nonisolated let agent: AgentKind
     nonisolated let stateChangeEvents: AsyncStream<Void>
 
+    private let connectionMonitor: ProductConnectionMonitor?
     private let composition: MonitoringSourceComposition
     private var isObserving = false
     private var lifecycleRevision = 0
@@ -207,6 +208,7 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
 
     init(
         agent: AgentKind,
+        connectionMonitor: ProductConnectionMonitor? = nil,
         lifecycle: any MonitoringLifecycleSource,
         sessions: any ProductSessionReading,
         turnEvidence: [any TurnEvidenceSource] = [],
@@ -221,6 +223,7 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
         timing: MonitorTiming = .standard,
         changeEvents: [AsyncStream<Void>] = []
     ) {
+        self.connectionMonitor = connectionMonitor
         self.agent = agent
         self.lifecycle = lifecycle
         self.sessions = sessions
@@ -239,13 +242,24 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
         self.composition = composition
         self.stateChangeEvents = DirectoryChangeWatcher.merged(
             [lifecycle.repository.changeEvents()] + composition.changeEvents + changeEvents
+                + (connectionMonitor.map { [$0.changes.events()] } ?? [])
                 // Screen wake/unlock: a row waiting to be read books no re-check without a visible screen, so
                 // this edge restarts the re-checks.
                 + (readEvidence.map { [$0.screen.changeEvents()] } ?? [])
         )
     }
 
+    func recheckConnection() async { await connectionMonitor?.invalidate() }
+
     func fetchSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
+        let snapshot = await fetchMonitoringSnapshot(dismissedRowIDs: dismissedRowIDs)
+        let revision = lifecycleRevision
+        let checked = await connectionMonitor?.inspect(snapshot) ?? snapshot
+        guard revision == lifecycleRevision else { return stoppedSnapshot() }
+        return checked
+    }
+
+    private func fetchMonitoringSnapshot(dismissedRowIDs: Set<String>) async -> AgentSnapshot {
         let revision = lifecycleRevision
         let status: IntegrationSetupStatus?
         let gate = await lifecycle.gate(productName: agent.displayName)
@@ -413,8 +427,10 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
     /// application) moves with nothing to watch. No cost while no such row is listed or no one can
     /// see the screen.
     func nextRefreshDeadline() async -> Date? {
-        guard isObserving else { return nil }
+        let connectionDeadline = await connectionMonitor?.nextDeadline()
+        guard isObserving else { return connectionDeadline }
         return [
+            connectionDeadline,
             await composition.nextDeadline(),
             // A held answer window expiring: that refresh turns the mark from `Answer` to `Read`.
             lifecycle.repository.nextAnswerExpiry(),
@@ -433,6 +449,7 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
 
     func disconnect() async {
         lifecycleRevision += 1
+        await connectionMonitor?.reset()
         isObserving = false
         lifecycle.disconnect()
         await lifecycle.repository.resetIntegrationObservation(clearTurns: true, preserveBoundaryObservation: true)

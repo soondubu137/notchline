@@ -26,6 +26,7 @@ nonisolated final class TraeBridgeTransport: TraeReadReporting, @unchecked Senda
     private var epoch: MonitoringEpoch?
     private var lastDiagnostic: String?
     private var active = false
+    private var failedPaths: Set<String> = []
 
     init(directory: URL, repository: MonitoringRepository) {
         self.directory = directory; self.repository = repository
@@ -52,12 +53,19 @@ nonisolated final class TraeBridgeTransport: TraeReadReporting, @unchecked Senda
         queue.async { [self] in
             active = false; epoch = nil; timer?.cancel(); timer = nil; watcher?.cancel(); watcher = nil
             for path in Array(peers.keys) { close(path, diagnostic: nil) }
-            boundary = TraeEvidenceBoundary(); lastDiagnostic = nil
+            boundary = TraeEvidenceBoundary(); lastDiagnostic = nil; failedPaths = []
         }
     }
     func reading() async -> (Bool, String?) {
         await withCheckedContinuation { c in queue.async { [self] in
             c.resume(returning: (peers.values.contains(where: \.healthy), lastDiagnostic))
+        } }
+    }
+    func connectionFacts() async -> (healthy: Int, failed: Int, diagnostic: String?) {
+        await withCheckedContinuation { c in queue.async { [self] in
+            failedPaths = failedPaths.filter { FileManager.default.fileExists(atPath: $0) }
+            if failedPaths.isEmpty { lastDiagnostic = nil }
+            c.resume(returning: (peers.values.filter(\.healthy).count, failedPaths.count, lastDiagnostic))
         } }
     }
     func content() async -> [String: TraeDisplayedTurn] {
@@ -162,7 +170,7 @@ nonisolated final class TraeBridgeTransport: TraeReadReporting, @unchecked Senda
                         guard peer.hello else { throw TraeBridgeError.schema }
                         try boundary.consume(frame, peer: path, repository: repository, epoch: epoch)
                         if frame.baseline == true { peer.identity = UUID() }
-                        let wasHealthy = peer.healthy; peer.healthy = true; lastDiagnostic = nil
+                        let wasHealthy = peer.healthy; peer.healthy = true; failedPaths.remove(path); if failedPaths.isEmpty { lastDiagnostic = nil }
                         if !wasHealthy || !(frame.rows?.isEmpty ?? true) || !(frame.excluded?.isEmpty ?? true) { changes.signal() }
                     case "heartbeat":
                         guard peer.hello, frame.schema == 1, frame.version == TraeInstallation.traeVersion else { throw TraeBridgeError.schema }
@@ -170,7 +178,8 @@ nonisolated final class TraeBridgeTransport: TraeReadReporting, @unchecked Senda
                         peer.identity = UUID()
                         boundary.lost(peer: path)
                         if peer.healthy { peer.healthy = false; changes.signal() }
-                        lastDiagnostic = TraeBridgeError.unavailable.localizedDescription
+                        failedPaths.insert(path)
+                        lastDiagnostic = "Trae’s companion reported that observation is unavailable."
                     default: throw TraeBridgeError.schema
                     }
                 } catch { close(path, diagnostic: error.localizedDescription); return }
@@ -179,7 +188,9 @@ nonisolated final class TraeBridgeTransport: TraeReadReporting, @unchecked Senda
     }
     private func close(_ path: String, diagnostic: String?) {
         guard let peer = peers.removeValue(forKey: path) else { return }
-        peer.reader.cancel(); boundary.lost(peer: path); lastDiagnostic = diagnostic
+        peer.reader.cancel(); boundary.lost(peer: path)
+        if let diagnostic { failedPaths.insert(path); lastDiagnostic = diagnostic }
+        if failedPaths.isEmpty { lastDiagnostic = nil }
         changes.signal()
     }
     static func connect(_ fd: Int32, path: String) -> Int32 {
