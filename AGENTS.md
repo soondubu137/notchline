@@ -46,6 +46,7 @@ Each document owns a scope. A change landing in one of these scopes updates that
 | [`docs/colour-v2.md`](docs/colour-v2.md) | Colour: there is one hue, the user picks it, and no product owns one. The badge that names a product, and what the band stopped decomposing |
 | [`docs/answer-in-notch.md`](docs/answer-in-notch.md) | Answering a request on the notch: every shape the two products ask in, what an opened row draws for each, the selection rule, the pointer-first version that ships and the keyboard half deferred behind it, and the reading-only form that ships before a write path exists |
 | [`docs/cover-the-words.md`](docs/cover-the-words.md) | `Privacy Mode`: what the surface covers while somebody else is looking at the screen, the gesture that turns it on, and why a covered panel waits for a click |
+| [`docs/updates-on-the-notch.md`](docs/updates-on-the-notch.md) | How an update is told and installed: the dot on the About mark, the About panel's thirteen states, the relaunch that waits for a waiting request, and the Updates pane |
 | [`docs/quota-footer-v2.md`](docs/quota-footer-v2.md) | The quota footer without a gauge: one number at rest, one line when a window is close, and the two-level table behind the control |
 | [`docs/panel-v2.md`](docs/panel-v2.md) | The three V2 decisions composed: what the expanded panel is made of, how big it is in every state, and the five places the three drafts contradicted one another |
 | [`docs/figma-design.md`](docs/figma-design.md) | Visual and interaction spec, Figma file structure, legal component variants |

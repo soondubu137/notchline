@@ -137,9 +137,9 @@ Sparkle's documented weak spot for this setup is ad-hoc signing. "Matching signa
   - `SUEnableAutomaticChecks`: set it, rather than let Sparkle ask on the second launch.
   - `SUScheduledCheckInterval`: the default is 86400.
 - **Accessory app.** Notchline is `LSUIElement`, so implement `SPUStandardUserDriverDelegate.supportsGentleScheduledUpdateReminders`; otherwise Sparkle logs a warning, and a scheduled update window can open behind other apps.
-- **Presentation.** Start with Sparkle's standard windows. A notch-drawn `SPUUserDriver` is a separate design question.
+- ~~**Presentation.** Start with Sparkle's standard windows. A notch-drawn `SPUUserDriver` is a separate design question.~~ **Decided 2026-09-13 in [`updates-on-the-notch.md`](../../updates-on-the-notch.md):** a notch-drawn `SPUUserDriver`, with a dot on the About mark and the whole update in About's control row.
 - **Non-sandboxed.** The XPC services are unnecessary and can be removed from the bundle.
-- **Settings** gains an "Automatically check for updates" switch bound to `automaticallyChecksForUpdates`.
+- ~~**Settings** gains an "Automatically check for updates" switch bound to `automaticallyChecksForUpdates`.~~ **Decided 2026-09-13:** a fourth `Updates` pane, which also has a background-downloads switch, off by default ([`updates-on-the-notch.md`](../../updates-on-the-notch.md) §5).
 
 ### 5.3 Hosting — the user's decision
 
