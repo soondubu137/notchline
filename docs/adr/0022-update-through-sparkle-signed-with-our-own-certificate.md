@@ -12,7 +12,7 @@ That rules out three things an update could otherwise trip:
 2. **TCC drops the Automation grant when the designated requirement changes.**
    - Ad-hoc signing makes that requirement the build's cdhash, which no later build satisfies.
    - A self-signed certificate makes it `identifier "com.yinfenglu.Notchline" and certificate leaf = H"<certificate hash>"`, which every build signed with that certificate satisfies (measured).
-   - Caveat, 2026-09-14: for Apple Events on macOS 26.6.2, a grant made under another signer still answered "allowed", so the loss is unconfirmed there. A stable certificate is right either way (exploration §11).
+   - Caveat, 2026-09-14: for Apple Events on macOS 26.6.2, a grant made under another signer still answered "allowed", twice: in the rehearsal, and when 0.5.0 answered from the rehearsal certificate's fresh grant. So the loss is unconfirmed there. A stable certificate is right either way (exploration §11–§12).
 3. **App Management blocks writes into protected apps.** It protects apps with a Team ID. A launched bundle without one is registered for protection and then unregistered after its scan (`syspolicyd`: "Unregistering bundle for protection after scan … team: (null)", measured during the rehearsal). Even for a protected app, Sparkle's whole-bundle swap is a move, not a write inside the bundle.
 
 ## What it binds

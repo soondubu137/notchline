@@ -265,3 +265,28 @@ The design is unaffected, because a stable certificate is right either way: Appl
 **Also noted.**
 - The rehearsal copy did not check at its first launch: an earlier run had written `SULastCheckTime` 13 minutes before. Sparkle's once-a-day schedule is per preferences domain, shared by every copy with the bundle ID.
 - A rehearsal must clear that key to watch a scheduled check, and restore the domain afterwards. It was restored here, to the snapshot taken before the rehearsal.
+
+## 12. First install from the public release (2026-09-14)
+
+The repository was made public after 0.5.0 Beta was published, and the real release was checked from outside, then installed as a user would.
+
+**Signed out.** Every read below used `curl` with no credentials.
+
+| Check | Result |
+| --- | --- |
+| Repository | `private: false` from the anonymous API |
+| Feed | `raw.githubusercontent.com/…/master/appcast.xml`: HTTP 200, byte-identical to `appcast.xml` on `master` |
+| Archive | The enclosure URL redirected to `release-assets.githubusercontent.com`, HTTP 200. Its 3,973,062 bytes match the feed's `length`, and its SHA-256 matches the release asset's digest. No `com.apple.quarantine` |
+| EdDSA | Valid against the `SUPublicEDKey` inside the downloaded bundle, using CryptoKit alone. The same file with one flipped byte was rejected |
+| Bundle | 0.5.0 (17). `codesign --verify --deep --strict` passes. The requirement equals `scripts/release/designated-requirement.txt`. No Team ID, no `get-task-allow`, no Sparkle XPC services. `spctl` rejects it, as expected without notarisation |
+
+**Installed.** The user downloaded the zip in a browser; its `com.apple.quarantine` names Chrome. They moved the app to `/Applications` and opened it. Open Anyway worked, and About → Check for Updates reported the copy up to date.
+
+**Automation was not asked for. That is §11's caveat again, under cleaner conditions.** Clicking a Terminal row selected the tab with no prompt. At the click, Terminal made `TCCAccessRequestIndirect` calls for `/Applications/Notchline.app`, and `tccd` answered from the database: `kTCCServiceAppleEvents … com.apple.Terminal, authValue: 2`. The only grant on file was the one §11 made after its `tccutil reset`, from 0.4.90, signed with the `Notchline Rehearsal` certificate. This copy is signed with `Notchline Release`, a different certificate and requirement. Unlike §11, the grant's origin is known: a fresh prompt under a known signer answered for another signer.
+
+The same `tccd` did compare requirements for another service at this launch. It logged "Failed to match existing code requirement for subject com.yinfenglu.Notchline and service kTCCServiceScreenCapture" for WindowServer's preflight. Requirement matching works in this daemon; it just did not stop this Apple Events grant. Without Full Disk Access, the stored `csreq` still cannot be read.
+
+**What this changes.**
+- The first-install Automation prompt was not exercised on this Mac, because a grant for the bundle ID already existed. A machine that never ran Notchline has no record, and it prompts.
+- 0.5.0's changelog says the grant from earlier, ad-hoc versions "does not carry over". On 26.6.2 that has now been contradicted twice, so it is at most a possibility.
+- The stable certificate is still right: it is what Apple documents, and it is what TCC enforces for other services.
