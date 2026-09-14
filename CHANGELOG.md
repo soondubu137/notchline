@@ -4,12 +4,25 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
-## Unreleased
+## 0.5.0 Beta — 2026-09-14
+
+**Notchline now finds, installs and relaunches into its own updates, and tells you on the notch rather than in a window.** This is the first Beta, and the first release that is not a pre-release. The copy you install by hand is the last one you have to. (`docs/updates-on-the-notch.md`, `docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md`.)
 
 ### Added
 
-- **Notchline updates itself.** It checks once a day, and About → Check for Updates checks now. An update downloads, verifies and installs in place, then relaunches. It asks for no second Open Anyway, and it keeps the Automation permission, because every release is signed with the same certificate. The first version with the updater has to be installed by hand, and asks for Automation once more. (`docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md`.)
+- **Notchline updates itself.** It checks once a day, and About → Check for Updates checks now. An update downloads, verifies and installs in place, then relaunches. It asks for no second Open Anyway, and it keeps the Automation permission, because every release is signed with the same certificate. (`docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md`.)
 - **Updates are told on the notch, not in a window.** A new version is a dot on the About mark, and About carries the whole update. A new Settings pane, Updates, holds the same controls and two switches; background downloads are off by default. A relaunch waits for running turns and unanswered requests, and a check nobody asked for never reports a failure. (`docs/updates-on-the-notch.md`.)
+
+### Changed
+
+- **Beta, not Alpha.** The version now reads `0.5.0 Beta`, and releases on GitHub are no longer marked as pre-releases.
+
+### Known limitations
+
+- **This version is installed by hand, and asks for Automation once more.** Releases are now signed with Notchline's own certificate instead of ad hoc, so the permission given to earlier versions does not carry over. From here on, updates keep it.
+- **An update needs a copy Notchline can replace.** Opened straight from Downloads or from a disk image, About asks you to move Notchline to Applications instead of offering Install.
+
+Everything listed under `0.4.3` and earlier still stands, unchanged.
 
 ## 0.4.3 Alpha — 2026-09-13
 

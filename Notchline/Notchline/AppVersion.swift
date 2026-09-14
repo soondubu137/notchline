@@ -5,7 +5,7 @@ import SwiftUI
 
 enum AppVersion {
     /// Where this build stands before `1.0`, or `nil` once it needs no qualifying.
-    static let stage: String? = "Alpha"
+    static let stage: String? = "Beta"
 
     /// `0.1.0` — `MARKETING_VERSION`, as stamped into this bundle.
     static var marketing: String? { infoString(for: "CFBundleShortVersionString") }
