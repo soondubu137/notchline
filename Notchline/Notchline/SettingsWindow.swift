@@ -556,6 +556,10 @@ enum SettingsCaption {
 /// the row, never only in the ⓘ popover (CR-029).
 struct ProductConnectionRows: View {
     @EnvironmentObject private var store: MonitorStore
+    /// The product whose switch is waiting on the turn-off dialog. Held here and handed down as a
+    /// value the row's `==` compares: as `@State` inside the `.equatable()` row, dismissing the
+    /// dialog never reset it, and every later turn-off raised nothing.
+    @State private var confirmingTurnOff: AgentKind?
 
     var body: some View {
         ForEach(Array(ProductRegistry.builtIn.enumerated()), id: \.element.kind) { index, descriptor in
@@ -567,7 +571,9 @@ struct ProductConnectionRows: View {
                 copy: copy(for: descriptor),
                 isOn: store.integrationSwitchIsOn(for: descriptor.kind),
                 isBusy: store.isIntegrationBusy(for: descriptor.kind),
-                store: store
+                isConfirmingTurnOff: confirmingTurnOff == descriptor.kind,
+                store: store,
+                setConfirmingTurnOff: { confirmingTurnOff = $0 ? descriptor.kind : nil }
             )
             // Per row, so a publish about one product leaves another row's open ⓘ alone.
             .equatable()
@@ -595,14 +601,19 @@ struct ProductConnectionRow: View, Equatable {
     /// The switch reads the store itself; this makes the row redraw when it moves.
     let isOn: Bool
     let isBusy: Bool
+    /// Off removes the product's setup and its rows at once, so it is asked first; on is not.
+    let isConfirmingTurnOff: Bool
     /// Written through by the switch, never read to draw.
     let store: MonitorStore
+    /// Raises or dismisses the dialog; not compared, the value above is.
+    let setConfirmingTurnOff: (Bool) -> Void
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.descriptor.kind == rhs.descriptor.kind
             && lhs.copy == rhs.copy
             && lhs.isOn == rhs.isOn
             && lhs.isBusy == rhs.isBusy
+            && lhs.isConfirmingTurnOff == rhs.isConfirmingTurnOff
     }
 
     var body: some View {
@@ -628,6 +639,18 @@ struct ProductConnectionRow: View, Equatable {
                         .toggleStyle(.switch)
                         .disabled(isBusy)
                         .help(descriptor.setup.switchHelp)
+                        .confirmationDialog(
+                            confirmation.title,
+                            isPresented: Binding(get: { isConfirmingTurnOff }, set: setConfirmingTurnOff),
+                            titleVisibility: .visible
+                        ) {
+                            Button(ProductSwitchOffConfirmation.confirmLabel, role: .destructive) {
+                                store.setIntegrationEnabled(false, for: descriptor.kind)
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text(confirmation.message)
+                        }
                 }
 
                 ProductInfoButton(content: ProductInfoContent(descriptor: descriptor))
@@ -635,12 +658,47 @@ struct ProductConnectionRow: View, Equatable {
         }
     }
 
+    private var confirmation: ProductSwitchOffConfirmation {
+        ProductSwitchOffConfirmation(descriptor: descriptor)
+    }
+
+    /// Off only raises the dialog; the switch reads the store, so it stays on until confirmed.
     private var integrationSelection: Binding<Bool> {
         let agent = descriptor.kind
         return Binding(
             get: { store.integrationSwitchIsOn(for: agent) },
-            set: { store.setIntegrationEnabled($0, for: agent) }
+            set: { isOn in
+                if isOn {
+                    store.setIntegrationEnabled(true, for: agent)
+                } else {
+                    setConfirmingTurnOff(true)
+                }
+            }
         )
+    }
+}
+
+/// What turning a product's switch off asks before anything is removed; a value so a test can
+/// assert it. Every sentence about the file or companion derives from the descriptor.
+struct ProductSwitchOffConfirmation: Equatable {
+    static let confirmLabel = "Stop Monitoring"
+
+    let title: String
+    let message: String
+
+    init(descriptor: ProductDescriptor) {
+        title = "Stop monitoring \(descriptor.settingsTitle)?"
+        message = switch descriptor.setup {
+        case .none:
+            "Its rows leave the notch."
+        case let .managedHooks(description):
+            "Its rows leave the notch, and Notchline’s hooks are removed from \(description.displayPath). "
+                + (description.trustStep.map { "You may have to \($0) again after turning it back on." }
+                    ?? "Turning it back on writes them again.")
+        case .companionExtension:
+            "Its rows leave the notch, and Notchline’s companion is uninstalled from Trae. "
+                + "Turning it back on reinstalls it, and it loads when Trae’s windows next open."
+        }
     }
 }
 

@@ -7786,6 +7786,53 @@ struct NotchlineTests {
         #expect(trae.setup.first?.text.contains("when Trae’s windows next open") == true)
     }
 
+    /// Turning a switch off asks first, naming the product and what goes: its file's hooks, and
+    /// Codex's trust step on the way back; Trae's companion.
+    @Test @MainActor
+    func turningAProductOffSaysWhatItRemoves() {
+        for descriptor in ProductRegistry.builtIn where descriptor.setup.isConfigurable {
+            let confirmation = ProductSwitchOffConfirmation(descriptor: descriptor)
+            #expect(confirmation.title == "Stop monitoring \(descriptor.settingsTitle)?")
+            #expect(confirmation.message.hasPrefix("Its rows leave the notch"))
+            if let setup = descriptor.setup.managedHooks {
+                #expect(confirmation.message.contains(setup.displayPath))
+            }
+        }
+
+        let codex = ProductSwitchOffConfirmation(descriptor: ProductRegistry.descriptor(for: .codex))
+        #expect(codex.message.contains("open /hooks in Codex and trust the new definitions again"))
+
+        let claudeCode = ProductSwitchOffConfirmation(descriptor: ProductRegistry.descriptor(for: .claudeCode))
+        #expect(claudeCode.message == "Its rows leave the notch, and Notchline’s hooks are removed from "
+            + "~/.claude/settings.json. Turning it back on writes them again.")
+
+        let trae = ProductSwitchOffConfirmation(descriptor: ProductRegistry.descriptor(for: .trae))
+        #expect(trae.message.contains("companion is uninstalled from Trae"))
+    }
+
+    /// The dialog's state is part of the row's `==`. Held as `@State` inside the `.equatable()`
+    /// row, dismissing the dialog never reset it and the next turn-off raised nothing.
+    @Test @MainActor
+    func aRowWaitingOnTheTurnOffDialogIsNotEqualToOneThatIsNot() {
+        let store = MonitorStore(services: [])
+        let descriptor = ProductRegistry.descriptor(for: .claudeCode)
+        func row(confirming: Bool) -> ProductConnectionRow {
+            ProductConnectionRow(
+                descriptor: descriptor,
+                copy: ProductSettingsCopy(descriptor: descriptor, setup: .active,
+                                          availability: .ready, diagnostic: nil),
+                isOn: true,
+                isBusy: false,
+                isConfirmingTurnOff: confirming,
+                store: store,
+                setConfirmingTurnOff: { _ in }
+            )
+        }
+        #expect(row(confirming: false) == row(confirming: false))
+        #expect(row(confirming: true) != row(confirming: false))
+        store.stopMonitoring()
+    }
+
     /// Every caption is one line (`figma-design.md` §8.0), measured against the narrowest column:
     /// the transcripts row, `94` pt of a `532` pt card.
     @Test @MainActor

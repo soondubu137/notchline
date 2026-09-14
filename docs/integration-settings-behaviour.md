@@ -34,7 +34,11 @@ Same store path and convergence, different setup actor: `ManagedHooksSetup.insta
 
 ## 3. Turning either switch off
 
-Convergence calls `removeIntegrationAndWait` → `IntegrationConfiguring.removeIntegration()` on that product's service.
+**Off is confirmed first; on is not.** Since 2026-09-13 flipping any product's switch off — in Settings or on onboarding's connection page, which share `ProductConnectionRows` — raises a dialog titled `Stop monitoring <product>?` with `Stop Monitoring` (destructive) and `Cancel`. Its message is `ProductSwitchOffConfirmation`, derived from the descriptor: the rows leave the notch, and the hooks come out of that product's file (Codex adds that `/hooks` may need trusting again when it is turned back on) or Trae's companion is uninstalled. Until `Stop Monitoring` is pressed the switch still reads the store, so it stays on and nothing below has started; `Cancel` and Escape leave intent, files and rows untouched. Turning a switch on stays one click, because it removes nothing. `Retry removal` is not asked again: it only finishes an Off the user already confirmed.
+
+The pending dialog is held by `ProductConnectionRows`, not as `@State` inside the `.equatable()` row, and the row's `==` compares it. Held in the row, dismissing the dialog never reset the flag (measured on a staged build: Escape and `Cancel` left it `true`), so every later turn-off in that window raised nothing.
+
+Once confirmed, convergence calls `removeIntegrationAndWait` → `IntegrationConfiguring.removeIntegration()` on that product's service.
 
 - **Both products**: the editor removes every handler of that product from every parsable event (removal is never strict about events, so an odd event elsewhere cannot block an uninstall); the backup is refreshed first; all handlers are verified gone; and `unremovableManagedCommand` is thrown if a marker survives anywhere in the document.
 - **Codex additionally**: resets hook observations and clears Turns; stops the listener; deletes the helper, `install.json`, the socket and retired artefacts; removes directories that are now empty; and clears the observed Desktop pid, tracked threads, refresh tasks and gates, and `lastTrustedSnapshot`.

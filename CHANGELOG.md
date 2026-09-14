@@ -8,6 +8,7 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 - Products separates installation, setup, presence and observation. Closed products no longer show warnings or requests to reopen; unreadable setup is no longer reported as absent.
 - Product switches retain monitoring intent across launches and external configuration changes. Explicit Repair and per-product operation retries replace switching off a broken setup. Recheck refreshes evidence without reinstalling configuration; onboarding's connection page now says so too, and rechecks each time it opens.
+- Turning a product's switch off, in Settings or onboarding, now asks first. It removes that product's hooks or Trae's companion and takes its rows off the notch, so one stray click could undo setup, and for Codex could mean trusting the hooks again. Cancelling changes nothing; turning a switch on is still one click. (`docs/integration-settings-behaviour.md` §3.)
 - Application discovery uses running instances and Launch Services as well as conventional locations. Trae registration also verifies the actual companion package; partial connection notices are restricted to discovered peers. See [Product connection checks](docs/product-connections.md) for discovery and activation limits.
 
 ## 0.4.2 Alpha — 2026-09-13
