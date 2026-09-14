@@ -76,7 +76,7 @@ Sparkle ([ADR 0022](adr/0022-update-through-sparkle-signed-with-our-own-certific
 
 | Location | Contents | Removed |
 | --- | --- | --- |
-| `~/Library/Preferences/com.yinfenglu.Notchline.plist` | `SUHasLaunchedBefore` and `SULastCheckTime`, written at the first launch, which checks at once. `SUUpdateGroupIdentifier` is written by a check that finds an update. The rest appear only on a user's choice in Sparkle's window: `SUSkippedVersion` (and its major-version siblings), `SUAutomaticallyUpdate`, and `SUEnableAutomaticChecks` when it differs from the build's default | Never |
+| `~/Library/Preferences/com.yinfenglu.Notchline.plist` | `SUHasLaunchedBefore` and `SULastCheckTime`, written at the first launch, which checks at once. `SUUpdateGroupIdentifier` is written by a check that finds an update. `SUSkippedVersion` (and its major-version siblings) appears on Skip This Version. `SUEnableAutomaticChecks` and `SUAutomaticallyUpdate` appear once Settings → Updates' two switches are moved. Notchline's own two: `updateCheckAnsweredAt`, when a check last got an answer from the feed, and `updateReceiptBuild`, the build a relaunch is about to install, removed once that build's About has been closed (`updates-on-the-notch.md` §9) | Never |
 | `~/Library/Caches/com.yinfenglu.Notchline/` | `org.sparkle-project.Sparkle/`, holding the downloaded archive and its extraction while an update is prepared, plus `URLSession`'s `Cache.db`. After an install, the rehearsal left the empty `Installation/` and `PersistentDownloads/` directories and 124 KB in total | Sparkle empties its own directories; the system may purge caches at any time |
 | `~/Library/HTTPStorages/com.yinfenglu.Notchline/` | `URLSession`'s cookie store for the feed request | Never |
 

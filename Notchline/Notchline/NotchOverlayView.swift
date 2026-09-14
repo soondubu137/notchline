@@ -636,6 +636,11 @@ private struct AboutButton: View {
         PanelMetrics.settingsButtonSize(compactHeight: store.compactHeight)
     }
 
+    /// A found version nobody has read yet; never while About is the panel (§2).
+    private var dotVersion: UpdateVersion? {
+        store.isShowingAbout ? nil : AppUpdater.shared.status.dot
+    }
+
     var body: some View {
         Button(action: store.toggleAbout) {
             Image("NotchlineMark")
@@ -646,6 +651,22 @@ private struct AboutButton: View {
                     width: PanelMetrics.bandControlGlyphSize,
                     height: PanelMetrics.bandControlGlyphSize
                 )
+                // In the terrace's empty corner, in its own still ink: the pointer brightens the
+                // mark, never the dot.
+                .overlay(alignment: .topLeading) {
+                    if dotVersion != nil {
+                        Circle()
+                            .fill(NotchPalette.finishedDot)
+                            .frame(
+                                width: PanelMetrics.aboutUpdateDotDiameter,
+                                height: PanelMetrics.aboutUpdateDotDiameter
+                            )
+                            .offset(
+                                x: PanelMetrics.aboutUpdateDotCentre - PanelMetrics.aboutUpdateDotDiameter / 2,
+                                y: PanelMetrics.aboutUpdateDotCentre - PanelMetrics.aboutUpdateDotDiameter / 2
+                            )
+                    }
+                }
                 .frame(width: size, height: size)
                 // Fill answers to hover; ink answers to hover and on-state. An on control takes no ground.
                 .background(
@@ -664,9 +685,17 @@ private struct AboutButton: View {
         .animation(.easeOut(duration: 0.12), value: isHovered)
         .animation(.easeOut(duration: 0.12), value: store.isShowingAbout)
         .accessibilityLabel("About Notchline")
-        .accessibilityValue(store.isShowingAbout ? "Shown" : "Hidden")
+        .accessibilityValue(
+            store.isShowingAbout
+                ? "Shown"
+                : dotVersion.map { "\($0.name) available" } ?? "Hidden"
+        )
         .accessibilityAddTraits(store.isShowingAbout ? .isSelected : [])
-        .help(store.isShowingAbout ? "Back to sessions" : "About Notchline")
+        .help(
+            store.isShowingAbout
+                ? "Back to sessions"
+                : dotVersion.map { "About Notchline — \($0.name) is waiting" } ?? "About Notchline"
+        )
     }
 }
 
@@ -753,14 +782,8 @@ struct AboutPanelContent: View {
                 )
                 .accessibilityLabel("Notchline")
 
-            if let summary = AppVersion.summary {
-                Text(summary)
-                    .font(Font(PanelMetrics.captionFont))
-                    .monospacedDigit()
-                    .foregroundStyle(NotchPalette.reading)
-                    .accessibilityLabel(AppVersion.spokenSummary ?? summary)
-                    .padding(.top, PanelMetrics.aboutLockupTextGap)
-            }
+            AboutVersionLine()
+                .padding(.top, PanelMetrics.aboutLockupTextGap)
 
             if let notice = AppVersion.copyrightNotice {
                 Text(notice)
@@ -790,41 +813,161 @@ struct AboutPanelContent: View {
     }
 }
 
-/// The About panel's update control. Sparkle draws the check's progress and result in its own
-/// window, so this stays one live button.
+/// The version line (`updates-on-the-notch.md` §3): this build, and while a version is waiting,
+/// an arrow to it in the title's ink.
+private struct AboutVersionLine: View {
+    var body: some View {
+        if let summary = AppVersion.summary {
+            let target = AppUpdater.shared.status.version
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                Text(summary)
+                    .foregroundStyle(NotchPalette.reading)
+                if let target {
+                    Text("  →  \(target.name) (\(target.build))")
+                        .foregroundStyle(NotchPalette.sessionTitle)
+                }
+            }
+            .font(Font(PanelMetrics.captionFont))
+            .monospacedDigit()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(
+                (AppVersion.spokenSummary ?? summary)
+                    + (target.map { ", updating to \($0.name), build \($0.build)" } ?? "")
+            )
+        }
+    }
+}
+
+/// The About panel's control row: whatever the update needs next (§3). The one updater draws it
+/// here and in Settings (rule 12); the panel's height never changes (rule 5).
 private struct AboutUpdateControl: View {
+    var body: some View {
+        let row = AboutUpdateRow(AppUpdater.shared.status.flow)
+        HStack(spacing: PanelMetrics.aboutUpdateRowSpacing) {
+            if row.lead != nil || row.gloss != nil || row.meter != nil {
+                AboutUpdateReading(row: row)
+            }
+            ForEach(row.controls, id: \.label) { spec in
+                AboutUpdateButton(spec: spec)
+            }
+        }
+        .frame(height: PanelMetrics.answerRowHeight)
+    }
+}
+
+/// A reading in Light 13: the lead in `reading`, the gloss in `label`, and a still meter between
+/// them while there is progress to show. Nothing on it spins (rule 6).
+private struct AboutUpdateReading: View {
+    let row: AboutUpdateRow
+
+    var body: some View {
+        HStack(alignment: .center, spacing: row.meter == nil ? 0 : PanelMetrics.aboutUpdateRowSpacing) {
+            if let lead = row.lead {
+                Text(lead)
+                    .foregroundStyle(NotchPalette.reading)
+            }
+            if let meter = row.meter {
+                UpdateMeter(fraction: meter)
+            }
+            if let gloss = row.gloss {
+                Text(gloss)
+                    .foregroundStyle(NotchPalette.label)
+            }
+        }
+        .font(Font(PanelMetrics.requestControlFont))
+        .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(
+            [row.lead, row.gloss]
+                .compactMap { $0?.trimmingCharacters(in: CharacterSet(charactersIn: " ·")) }
+                .joined(separator: ", ")
+        )
+    }
+}
+
+/// The quota meter's shape: a `120 × 3` capsule, track `hairline`, fill `themeInk.on`.
+private struct UpdateMeter: View {
+    let fraction: Double
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Capsule()
+                .fill(NotchPalette.hairline)
+            Capsule()
+                .fill(NotchPalette.themeInk.on)
+                .frame(width: PanelMetrics.updateMeterFill(fraction))
+        }
+        .frame(width: PanelMetrics.updateMeterWidth, height: PanelMetrics.updateMeterHeight)
+        .accessibilityHidden(true)
+    }
+}
+
+/// One of §3's weights. A control with no action takes no press and dims its label (02).
+private struct AboutUpdateButton: View {
+    let spec: AboutUpdateControlSpec
+
     @State private var isHovered = false
+
+    private var isLive: Bool { spec.action != nil }
 
     var body: some View {
         Button {
-            AppUpdater.shared.checkForUpdates()
+            if let action = spec.action {
+                AppUpdater.shared.perform(action)
+            }
         } label: {
-            Text("Check for Updates")
+            Text(spec.label)
                 .font(Font(PanelMetrics.requestControlFont))
-                .foregroundStyle(NotchPalette.themeInk.on)
-                .padding(.horizontal, PanelMetrics.controlHorizontalPadding)
+                .foregroundStyle(ink)
+                .fixedSize()
+                .frame(width: spec.widthOf.map(PanelMetrics.drawnAnswerControlWidth))
+                .padding(.horizontal, spec.widthOf == nil ? PanelMetrics.controlHorizontalPadding : 0)
                 .frame(height: PanelMetrics.answerRowHeight)
                 .background(
                     RoundedRectangle(
                         cornerRadius: PanelMetrics.controlCornerRadius,
                         style: .continuous
                     )
-                    .fill(
-                        NotchPalette.themeInk.on.opacity(
-                            isHovered
-                                ? NotchPalette.RowEmphasis.plainControlHoverFillOpacity
-                                : NotchPalette.RowEmphasis.plainControlRestFillOpacity
-                        )
-                    )
+                    .fill(ground)
                 )
-                .overlay(PointingHandCursor())
-                .onHover { isHovered = $0 }
+                .overlay { if isLive { PointingHandCursor() } }
+                .contentShape(Rectangle())
+                .onHover { isHovered = $0 && isLive }
         }
         .buttonStyle(.plain)
+        .allowsHitTesting(isLive)
         .animation(
             .easeOut(duration: NotchPalette.RowEmphasis.controlHoverDuration),
             value: isHovered
         )
+        .accessibilityLabel(spec.label.replacingOccurrences(of: " ↗", with: ""))
+    }
+
+    private var ink: Color {
+        switch spec.weight {
+        case .bare: isHovered ? NotchPalette.themeInk.on : NotchPalette.label
+        case .quiet: isLive ? NotchPalette.themeInk.on : NotchPalette.label
+        case .ground: NotchPalette.onBrightGround
+        }
+    }
+
+    private var ground: Color {
+        switch spec.weight {
+        case .bare:
+            isHovered
+                ? NotchPalette.themeInk.on.opacity(NotchPalette.RowEmphasis.plainControlRestFillOpacity)
+                : .clear
+        case .quiet:
+            NotchPalette.themeInk.on.opacity(
+                isHovered
+                    ? NotchPalette.RowEmphasis.plainControlHoverFillOpacity
+                    : NotchPalette.RowEmphasis.plainControlRestFillOpacity
+            )
+        case .ground:
+            isHovered ? Color.white : NotchPalette.brightGround
+        }
     }
 }
 

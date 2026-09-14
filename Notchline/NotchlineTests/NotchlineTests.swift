@@ -7859,7 +7859,8 @@ struct NotchlineTests {
         let panes: [(String, CGFloat)] = [
             ("Products", height(SettingsPaneContent { ProductsSettingsPane() })),
             ("Display", height(SettingsPaneContent { DisplaySettingsPane() })),
-            ("Quota", height(SettingsPaneContent { QuotaSettingsPane() }))
+            ("Quota", height(SettingsPaneContent { QuotaSettingsPane() })),
+            ("Updates", height(SettingsPaneContent { UpdatesSettingsPane() }))
         ]
         for (name, content) in panes {
             #expect(content + footer <= SettingsWindowLayout.paneHeight, "\(name) is \(content) + \(footer)")

@@ -2,7 +2,7 @@
 
 | Field | Value |
 | --- | --- |
-| Status | **Decided, not built.** Proposed and decided on 2026-09-13; §7's five questions were answered by taking every recommendation. §8's measurement comes before §4 rule 07 is built. |
+| Status | **Built 2026-09-14.** Proposed and decided on 2026-09-13; §7's five questions were answered by taking every recommendation. §8's measurement came back "lost", so a Running Turn joined rule 7's hold and q03 changed (§7, §9). |
 | Version | 1.0 |
 | Date | 2026-09-13 |
 | File | [Notchline — Updates](https://www.figma.com/design/e0NkP8hWtYDivF5uCesed8) — `Updates — Proposal` |
@@ -77,7 +77,11 @@ On the surface:
 
 In the app:
 
-7. **A relaunch waits for every row that is waiting for an answer.** An answer given on the notch goes back through Notchline to the hook's own stdout, and a relaunch would cut that connection. The relaunch goes the moment the last one is answered, or on Relaunch Now. A Running Turn does not hold it (§7 q03).
+7. **A relaunch waits for every row it would cut off.**
+   - **A request that can be answered on the notch holds it.** The answer goes back through Notchline to the hook's own stdout, and a relaunch would cut that connection.
+   - **A Turn still running holds it too** (§7 q03). Its next hook event, `Stop` included, would be lost.
+   - The relaunch goes the moment the last one is answered or finished, or on Relaunch Now.
+   - ~~A Running Turn does not hold it (§7 q03).~~ Reversed by §8's measurement (§9).
 8. **Notchline never relaunches itself unasked.** Only a press relaunches. A background download installs when Notchline quits or the Mac restarts.
 9. **Skip hides one version.** A newer one brings the dot back.
 10. **A build ahead of the feed is never called up to date.**
@@ -95,7 +99,7 @@ A fourth toolbar pane, `Updates`, after Quota (§7 q02). The window keeps its on
 - **Group `Automatic updates`**, two switches:
   - `Check for updates` — *Once a day, from the release feed on GitHub.* Bound to `automaticallyChecksForUpdates`, **on**. Debug builds still start with it off (`NOTCHLINE_UPDATE_CHECKS_AUTOMATICALLY = NO`).
   - `Download updates in the background` — *Installs when Notchline quits or the Mac restarts.* Bound to `automaticallyDownloadsUpdates`, **off** by default (§7 q01).
-  - Footnote, one line: *Notchline never relaunches unasked, and waits for requests still waiting for an answer.*
+  - Footnote, one line: *Notchline never relaunches unasked, and waits for running turns and unanswered requests.* (~~*…and waits for requests still waiting for an answer.*~~, before §9.)
 - **The closing row under every other pane** gains a tail while a version is waiting: `Version 0.4.3 Alpha (16)  ·  0.5.0 Alpha is waiting`. The tail is in the accent and links to the pane. It is the only change to the three existing panes.
 
 ## 6. Declined
@@ -111,7 +115,7 @@ A fourth toolbar pane, `Updates`, after Quota (§7 q02). The window keeps its on
 | --- | --- | --- |
 | q01 | Background downloads on by default? | **Off.** Every change Notchline makes to the Mac follows a switch you turned yourself. |
 | q02 | A fourth pane, or rows at the foot of Products? | **A fourth pane.** Products lists the watched apps, and Notchline is not one of them. |
-| q03 | Should a Running Turn hold the relaunch too? | **No, once measured (§8).** The monitor rebuilds from the current snapshot ([ADR 0006](adr/0006-rebuild-from-current-snapshot-not-event-replay.md)), so running rows should come back. |
+| q03 | Should a Running Turn hold the relaunch too? | ~~**No, once measured (§8).** The monitor rebuilds from the current snapshot ([ADR 0006](adr/0006-rebuild-from-current-snapshot-not-event-replay.md)), so running rows should come back.~~ **Yes, reopened 2026-09-14 by §8's answer.** Launch restores no Turn, and an event sent while Notchline is down is dropped (§9). |
 | q04 | Where does What's New point while the repository is private? | **The GitHub release page, once the repository is public.** Hosting was decided in ADR 0022 on the same day, so no popover is designed. |
 | q05 | Does the dot come back after About closes without a choice? | **Yes, at the next daily check**, Sparkle's own reminder cadence. |
 
@@ -136,3 +140,27 @@ The `SPUUserDriver` callbacks, as named in the Sparkle 2.10 checkout, map to the
 **To measure before building rule 7.** Relaunch a copy while a Turn is Running, then check two things. Does the row come back? And is a hook event sent during the gap lost, or recovered from the snapshot? If it is lost, a Running Turn joins the rule-7 hold and q03 is reopened.
 
 Translocation should be detected when the check starts, so that 13 replaces 04 before Install can be pressed.
+
+## 9. Build record (2026-09-14)
+
+**§8's measurement, answered from the measured launch boundary.** A live relaunch was not run: relaunching the user's running copy would have cut its hook sockets. The two questions are already settled, by measurements recorded in [`system-architecture.md`](system-architecture.md) §2.1 and by the helper itself.
+
+- **The row does not come back.** "Launch does no cold-start sync": a Turn running before launch gets no row until its next lifecycle event. The App Server "can never create a row on its own", so this holds for Codex too, the product q03 expected to rebuild from a snapshot.
+- **A hook event sent in the gap is lost.** `hook.sh` is `nc -U -w 1`: with nothing listening it delivers nothing, and hook payloads never touch disk ([ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)).
+
+§8 said what that means: a Running Turn joins rule 7's hold. The hold counts Running by the derived status the summary uses (`MonitorAggregation.effectiveStatus`). Answerable requests count through `AgentRequest.canBeAnswered`. A Completed row that has not been read does not hold: it would hold until read, and it is lost on any relaunch.
+
+**How it is built.**
+- **`UpdateFlow` is a pure reducer.** It takes Sparkle callbacks, presses and the panel's visibility as events, and returns effects: reply blocks, a check, the receipt key. `AppUpdater` implements `SPUUserDriver` and `SPUUpdaterDelegate` only to translate between the two. `UpdateFlowTests` holds every rule without a feed.
+- **About is open while the panel is expanded on it** (`isExpanded && isShowingAbout`). Hover closing the panel closes About, for the dot, for 03's lifetime and for 09's receipt.
+- **Closing About with a version waiting replies Dismiss** to the held reply, which is what lets Sparkle's next daily check bring the dot back (q05). The version stays drawn.
+- **A press with no reply held re-enters Sparkle.** Install, Skip and Try Again after a dismissal, a cancel, or a background download run a check that carries the press. When Sparkle offers that build again, the press is answered at once, and the panel never says "Checking…".
+- **11 and 12 are told apart by phase.** An error before a version is on screen is 11; one while downloading, verifying or holding is 12.
+- **13 is detected up front.** A bundle path under `/AppTranslocation/` (Sparkle's own test) or a read-only volume. Show in Finder reveals the running copy.
+- **A background download is ready when Sparkle's delegate hands over its immediate-installation block.** Taking the block makes it 05, and only Relaunch to Update uses it (rule 8).
+- **09 is a defaults key**, `updateReceiptBuild`, written just before the relaunch and read only by that build.
+- **The Updates pane says when a check last got an answer** (`updateCheckAnsweredAt`), not when one was last attempted. A failed scheduled check says nothing, anywhere (rule 3). Before the first answer the caption reads `Not checked yet`.
+- **An information-only feed item is dismissed unseen.** `build-release.sh` never writes one.
+- **Performance.** Progress reaches the views at most four times a second. `UpdateStatus` is `@Observable` and writes a property only when it changes, so the About mark, which reads only the dot, is not redrawn by a download.
+
+**Verified.** Every state was rendered offscreen from the real views and compared with the board, the dot's corner at 6× included. A Release build, launched in a throwaway home, started the notch-drawn driver. Its first scheduled check failed against the still-private feed and drew nothing: no window, no dot, no recorded answer.

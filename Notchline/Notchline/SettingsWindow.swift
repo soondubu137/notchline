@@ -1,4 +1,5 @@
-// The Settings window for macOS 26 (`figma-design.md` §8): Products, Display and Quota panes.
+// The Settings window for macOS 26 (`figma-design.md` §8): Products, Display, Quota and Updates
+// panes (`updates-on-the-notch.md` §5).
 // Captions are one line; longer text is a tooltip or ⓘ popover. Only a reported failure wraps.
 import AppKit
 import SwiftUI
@@ -7,6 +8,7 @@ enum SettingsPane: String, CaseIterable {
     case products
     case display
     case quota
+    case updates
 
     /// Absent the first time, which opens on Products.
     static let defaultsKey = "settingsPane"
@@ -17,6 +19,7 @@ enum SettingsPane: String, CaseIterable {
         case .products: "Products"
         case .display: "Display"
         case .quota: "Quota"
+        case .updates: "Updates"
         }
     }
 
@@ -25,6 +28,7 @@ enum SettingsPane: String, CaseIterable {
         case .products: "puzzlepiece.extension"
         case .display: "macbook"
         case .quota: "gauge.with.needle"
+        case .updates: "arrow.down.circle"
         }
     }
 }
@@ -43,6 +47,9 @@ struct AppSettingsView: View {
             }
             Tab(SettingsPane.quota.title, systemImage: SettingsPane.quota.systemImage, value: .quota) {
                 SettingsPaneLayout { QuotaSettingsPane() }
+            }
+            Tab(SettingsPane.updates.title, systemImage: SettingsPane.updates.systemImage, value: .updates) {
+                SettingsPaneLayout { UpdatesSettingsPane() }
             }
         }
         .background(SettingsWindowChrome(title: pane.title))
@@ -105,11 +112,31 @@ struct SettingsClosingFooter: View {
     }
 }
 
-/// The version and `Quit` under every pane, at opposite ends, baselines aligned.
+/// The version and `Quit` under every pane, at opposite ends, baselines aligned. While a version
+/// is waiting, every pane but Updates says so after the version, as a link to that pane (§5).
 struct SettingsClosingRow: View {
+    @AppStorage(SettingsPane.defaultsKey) private var pane: SettingsPane = .products
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 16) {
-            AppVersionLine()
+            HStack(alignment: .firstTextBaseline, spacing: 0) {
+                AppVersionLine()
+                if pane != .updates, let version = AppUpdater.shared.status.version {
+                    Text("  ·  ")
+                        .font(.system(size: 11))
+                        .foregroundStyle(MacOSWindowColor.tertiaryText)
+                    Button {
+                        pane = .updates
+                    } label: {
+                        Text("\(version.name) is waiting")
+                            .font(.system(size: 11))
+                            .foregroundStyle(Color.accentColor)
+                    }
+                    .buttonStyle(.plain)
+                    .overlay(PointingHandCursor())
+                    .help("Opens Updates")
+                }
+            }
 
             Spacer(minLength: 16)
 
@@ -519,6 +546,9 @@ enum SettingsCaption {
     static let outline = "A hairline edge, for dark wallpapers."
     static let groupByProduct = "One block per product, each headed by its badge."
     static let quotaTableFootnote = "Today’s total counts every connected product, whatever is on here."
+    static let checkForUpdates = "Once a day, from the release feed on GitHub."
+    static let downloadInBackground = "Installs when Notchline quits or the Mac restarts."
+    static let updatesFootnote = "Notchline never relaunches unasked, and waits for running turns and unanswered requests."
 
     /// What the preference does on this kind of display; only a notch that cannot be placed waits.
     static func hideNotchline(canHide: Bool, geometry: DisplayGeometry) -> String {
@@ -543,11 +573,150 @@ enum SettingsCaption {
 
     static var all: [String] {
         [productsFootnote, privacyMode, outline, groupByProduct, quotaTableFootnote,
+         checkForUpdates, downloadInBackground,
          nameWork(canName: true), nameWork(canName: false)]
             + [true, false].flatMap { canHide in
                 DisplayGeometry.allCases.map { hideNotchline(canHide: canHide, geometry: $0) }
             }
             + AgentKind.allCases.map(quotaTranscripts(for:))
+    }
+}
+
+// MARK: - Updates
+
+/// The running version and what the updater knows about the next one, then its two switches
+/// (`updates-on-the-notch.md` §5). It drives the same updater About does (rule 12) and keeps no
+/// state of its own, so a download started in either shows its meter in both.
+struct UpdatesSettingsPane: View {
+    var body: some View {
+        let updater = AppUpdater.shared
+        let status = updater.status
+        VStack(alignment: .leading, spacing: 22) {
+            SettingsGroup(header: "Notchline") {
+                UpdateSettingsRowView(
+                    row: UpdateSettingsRow(
+                        status.flow,
+                        lastAnsweredCheck: status.lastAnsweredCheck,
+                        now: Date()
+                    )
+                )
+            }
+
+            SettingsGroup(header: "Automatic updates") {
+                SettingsRow(title: "Check for updates", caption: SettingsCaption.checkForUpdates) {
+                    Toggle(
+                        "Check for updates",
+                        isOn: Binding(
+                            get: { status.automaticallyChecks },
+                            set: { updater.setAutomaticallyChecks($0) }
+                        )
+                    )
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(!status.isAvailable)
+                }
+                SettingsSeparator()
+                SettingsRow(
+                    title: "Download updates in the background",
+                    caption: SettingsCaption.downloadInBackground
+                ) {
+                    // Sparkle downloads only what a scheduled check finds.
+                    Toggle(
+                        "Download updates in the background",
+                        isOn: Binding(
+                            get: { status.automaticallyDownloads },
+                            set: { updater.setAutomaticallyDownloads($0) }
+                        )
+                    )
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(!status.isAvailable || !status.automaticallyChecks)
+                }
+            } footnote: {
+                SettingsFootnote(SettingsCaption.updatesFootnote)
+            }
+        }
+    }
+}
+
+/// The `Notchline` row: the window's own vocabulary for what About draws. A status dot and a
+/// caption, or the download meter and its amount, then capsules; Install takes the accent.
+struct UpdateSettingsRowView: View {
+    let row: UpdateSettingsRow
+
+    var body: some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(AppVersion.summary ?? "Notchline")
+                    .font(.system(size: 13))
+                    .foregroundStyle(MacOSWindowColor.primaryText)
+                    .monospacedDigit()
+
+                HStack(spacing: row.meter == nil ? 6 : 8) {
+                    if let meter = row.meter {
+                        SettingsUpdateMeter(fraction: meter)
+                    } else {
+                        Circle()
+                            .fill(dotColor)
+                            .frame(width: 6, height: 6)
+                    }
+                    Text(row.caption)
+                        .font(.system(size: 11))
+                        .foregroundStyle(MacOSWindowColor.secondaryText)
+                        .monospacedDigit()
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 6) {
+                ForEach(row.controls, id: \.label) { control in
+                    if control.isProminent {
+                        button(control).buttonStyle(.borderedProminent)
+                    } else {
+                        button(control).buttonStyle(.bordered)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+    }
+
+    private func button(_ control: UpdateSettingsRow.Control) -> some View {
+        Button(control.label) {
+            if let action = control.action {
+                AppUpdater.shared.perform(action)
+            }
+        }
+        .buttonBorderShape(.capsule)
+        .disabled(control.action == nil)
+    }
+
+    private var dotColor: Color {
+        switch row.tone {
+        case .idle: MacOSWindowColor.statusIdle
+        case .pending: MacOSWindowColor.statusPending
+        case .warning: MacOSWindowColor.statusWarning
+        }
+    }
+}
+
+/// About's meter in the window's colours: a `120 × 3` capsule, the separator for its track.
+private struct SettingsUpdateMeter: View {
+    let fraction: Double
+
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Capsule()
+                .fill(MacOSWindowColor.separator)
+            Capsule()
+                .fill(Color.accentColor)
+                .frame(width: PanelMetrics.updateMeterFill(fraction))
+        }
+        .frame(width: PanelMetrics.updateMeterWidth, height: PanelMetrics.updateMeterHeight)
+        .accessibilityHidden(true)
     }
 }
 

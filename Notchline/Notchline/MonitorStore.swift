@@ -447,6 +447,22 @@ enum PanelMetrics {
         ceil(captionFont.ascender) + ceil(-captionFont.descender)
     }
 
+    /// The update dot on the About mark (`updates-on-the-notch.md` §2): the finished-turn dot's `4`.
+    static let aboutUpdateDotDiameter: CGFloat = 4
+    /// Centred on the terrace's empty corner cell (4, 4) of the `13` pt glyph: the cell's centre
+    /// sits `128 + 13.5` of the mark's `155` units in, so the dot overhangs the glyph by `0.87`.
+    static var aboutUpdateDotCentre: CGFloat { bandControlGlyphSize * (128 + 13.5) / 155 }
+    /// The About row's controls and readings stand this far apart.
+    static let aboutUpdateRowSpacing: CGFloat = 8
+    /// The download meter (§3): a `120 × 3` capsule, track `hairline`, fill `themeInk.on`.
+    static let updateMeterWidth: CGFloat = 120
+    static let updateMeterHeight: CGFloat = 3
+
+    /// Whole points of fill, never rounded up, so the meter cannot read full before it is.
+    static func updateMeterFill(_ fraction: Double) -> CGFloat {
+        (updateMeterWidth * CGFloat(min(max(fraction, 0), 1))).rounded(.down)
+    }
+
     /// A constant: nothing running changes the About panel's content, so it never moves.
     static var aboutPanelHeight: CGFloat {
         aboutTopMargin

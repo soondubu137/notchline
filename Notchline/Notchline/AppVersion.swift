@@ -37,7 +37,7 @@ enum AppVersion {
     /// The About panel keeps the author credit in the ordinary copyright line.
     static var copyrightNotice: String? { infoString(for: "NSHumanReadableCopyright") }
 
-    static let repositoryURL = URL(string: "https://github.com/soondubu137/notchline")!
+    nonisolated static let repositoryURL = URL(string: "https://github.com/soondubu137/notchline")!
 
     /// A bundle that cannot say its version draws none, never `Unknown`.
     private static func infoString(for key: String) -> String? {

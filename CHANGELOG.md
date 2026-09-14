@@ -9,6 +9,7 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 ### Added
 
 - **Notchline updates itself.** It checks once a day, and About → Check for Updates checks now. An update downloads, verifies and installs in place, then relaunches. It asks for no second Open Anyway, and it keeps the Automation permission, because every release is signed with the same certificate. The first version with the updater has to be installed by hand, and asks for Automation once more. (`docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md`.)
+- **Updates are told on the notch, not in a window.** A new version is a dot on the About mark, and About carries the whole update. A new Settings pane, Updates, holds the same controls and two switches; background downloads are off by default. A relaunch waits for running turns and unanswered requests, and a check nobody asked for never reports a failure. (`docs/updates-on-the-notch.md`.)
 
 ## 0.4.3 Alpha — 2026-09-13
 

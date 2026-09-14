@@ -43,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard !AppProcess.isHostingTests else { return }
         overlayController = OverlayPanelController(store: .shared)
         overlayController?.show()
-        AppUpdater.shared.start()
+        AppUpdater.shared.start(store: .shared)
 
         // Onboarding needs the foreground: an `LSUIElement` app does not activate at launch, so the
         // window would sit behind others and miss Return. Later launches must not activate.
