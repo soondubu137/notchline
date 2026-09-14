@@ -753,13 +753,7 @@ struct ProductInfoPopover: View {
                             .foregroundStyle(MacOSWindowColor.primaryText)
                             .textSelection(.enabled)
 
-                        Button("Show in Finder") {
-                            FinderRevealTarget.revealing(hooksFile.url)?.reveal()
-                        }
-                        .buttonStyle(.bordered)
-                        .buttonBorderShape(.capsule)
-                        // A button with nowhere to go is greyed rather than silently inert.
-                        .disabled(FinderRevealTarget.revealing(hooksFile.url) == nil)
+                        ShowInFinderCapsuleButton(url: hooksFile.url)
                     }
                 }
             }
@@ -783,6 +777,35 @@ struct ProductInfoPopover: View {
         Text(text)
             .font(.system(size: 11, weight: .semibold))
             .foregroundStyle(MacOSWindowColor.secondaryText)
+    }
+}
+
+/// The "Show in Finder" button inside a product's info popover: a bordered capsule that dims on
+/// hover and swaps in the pointing-hand cursor, like a clickable control rather than static text.
+private struct ShowInFinderCapsuleButton: View {
+    let url: URL
+
+    @State private var isHovering = false
+
+    private var target: FinderRevealTarget? { FinderRevealTarget.revealing(url) }
+
+    var body: some View {
+        Button("Show in Finder") {
+            target?.reveal()
+        }
+        .buttonStyle(.bordered)
+        .buttonBorderShape(.capsule)
+        .opacity(isHovering && target != nil ? 0.7 : 1)
+        // A button with nowhere to go is greyed rather than silently inert.
+        .disabled(target == nil)
+        .onHover { hovering in
+            isHovering = hovering
+            if hovering && target != nil {
+                NSCursor.pointingHand.push()
+            } else {
+                NSCursor.pop()
+            }
+        }
     }
 }
 
