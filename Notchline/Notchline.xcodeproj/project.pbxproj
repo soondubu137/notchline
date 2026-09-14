@@ -28,10 +28,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		38131101302AE10900286EBC /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = LICENSE; path = ../LICENSE; sourceTree = "<group>"; };
 		38130FF6302AE10800286EBC /* Notchline.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Notchline.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		38131003302AE10900286EBC /* NotchlineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotchlineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3813100D302AE10900286EBC /* NotchlineUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NotchlineUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		38131101302AE10900286EBC /* LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = LICENSE; path = ../LICENSE; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
