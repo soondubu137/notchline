@@ -290,3 +290,22 @@ The same `tccd` did compare requirements for another service at this launch. It 
 - The first-install Automation prompt was not exercised on this Mac, because a grant for the bundle ID already existed. A machine that never ran Notchline has no record, and it prompts.
 - 0.5.0's changelog says the grant from earlier, ad-hoc versions "does not carry over". On 26.6.2 that has now been contradicted twice, so it is at most a possibility.
 - The stable certificate is still right: it is what Apple documents, and it is what TCC enforces for other services.
+
+**Automation, prompted for real.** The user then ran `tccutil reset AppleEvents com.yinfenglu.Notchline`. The next Terminal row click brought up the prompt, and they allowed it. So 0.5.0 holds a grant made under its own certificate.
+
+### 12.1 The first update from the public feed (0.5.0 → 0.5.1)
+
+0.5.1 Beta (18) was cut with one fix (issue #69), built and signed by `build-release.sh`, and uploaded. The feed was pushed at 09:56. `raw.githubusercontent.com` served the old feed (`max-age=300`, `x-cache: HIT`) until 10:01:34, when it began serving the committed file.
+
+| Check | Result |
+| --- | --- |
+| Offer | About → Check for Updates on the installed 0.5.0 found 0.5.1. The user pressed Install. No prompt of any kind: no password, no App Management, no Open Anyway |
+| Install | Autoupdate: "OK: EdDSA signature is correct for update" at 10:03:03. It also logged "bookmark data for update download is stale.. but still continuing", which did not stop the install. The new process started at 10:03:04 |
+| Bundle | `/Applications/Notchline.app` 0.5.1 (18), signature valid, satisfies `designated-requirement.txt` |
+| Quarantine | The attribute Chrome put on 0.5.0 is gone from the bundle and from every file in it. Only `com.apple.provenance` remains |
+| Gatekeeper | `syspolicyd` scanned the new bundle (`evaluateScanResult: 2`, team null) and showed nothing |
+| App Management | Nothing for Notchline. The one `kTCCServiceSystemPolicyAppBundles` request in the window came from Claude's desktop app (`com.anthropic.claudefordesktop`) |
+| Automation | The row click worked with no prompt; `tccd` answered `kTCCServiceAppleEvents … com.apple.Terminal, authValue: 2` at 10:03:23 |
+| Leftovers | Sparkle's `Installation` and `PersistentDownloads` caches are empty. `updateReceiptBuild` = 18, so About can show what's new once |
+
+This is the path §7 set out to prove, measured on a real release: an update installed in place into `/Applications` from GitHub. Nothing asked the user for anything, and every permission stayed.
