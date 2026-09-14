@@ -5,5 +5,32 @@
     <link>https://github.com/soondubu137/notchline/releases</link>
     <description>Notchline's update feed, read by every copy through SUFeedURL. Items are added by scripts/release/build-release.sh, newest first; do not rename or move this file.</description>
     <language>en</language>
+    <item>
+      <title>Notchline 0.5.0 Beta</title>
+      <pubDate>Mon, 14 Sep 2026 08:19:00 GMT</pubDate>
+      <sparkle:version>17</sparkle:version>
+      <sparkle:shortVersionString>0.5.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/soondubu137/notchline/releases/tag/v0.5.0</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown"><![CDATA[**Notchline now finds, installs and relaunches into its own updates, and tells you on the notch rather than in a window.** This is the first Beta, and the first release that is not a pre-release. The copy you install by hand is the last one you have to. (`docs/updates-on-the-notch.md`, `docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md`.)
+
+### Added
+
+- **Notchline updates itself.** It checks once a day, and About → Check for Updates checks now. An update downloads, verifies and installs in place, then relaunches. It asks for no second Open Anyway, and it keeps the Automation permission, because every release is signed with the same certificate. (`docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md`.)
+- **Updates are told on the notch, not in a window.** A new version is a dot on the About mark, and About carries the whole update. A new Settings pane, Updates, holds the same controls and two switches; background downloads are off by default. A relaunch waits for running turns and unanswered requests, and a check nobody asked for never reports a failure. (`docs/updates-on-the-notch.md`.)
+
+### Changed
+
+- **Beta, not Alpha.** The version now reads `0.5.0 Beta`, and releases on GitHub are no longer marked as pre-releases.
+
+### Known limitations
+
+- **This version is installed by hand, and asks for Automation once more.** Releases are now signed with Notchline's own certificate instead of ad hoc, so the permission given to earlier versions does not carry over. From here on, updates keep it.
+- **An update needs a copy Notchline can replace.** Opened straight from Downloads or from a disk image, About asks you to move Notchline to Applications instead of offering Install.
+
+Everything listed under `0.4.3` and earlier still stands, unchanged.
+]]></description>
+      <enclosure url="https://github.com/soondubu137/notchline/releases/download/v0.5.0/Notchline-0.5.0.zip" type="application/octet-stream" sparkle:edSignature="8JQRDKhjDa0DwSYSRpZyWqotFPSnYVNSaUG0W5W8gQaBPp9nWj+z8GbH9guhKJFyOS9UM1qt3LNmbpoCSFfZAg==" length="3973062"/>
+    </item>
   </channel>
 </rss>
