@@ -6,7 +6,7 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ## 0.5.0 Beta — 2026-09-14
 
-**Notchline now finds, installs and relaunches into its own updates, and tells you on the notch rather than in a window.** This is the first Beta, and the first release that is not a pre-release. The copy you install by hand is the last one you have to. (`docs/updates-on-the-notch.md`, `docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md`.)
+**Notchline now finds, installs and relaunches into its own updates, and tells you on the notch rather than in a window.** This is the first Beta. The copy you install by hand is the last one you have to. (`docs/updates-on-the-notch.md`, `docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md`.)
 
 ### Added
 
@@ -15,7 +15,7 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 
 ### Changed
 
-- **Beta, not Alpha.** The version now reads `0.5.0 Beta`, and releases on GitHub are no longer marked as pre-releases.
+- **Beta, not Alpha.** The version now reads `0.5.0 Beta`.
 
 ### Known limitations
 
