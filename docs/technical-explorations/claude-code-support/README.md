@@ -48,17 +48,17 @@ Each was measured on this machine, and must be re-verified after a version chang
 
 ### 4.1 Session discovery (officially public)
 
-`claude agents --json` is documented, and measured output is:
+`claude agents --json` is documented, and measured output is (home and project folder anonymised):
 
 ```json
 [
   {
     "pid": 91157,
-    "cwd": "/Users/yinfenglu/Projects/codex-in-notch",
+    "cwd": "/Users/someone/Projects/demo",
     "kind": "interactive",
     "startedAt": 1786832578142,
     "sessionId": "45510eae-d774-464e-bff9-972b2c28bae5",
-    "name": "codex-in-notch-f6"
+    "name": "demo-f6"
   }
 ]
 ```

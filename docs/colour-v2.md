@@ -149,7 +149,7 @@ The two footer figures move for one reason: a caption line carrying a badge is `
 ## 8. Accessibility
 
 - **The band's accessible name loses its per-agent clause.** `Codex, 2 sessions, 1 subagent` was the whole justification for a colour-only channel ([`expanded-header-v2.md`](expanded-header-v2.md) §9); with no channel there is nothing to compensate for. The totals block is announced as its two figures and the aggregate status, as the collapsed bar's is.
-- **A badge is spoken as its product name**, once, with no mention of the chip. A row reads `Codex, notchline, Run a command in ~/Projects/notchline`.
+- **A badge is spoken as its product name**, once, with no mention of the chip. A row reads `Codex, notchline, Run the test suite`.
 - **Nothing on the notch surface now depends on colour being seen.** That is a stronger statement than the file has ever been able to make: with the theme ink rendered as flat grey, every figure, name and state on the collapsed bar and the expanded panel still says what it says.
 
 ## 9. What each document loses
