@@ -240,11 +240,11 @@ struct TraeConformanceTests {
         try Data(#"[{"identifier":{"id":"notchline.trae-companion"},"version":"1.1.0"}]"#.utf8).write(to: manifest)
         #expect(installation.registration == .mismatched)
         // Trae's extension host lower-cases VSIX identifiers; the read tolerates any case.
-        try Data(#"[{"identifier":{"id":"NOTCHLINE.TRAE-COMPANION"},"version":"1.2.1"}]"#.utf8).write(to: manifest)
+        try Data(#"[{"identifier":{"id":"NOTCHLINE.TRAE-COMPANION"},"version":"1.2.2"}]"#.utf8).write(to: manifest)
         #expect(installation.registration == .mismatched, "a manifest entry alone cannot prove the package exists")
-        let package = root.appendingPathComponent("notchline.trae-companion-1.2.1/package.json")
+        let package = root.appendingPathComponent("notchline.trae-companion-1.2.2/package.json")
         try FileManager.default.createDirectory(at: package.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.1"}"#.utf8).write(to: package)
+        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.2"}"#.utf8).write(to: package)
         #expect(installation.registration == .current)
         try Data("{".utf8).write(to: package)
         #expect(installation.registration == .unreadable)
@@ -264,13 +264,13 @@ struct TraeConformanceTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let manifest = extensionsDirectory.appendingPathComponent("extensions.json")
         // An unmodelled `metadata` field: removal must rewrite the manifest as loose JSON, not drop it.
-        let companionFolder = extensionsDirectory.appendingPathComponent("notchline.trae-companion-1.2.1")
+        let companionFolder = extensionsDirectory.appendingPathComponent("notchline.trae-companion-1.2.2")
         let otherFolder = extensionsDirectory.appendingPathComponent("someone.else-9.9.9")
         try FileManager.default.createDirectory(at: companionFolder, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
         try Data(#"""
         [
-          {"identifier":{"id":"notchline.trae-companion"},"version":"1.2.1","relativeLocation":"notchline.trae-companion-1.2.1"},
+          {"identifier":{"id":"notchline.trae-companion"},"version":"1.2.2","relativeLocation":"notchline.trae-companion-1.2.2"},
           {"identifier":{"id":"someone.else"},"version":"9.9.9","relativeLocation":"someone.else-9.9.9","metadata":{"pinned":true}}
         ]
         """#.utf8).write(to: manifest)
@@ -280,7 +280,7 @@ struct TraeConformanceTests {
             directory: root,
             extensionsManifest: manifest
         )
-        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.1"}"#.utf8)
+        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.2"}"#.utf8)
             .write(to: companionFolder.appendingPathComponent("package.json"))
         #expect(installation.registration == .current)
         try await installation.remove()

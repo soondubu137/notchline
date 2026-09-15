@@ -63,7 +63,18 @@ Release (`-configuration Release ENABLE_TESTABILITY=YES`, retaining `-O`) measur
 
 Full Debug unit verification passed: **926 executions in 23 suites** with one Xcode runner (`-parallel-testing-enabled NO`). The earlier parallel run exposed four obsolete three-product assertions, now updated to the product registry and the actual set of Hook-configured products, plus two existing App Server `initialize` timeouts and one asynchronous draft assertion. Those three existing tests pass in this full run; their assertions and timeouts were not weakened.
 
-Exact navigation additionally requests focus on the owning renderer window and requires `document.hasFocus()` together with the selected native ID. If either cannot be confirmed, Notchline reports only an application raise. A refused navigation leaves observation running. Multi-window focus is covered conservatively by the renderer fixtures, not claimed as live acceptance.
+Exact navigation raises the owning window through Trae’s own `INativeHostService.focusWindow({mode: 2})`. It then requires `document.hasFocus()` together with the selected native ID. If either cannot be confirmed within 1.5 seconds, Notchline reports only an application raise. A refused navigation leaves observation running.
+
+**Companions before 1.2.2 raised the wrong window whenever Trae had more than one.** They called `window.focus()`, which Chromium ignores without a user gesture, and a socket request never has one. Focus was never confirmed, so Notchline activated Trae, and activation brings forward whichever window was focused last. The Thread was selected, but in a window left behind. Measured 2026-09-14 in an isolated two-window 3.5.91 profile, driven without a user gesture over the debugging port, with another application in front and the other Trae window focused last:
+
+| Call in the target window | Result |
+| --- | --- |
+| `window.focus()` | Window order and focus unchanged; `NSRunningApplication.activate` afterwards raised the other window |
+| `focusWindow` Transfer (mode 0) | Trae’s own windows reordered, Trae not activated; `activate` afterwards raised the target |
+| `focusWindow` Force (mode 2): `app.focus({steal: true})`, then `BrowserWindow.focus()` | Trae activated with the target in front and focused in about 60 ms, whether Trae or another application was in front |
+| Force on a minimised window | The first call only restored it; focus landed after a second call, at 550–770 ms |
+
+A hidden window’s timers are throttled, so the retry is bounded by wall-clock time, not a count. Force minus its activation is Transfer, so if macOS refuses Trae’s own activation, Notchline’s fallback raise still lands on the target. The final method body passed all four cases in those real windows. The full socket-to-window path with a live Turn in each of two windows was not run, because the isolated profile is signed out. A window on another Space or in full screen is unmeasured.
 
 Final renderer/projection verification passed all **15 Node tests**. The final focused Release verification passed **17 tests** (before the additional Settings-state test, which is included in the complete Debug run). The production Release build was also checked without testability enabled.
 

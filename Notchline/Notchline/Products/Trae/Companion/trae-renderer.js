@@ -38,9 +38,7 @@
           if (native?.code !== 0 || native.data?.chat_session_id !== q.threadID || native.data.parent_session_id ||
               native.data.session_type !== 'side_chat' || native.data.remote_project_id) throw Error('Thread unavailable');
           await this.v2.switchToSession(q.threadID);
-          window.focus();
-          await new Promise(resolve => setTimeout(resolve, 50));
-          opened = this.v2.getCurrentSession()?.sessionId === q.threadID && document.hasFocus();
+          opened = await this.raise() && this.v2.getCurrentSession()?.sessionId === q.threadID;
         } catch { /* A refused navigation does not stop observation. */ }
         this.emit({requestId:q.requestId, ok:opened}); return;
       }
@@ -52,7 +50,7 @@
       const r = module.__webpack_require__;
       const c = r(6493).m.getInstance(); this.api = c.resolve(r(21458).R).getClient(); this.v2 = r(10678).Ok;
       try { this.nativeHost = r(20469).mc.getInstance().resolve(r(35007).k.INativeHostService); }
-      catch { this.nativeHost = null; } // Optional read evidence fails closed.
+      catch { this.nativeHost = null; } // Read evidence and the exact window raise fail closed.
       this.stores = r(57419); this.store = r(22976).z.getStoreInstance();
       this.permission = r(71788).rT;
       // Read the same pure pending-question selector the form consumes.
@@ -71,6 +69,23 @@
       this.featureUnsubscribe = this.flags.subscribe(() => this.capture());
       this.lease = setInterval(() => { if (Date.now() > this.expires) this.stop(); }, 15000);
       this.capture(true);
+    }
+    // Chromium ignores window.focus() without a user gesture, which a socket request never has, so
+    // Trae raised only its last focused window. Force (2) activates Trae and focuses this window; a
+    // minimised one spends its first call restoring, so ask again until focus lands.
+    async raise() {
+      if (typeof this.nativeHost?.focusWindow !== 'function') return false;
+      const deadline = Date.now() + 1500;
+      while (Date.now() < deadline) {
+        await this.nativeHost.focusWindow({mode:2});
+        // Wall clock, not a count: a hidden window's timers are throttled.
+        const retry = Date.now() + 300;
+        while (Date.now() < retry) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          if (document.hasFocus()) return true;
+        }
+      }
+      return false;
     }
     completionVisible(messageID) {
       if (!P.id(messageID)) return false;

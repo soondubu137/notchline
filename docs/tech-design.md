@@ -1241,7 +1241,7 @@ The wire protocol is newline-delimited JSON: `watch` sends schema 1 and the boun
 
 `navigate` accepts only an observed native root ID, rechecks it with `getSession`, invokes `switchToSession` and verifies `getCurrentSession`. The only production operations are observation, lease management, stopping this observer and navigation. Ordinary command arguments and native question fields are projected into `AgentRequest` with `.readingOnly` and no answer handle. The private modules, identifiers, fingerprints, degradation and test paths are registered in [the dependency registry](non-public-codex-integration-features.md#trae-desktop-local-ide).
 
-Exact navigation additionally requests focus on the owning renderer window and requires `document.hasFocus()` together with the selected native ID. If either cannot be confirmed, Notchline reports only an application raise. A refused navigation leaves observation running. Multi-window focus is covered conservatively by the renderer fixtures, not claimed as live acceptance.
+Exact navigation raises the owning renderer window with the native host’s `focusWindow` in Force mode, asking again until focus lands or 1.5 seconds pass, and requires `document.hasFocus()` together with the selected native ID. If either cannot be confirmed, Notchline reports only an application raise. A refused navigation leaves observation running. `window.focus()`, used before companion 1.2.2, is ignored without a user gesture and left the last focused window in front; the measurements are in [the Trae integration](trae-integration.md).
 
 
 ### Trae read queries (2026-09-13)
