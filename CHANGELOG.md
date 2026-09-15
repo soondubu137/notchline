@@ -4,6 +4,21 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## 0.5.2 Beta — 2026-09-14
+
+**Clicking a Trae row now brings forward the Trae window that holds its Thread, not whichever Trae window you used last.** It needs companion 1.2.3: press Repair for Trae in Settings, then restart extensions when Trae asks. (`docs/trae-integration.md`.)
+
+### Fixed
+
+- **With several Trae windows open, a click raised the wrong one.** The companion asked its window to take focus in a way Trae ignores unless the click happened inside Trae. Notchline then raised Trae as a whole, which brings back the last window used. It now uses Trae's own window focus, and asks a minimised window again until it has restored.
+- **A companion upgrade now reaches windows that stay open.** Restarting Trae's extensions left an open window running the previous companion's code while reporting the new version, so an upgrade could silently change nothing there. Each companion version now loads its own code.
+
+### Known limitations
+
+- **Not yet checked with a live Turn in each of two windows**, the whole way from the click. A Trae window on another desktop or in full screen is untested.
+
+Everything listed under `0.5.1` and earlier still stands, unchanged.
+
 ## 0.5.1 Beta — 2026-09-14
 
 **A malformed number from Codex can no longer crash Notchline, and this is the first version 0.5.0 installs by itself.** About offers it after the daily check or Check for Updates. After Install, it relaunches once no Turn is running or waiting for an answer. (`docs/technical-explorations/self-update/README.md` §12.)
