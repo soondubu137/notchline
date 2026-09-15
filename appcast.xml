@@ -6,6 +6,28 @@
     <description>Notchline's update feed, read by every copy through SUFeedURL. Items are added by scripts/release/build-release.sh, newest first; do not rename or move this file.</description>
     <language>en</language>
     <item>
+      <title>Notchline 0.5.2 Beta</title>
+      <pubDate>Tue, 15 Sep 2026 04:18:20 GMT</pubDate>
+      <sparkle:version>19</sparkle:version>
+      <sparkle:shortVersionString>0.5.2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/soondubu137/notchline/releases/tag/v0.5.2</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown"><![CDATA[**Clicking a Trae row now brings forward the Trae window that holds its Thread, not whichever Trae window you used last.** It needs companion 1.2.3: press Repair for Trae in Settings, then restart extensions when Trae asks. (`docs/trae-integration.md`.)
+
+### Fixed
+
+- **With several Trae windows open, a click raised the wrong one.** The companion asked its window to take focus in a way Trae ignores unless the click happened inside Trae. Notchline then raised Trae as a whole, which brings back the last window used. It now uses Trae's own window focus, and asks a minimised window again until it has restored.
+- **A companion upgrade now reaches windows that stay open.** Restarting Trae's extensions left an open window running the previous companion's code while reporting the new version, so an upgrade could silently change nothing there. Each companion version now loads its own code.
+
+### Known limitations
+
+- **Not yet checked with a live Turn in each of two windows**, the whole way from the click. A Trae window on another desktop or in full screen is untested.
+
+Everything listed under `0.5.1` and earlier still stands, unchanged.
+]]></description>
+      <enclosure url="https://github.com/soondubu137/notchline/releases/download/v0.5.2/Notchline-0.5.2.zip" type="application/octet-stream" sparkle:edSignature="AhgxEWo79IUy5Qm9gYJbeGqW0y0zKpkpp75B6PpN6jVYfKK96QYi7tElSSNLlCQy2smULtZ8gIE1idETtQi6DQ==" length="3973619"/>
+    </item>
+    <item>
       <title>Notchline 0.5.1 Beta</title>
       <pubDate>Mon, 14 Sep 2026 16:55:39 GMT</pubDate>
       <sparkle:version>18</sparkle:version>
