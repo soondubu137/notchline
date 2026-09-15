@@ -89,7 +89,7 @@ struct TraeReadTransportTests {
             q=json.loads(c.makefile('rb').readline())
             if q['op']=='watch':
               watches.append(c)
-              emit(c,dict(type='hello',schema=1,version='3.5.91',bridgeVersion='1.2.2',pid=os.getpid()))
+              emit(c,dict(type='hello',schema=1,version='3.5.91',bridgeVersion='1.2.3',pid=os.getpid()))
               now=time.time()
               row=dict(threadID='1'*24,turnID='2'*24,messageID='3'*24,userMessageID='4'*24,title='Test',status='completed',startedAt=now-10,endedAt=now-3,historical=True,requests=[])
               emit(c,dict(type='snapshot',schema=1,version='3.5.91',sequence=1,baseline=True,observedAt=now,rows=[row]))

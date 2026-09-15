@@ -6,6 +6,7 @@ const os = require('node:os');
 const net = require('node:net');
 const crypto = require('node:crypto');
 const VERSION = '3.5.91', SCHEMA = 1, MAX_FRAME = 1024 * 1024;
+const BRIDGE = '1.2.3', TAG = `notchline-trae-reader-${BRIDGE.replaceAll('.', '-')}`;
 const fingerprints = {
   'out/main.js':'90fda6a0e5b4851a8a060afe1ebef3dbe69403934ab8f5669c98539b95acdf8d',
   'modules/ai-agent/libai_agent.dylib':'2e93b706d711574a717a985bc84c329aa903d9a75b4bcde83e01ce84d2450f6f',
@@ -64,7 +65,7 @@ exports.activate = async function(context) {
   // Never unlink another process's endpoint. A stale PID collision requires manual cleanup.
   if (fs.existsSync(socketPath)) return;
   await vscode.icube.defineComponent(vscode.Uri.joinPath(context.extensionUri, 'bridge-v1.js'));
-  widget = vscode.icube.addIcubeComponentInTitleCenter({tag:'notchline-trae-reader-v1'}, {position:'right'});
+  widget = vscode.icube.addIcubeComponentInTitleCenter({tag:TAG}, {position:'right'});
   const moduleURL = path.join(appRoot, 'node_modules/@byted-icube/ai-modules-chat/dist/index.mjs');
   context.subscriptions.push(widget, widget.onDidReceiveMessage(message => {
     const waiter = pending.get(message?.requestId);
@@ -91,7 +92,7 @@ exports.activate = async function(context) {
             !(q.retainedThreadIDs ?? []).every(id => /^[a-f0-9]{24}$/.test(id))) { client.destroy(); return; }
         retainedThreadIDs = q.retainedThreadIDs ?? [];
         subscribed = true; client.setTimeout(0); clients.add(client);
-        send(client, {type:'hello', schema:SCHEMA, version:VERSION, bridgeVersion:'1.2.2', pid:process.pid});
+        send(client, {type:'hello', schema:SCHEMA, version:VERSION, bridgeVersion:BRIDGE, pid:process.pid});
         void begin(moduleURL);
       } else if (q.op === 'read' && !subscribed && watching) {
         forward({op:'read'}, 800).then(message => {

@@ -169,6 +169,13 @@ struct TraeConformanceTests {
         #expect(!bridge.contains("sendUserDecision")); #expect(!bridge.contains("ahaIpc.connect"))
         #expect(!bridge.contains("stopSession(")); #expect(!bridge.contains("submitChatMessage"))
         #expect(bridge.contains("switchToSession"))
+        // Trae restarts its extension host on install without reloading the window, and the renderer
+        // keeps any custom element already defined: a tag shared across versions ran the old class.
+        let tag = "notchline-trae-reader-" + TraeInstallation.companionVersion.replacingOccurrences(of: ".", with: "-")
+        let extensionSource = try String(contentsOf: root.appendingPathComponent("package/extension/extension.js"), encoding: .utf8)
+        #expect(bridge.contains("const tag = '\(tag)';"))
+        #expect(extensionSource.contains("const BRIDGE = '\(TraeInstallation.companionVersion)'"))
+        #expect(extensionSource.contains("notchline-trae-reader-${BRIDGE.replaceAll('.', '-')}"))
     }
     private func recordedFrames() throws -> [TraeFrame] {
         let file = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
@@ -240,11 +247,11 @@ struct TraeConformanceTests {
         try Data(#"[{"identifier":{"id":"notchline.trae-companion"},"version":"1.1.0"}]"#.utf8).write(to: manifest)
         #expect(installation.registration == .mismatched)
         // Trae's extension host lower-cases VSIX identifiers; the read tolerates any case.
-        try Data(#"[{"identifier":{"id":"NOTCHLINE.TRAE-COMPANION"},"version":"1.2.2"}]"#.utf8).write(to: manifest)
+        try Data(#"[{"identifier":{"id":"NOTCHLINE.TRAE-COMPANION"},"version":"1.2.3"}]"#.utf8).write(to: manifest)
         #expect(installation.registration == .mismatched, "a manifest entry alone cannot prove the package exists")
-        let package = root.appendingPathComponent("notchline.trae-companion-1.2.2/package.json")
+        let package = root.appendingPathComponent("notchline.trae-companion-1.2.3/package.json")
         try FileManager.default.createDirectory(at: package.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.2"}"#.utf8).write(to: package)
+        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.3"}"#.utf8).write(to: package)
         #expect(installation.registration == .current)
         try Data("{".utf8).write(to: package)
         #expect(installation.registration == .unreadable)
@@ -264,13 +271,13 @@ struct TraeConformanceTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let manifest = extensionsDirectory.appendingPathComponent("extensions.json")
         // An unmodelled `metadata` field: removal must rewrite the manifest as loose JSON, not drop it.
-        let companionFolder = extensionsDirectory.appendingPathComponent("notchline.trae-companion-1.2.2")
+        let companionFolder = extensionsDirectory.appendingPathComponent("notchline.trae-companion-1.2.3")
         let otherFolder = extensionsDirectory.appendingPathComponent("someone.else-9.9.9")
         try FileManager.default.createDirectory(at: companionFolder, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
         try Data(#"""
         [
-          {"identifier":{"id":"notchline.trae-companion"},"version":"1.2.2","relativeLocation":"notchline.trae-companion-1.2.2"},
+          {"identifier":{"id":"notchline.trae-companion"},"version":"1.2.3","relativeLocation":"notchline.trae-companion-1.2.3"},
           {"identifier":{"id":"someone.else"},"version":"9.9.9","relativeLocation":"someone.else-9.9.9","metadata":{"pinned":true}}
         ]
         """#.utf8).write(to: manifest)
@@ -280,7 +287,7 @@ struct TraeConformanceTests {
             directory: root,
             extensionsManifest: manifest
         )
-        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.2"}"#.utf8)
+        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.3"}"#.utf8)
             .write(to: companionFolder.appendingPathComponent("package.json"))
         #expect(installation.registration == .current)
         try await installation.remove()

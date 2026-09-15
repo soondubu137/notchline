@@ -2,7 +2,10 @@
 // Never connects/disconnects Aha, invokes event handlers, submits or answers.
 (() => {
   'use strict';
-  const tag = 'notchline-trae-reader-v1';
+  // One tag per companion version. Installing restarts Trae's extension host without reloading the
+  // window, and a defined element cannot be redefined: under a shared tag the previous companion's
+  // class kept running behind the new extension.
+  const tag = 'notchline-trae-reader-1-2-3';
   if (customElements.get(tag)) return;
   const P = globalThis.__notchlineTraeProjectionV1;
   class Reader extends HTMLElement {
