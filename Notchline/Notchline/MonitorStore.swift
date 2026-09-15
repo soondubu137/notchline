@@ -966,6 +966,54 @@ enum PanelMetrics {
     /// collapsed position, so it travels down the row without resizing (`answer-in-notch.md` §3.1).
     static let answerRowHeight: CGFloat = 28
 
+    /// The field grows a line at a time and stops at four, then scrolls inside its ground
+    /// (`answer-in-notch.md` §7.1). One line is ``answerRowHeight``, so an answer that fits moves
+    /// nothing.
+    static let answerFieldFont = NSFont.systemFont(ofSize: 13, weight: .regular)
+    /// The text system's line for ``answerFieldFont``, which is what the field draws with (`16`).
+    static let answerFieldLineHeight: CGFloat = 16
+    static let answerFieldMaximumLines = 4
+    /// `6 + 16 + 6` is the `28` row, and puts the typed baseline on the controls' baseline. The
+    /// vertical half stays still while the lines between it scroll.
+    static let answerFieldTextInset = NSSize(width: 8, height: 6)
+    /// The rail's trailing gap inside the ground, within the text's own `8` pt inset.
+    static let answerFieldRailInset: CGFloat = 3
+
+    static func answerFieldHeight(lines: Int) -> CGFloat {
+        let drawn = min(max(lines, 1), answerFieldMaximumLines)
+        return answerFieldTextInset.height * 2 + CGFloat(drawn) * answerFieldLineHeight
+    }
+
+    /// Where the field's text wraps: the row at the body's wrapping width (``requestBodyWidth``),
+    /// less every control beside it and the `8` before each, less the field's own inset. Fixed
+    /// rather than tracking the view, so the height measured here is the height drawn whether or
+    /// not the list's rail is showing.
+    static func answerFieldTextWidth(besideControls words: [String]) -> CGFloat {
+        let controls = words.reduce(0) { $0 + drawnAnswerControlWidth($1) + 8 }
+        return max(requestBodyWidth - controls - answerFieldTextInset.width * 2, 1)
+    }
+
+    /// Lines the field draws for `text`, at most ``answerFieldMaximumLines``. Laid out by the same
+    /// TextKit 1 stack as ``AnswerFieldView``, in a container only that tall: `0.1` ms for 200
+    /// characters, `3.1` ms for 10,000 (`system-architecture.md` §6).
+    static func answerFieldLineCount(_ text: String, width: CGFloat) -> Int {
+        guard !text.isEmpty else { return 1 }
+        let storage = NSTextStorage(string: text, attributes: [.font: answerFieldFont])
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(
+            size: NSSize(
+                width: width,
+                height: answerFieldLineHeight * CGFloat(answerFieldMaximumLines)
+            )
+        )
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        layout.ensureLayout(for: container)
+        let lines = Int((layout.usedRect(for: container).height / answerFieldLineHeight).rounded(.up))
+        return min(max(lines, 1), answerFieldMaximumLines)
+    }
+
     /// Corner and padding shared by the waiting mark and the answers, which are one object moving.
     /// Height, corner, padding and weight are one set; only the mark's width differs
     /// (``waitingMarkWidth``), for a straight column down a mixed queue.
@@ -2178,6 +2226,37 @@ final class MonitorStore: ObservableObject {
         guard openSession != nil else { return nil }
         return PanelMetrics.openRowFixedHeight + (openRowBody?.drawnHeight ?? 0)
             + (openRequestCount > 1 ? PanelMetrics.requestNavigationHeight + PanelMetrics.sessionRowLineSpacing : 0)
+            + answerFieldHeight - PanelMetrics.answerRowHeight
+    }
+
+    /// The field's height at what it holds (§7.1): ``PanelMetrics/answerRowHeight`` with no field.
+    var answerFieldHeight: CGFloat {
+        guard openAnswerRow?.placeholder != nil else { return PanelMetrics.answerRowHeight }
+        return PanelMetrics.answerFieldHeight(lines: answerFieldLineCount)
+    }
+
+    /// Where the open row's field wraps. `Back` is counted wherever the set has one to show,
+    /// including while a send hides it, so an answer in flight keeps its lines (§8 state 01).
+    var answerFieldTextWidth: CGFloat {
+        guard let shape = openAnswerRow else { return PanelMetrics.requestBodyWidth }
+        let hasBack = openRequest?.askedQuestions.isEmpty == false && openQuestionIndex > 0
+        let words = (hasBack ? ["Back"] : []) + [shape.refusal, shape.affirmative].compactMap { $0 }
+        return PanelMetrics.answerFieldTextWidth(besideControls: words)
+    }
+
+    /// The last field measured, keyed on its inputs like ``laidOutBody``: heights are read a few
+    /// dozen times a frame, and the draft is measured once per edit.
+    private var measuredField: (text: String, width: CGFloat, lines: Int)?
+
+    var answerFieldLineCount: Int {
+        let text = answerDraft
+        let width = answerFieldTextWidth
+        if let measuredField, measuredField.text == text, measuredField.width == width {
+            return measuredField.lines
+        }
+        let lines = PanelMetrics.answerFieldLineCount(text, width: width)
+        measuredField = (text, width, lines)
+        return lines
     }
 
     /// Opens this row's request, or closes it if already open. A row with no request does not
@@ -2271,14 +2350,17 @@ final class MonitorStore: ObservableObject {
         return answerProgress[openRowID]?.draft ?? ""
     }
 
-    /// The field reporting what it now holds, on every edit; the published value changes only
-    /// at the empty/non-empty boundary.
+    /// The field reporting what it now holds, on every edit. Publishes only at the empty/non-empty
+    /// boundary and when the field gains or loses a drawn line (§7.1), never per keystroke.
     func answerDraftChanged(to text: String) {
         guard let openRowID else { return }
         let wasTyped = questionUsesTypedAnswer
+        let hadLines = answerFieldLineCount
         answerProgress[openRowID, default: AnswerProgress()].draft = text
         refreshAnswerGround()
-        if wasTyped != questionUsesTypedAnswer { answerRevision &+= 1 }
+        if wasTyped != questionUsesTypedAnswer || hadLines != answerFieldLineCount {
+            answerRevision &+= 1
+        }
     }
 
     /// Approval controls submit immediately. Question options only change the

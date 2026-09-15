@@ -25375,6 +25375,177 @@ for line in sys.stdin:
         panel.orderOut(nil)
     }
 
+    /// §7.1: one line until the draft needs another, a line at a time after that, and never more
+    /// than four. It publishes when a line comes or goes and never on a keystroke inside one.
+    @Test @MainActor
+    func aLongAnswerGrowsTheFieldALineAtATimeAndStopsAtFour() async throws {
+        let (store, _, row) = answeringStore(request: questionSet(), status: .inputNeeded)
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        let oneLine = try #require(store.openRowHeight)
+        let line = PanelMetrics.answerFieldLineHeight
+        #expect(store.answerFieldHeight == PanelMetrics.answerRowHeight)
+        #expect(PanelMetrics.answerFieldHeight(lines: 1) == PanelMetrics.answerRowHeight)
+
+        var revisions = 0
+        let subscription = store.$answerRevision.dropFirst().sink { _ in revisions += 1 }
+        defer { subscription.cancel() }
+
+        // The first character moves the ground (§6), which is a publish of its own.
+        store.answerDraftChanged(to: "R")
+        let typed = revisions
+        store.answerDraftChanged(to: "Re")
+        store.answerDraftChanged(to: "Render")
+        #expect(revisions == typed, "a keystroke inside a line re-rendered the panel")
+        #expect(store.openRowHeight == oneLine)
+
+        store.answerDraftChanged(to: "Render\nin Europe")
+        #expect(revisions == typed + 1)
+        let twoLines = oneLine + line
+        #expect(store.openRowHeight == twoLines)
+
+        // A line the text system wraps is a line, not only one a return starts.
+        store.answerDraftChanged(to: String(repeating: "photography ", count: 14))
+        #expect(store.answerFieldLineCount > 1)
+        #expect(store.answerFieldLineCount < PanelMetrics.answerFieldMaximumLines)
+
+        store.answerDraftChanged(to: (1 ... 20).map(String.init).joined(separator: "\n"))
+        #expect(store.answerFieldLineCount == PanelMetrics.answerFieldMaximumLines)
+        let capped = oneLine + line * CGFloat(PanelMetrics.answerFieldMaximumLines - 1)
+        #expect(store.openRowHeight == capped)
+
+        store.answerDraftChanged(to: "")
+        #expect(store.openRowHeight == oneLine)
+    }
+
+    /// §8 state 01: nothing resizes in flight. A send hides `Back`, which would widen the field and
+    /// re-break its lines if the width followed the drawn controls rather than the set's slots.
+    @Test @MainActor
+    func anAnswerInFlightKeepsTheFieldsLines() async throws {
+        let (store, service, row) = answeringStore(request: questionSet(), status: .inputNeeded)
+        await service.holdAnswers()
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+        store.takeAnswer(.option(1))
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { store.isAffirmativeArmed && store.openQuestionIndex == 1 })
+        #expect(store.canGoBackAQuestion)
+        let affirmative = try #require(store.openAnswerRow?.affirmative)
+        let withBack = PanelMetrics.answerFieldTextWidth(besideControls: ["Back", affirmative])
+        #expect(store.answerFieldTextWidth == withBack)
+
+        store.answerDraftChanged(to: String(repeating: "Render, but only in Europe. ", count: 8))
+        let width = store.answerFieldTextWidth
+        let height = try #require(store.openRowHeight)
+        store.takeAnswer(.affirmative)
+        #expect(await eventually { await service.isHoldingAnAnswer })
+        #expect(store.isAnswerInFlight)
+        #expect(!store.canGoBackAQuestion)
+        #expect(store.answerFieldTextWidth == width)
+        #expect(store.openRowHeight == height)
+        await service.release(with: .sent)
+    }
+
+    /// Same failure as `everyChangeThatMovesThePanelReachesTheWindow`: a draft changes neither the
+    /// row's identity nor the question, so a new line needs a publish the window hears.
+    @Test @MainActor
+    func aFieldGainingALineResizesThePanelAndReachesTheWindow() async {
+        let (store, _, row) = answeringStore(request: questionSet(), status: .inputNeeded)
+        store.isExpanded = true
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        let publishers = OverlayPanelController.frameChangingPublishers(of: store)
+        var updates = 0
+        let subscription = Publishers.MergeMany(publishers)
+            .dropFirst(publishers.count)
+            .sink { updates += 1 }
+
+        store.answerDraftChanged(to: "Render")
+        let before = store.currentPanelSize
+        updates = 0
+        store.answerDraftChanged(to: "Render\nin Europe")
+        #expect(store.currentPanelSize != before)
+        #expect(updates > 0)
+        subscription.cancel()
+    }
+
+    /// The screenshot defect behind §7.1, against a real field in a real ``OverlayPanel``: the
+    /// ground is as tall as the store reserved, the text breaks where the store measured it, and a
+    /// fifth line scrolls the clip to the caret instead of running out of the ground.
+    @Test @MainActor
+    func aLongAnswerStaysInsideItsGround() async throws {
+        let (store, _, row) = answeringStore(request: questionSet(), status: .inputNeeded)
+        store.toggleOpenRow(row)
+        #expect(await eventually { store.isAffirmativeArmed })
+
+        let host = NSHostingView(rootView: OpenRow(session: row).environmentObject(store))
+        let width = PanelMetrics.sessionViewportWidth(panelWidth: PanelMetrics.expandedBaselineWidth)
+        host.setFrameSize(NSSize(width: width, height: store.openRowHeight ?? 400))
+        let panel = OverlayPanel(
+            contentRect: host.frame,
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        panel.contentView = host
+        func settle() async {
+            for _ in 0 ..< 4 {
+                try? await Task.sleep(for: .milliseconds(20))
+                host.setFrameSize(NSSize(width: width, height: store.openRowHeight ?? 400))
+                host.layoutSubtreeIfNeeded()
+            }
+        }
+        await settle()
+        let field = try #require(findField(host))
+        let clip = try #require(field.enclosingScrollView)
+        let box = try #require(clip.superview as? AnswerFieldBox)
+        // The measurement is TextKit 1; a TextKit 2 view could break a line somewhere else.
+        #expect(field.textLayoutManager == nil)
+        let layout = try #require(field.layoutManager)
+        let container = try #require(field.textContainer)
+        #expect(panel.makeFirstResponder(field))
+
+        let drafts = [
+            "Short",
+            "A software engineer who enjoys photography and the occasional hike. (use something like this)",
+            String(repeating: "A software engineer who enjoys photography and the occasional hike. ", count: 3),
+            (1 ... 9).map { "Line \($0)" }.joined(separator: "\n")
+        ]
+        for draft in drafts {
+            let all = NSRange(location: 0, length: (field.string as NSString).length)
+            field.insertText(draft, replacementRange: all)
+            await settle()
+            #expect(store.answerDraft == draft)
+
+            layout.ensureLayout(for: container)
+            let drawn = Int((layout.usedRect(for: container).height / PanelMetrics.answerFieldLineHeight).rounded(.up))
+            #expect(
+                min(drawn, PanelMetrics.answerFieldMaximumLines) == store.answerFieldLineCount,
+                "the field broke \(draft.prefix(12))… into \(drawn) lines; the store reserved \(store.answerFieldLineCount)"
+            )
+            #expect(box.frame.height == store.answerFieldHeight)
+            #expect(clip.frame == box.bounds.insetBy(dx: 0, dy: PanelMetrics.answerFieldTextInset.height))
+            // The caret is at the end, and the end is inside the clip.
+            #expect(clip.documentVisibleRect.maxY >= field.frame.height - 0.5)
+            if drawn > PanelMetrics.answerFieldMaximumLines {
+                #expect(clip.documentVisibleRect.minY > 0)
+            }
+        }
+
+        // What scrolled above the fold is reachable: the wheel moves the clip back up.
+        let scrolled = clip.documentVisibleRect.minY
+        let wheel = try #require(
+            CGEvent(
+                scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1,
+                wheel1: 40, wheel2: 0, wheel3: 0
+            ).flatMap(NSEvent.init(cgEvent:))
+        )
+        clip.scrollWheel(with: wheel)
+        #expect(await eventually(within: 1) { clip.documentVisibleRect.minY < scrolled })
+        panel.orderOut(nil)
+    }
+
     /// §9.2. Must refuse a modified digit (a character of its own) and a modified arrow (the
     /// caret's).
     @Test @MainActor
