@@ -116,7 +116,7 @@ enum CodexAppServerError: LocalizedError, Equatable, Sendable {
     var errorDescription: String? {
         switch self {
         case .executableNotFound:
-            "Could not find the codex executable shipped with Codex Desktop."
+            "Could not find Codex CLI or the executable shipped with Codex Desktop."
         case let .launchFailed(message):
             "Could not start the Codex App Server: \(message)"
         case .disconnected:
@@ -171,7 +171,10 @@ enum CodexExecutableLocator {
 
         candidates.append(contentsOf: [
             "/Applications/ChatGPT.app/Contents/Resources/codex",
-            "/Applications/Codex.app/Contents/Resources/codex"
+            "/Applications/Codex.app/Contents/Resources/codex",
+            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/codex").path,
+            "/opt/homebrew/bin/codex",
+            "/usr/local/bin/codex"
         ])
 
         if let path = environment["PATH"] {

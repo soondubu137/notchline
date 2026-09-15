@@ -1214,7 +1214,7 @@ struct AntigravityConformanceTests {
         #expect(descriptor.notShown?.hasPrefix("Approvals and questions.") == true)
         #expect(descriptor.notShown?.contains("stopped early may keep reading it") == true)
         #expect(descriptor.notShown?.contains("Usage quota") == true)
-        for kind in [AgentKind.codex, .claudeCode] {
+        for kind in [AgentKind.claudeCode] {
             #expect(ProductRegistry.descriptor(for: kind).watches == nil)
             #expect(ProductRegistry.descriptor(for: kind).notShown == nil)
         }

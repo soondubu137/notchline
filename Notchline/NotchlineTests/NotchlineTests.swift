@@ -7772,7 +7772,7 @@ struct NotchlineTests {
         #expect(antigravity.boundary.map(\.heading) == ["Watches", "Not shown"])
 
         let codex = ProductInfoContent(descriptor: ProductRegistry.descriptor(for: .codex))
-        #expect(codex.boundary.isEmpty)
+        #expect(codex.boundary.map(\.heading) == ["Watches", "Not shown"])
         #expect(codex.setup == [.init(
             heading: "After turning it on",
             text: "Open /hooks in Codex and trust the new definitions."
@@ -16693,12 +16693,12 @@ for line in sys.stdin:
             .compactMap { $0["command"] as? String }
         #expect(lastGroupCommands == [managedCommand])
 
-        // `SessionEnd` is not registered: a launch per session end and one more definition to trust.
+        // CLI lifetime and interruption append three definitions without renumbering the old ones.
         #expect(
             Set(hooks.keys) == [
                 "UserPromptSubmit", "PermissionRequest",
                 "SubagentStart", "SubagentStop",
-                "PreToolUse", "PostToolUse", "Stop"
+                "PreToolUse", "PostToolUse", "Stop", "SessionStart", "SessionEnd", "Interrupt"
             ]
         )
 
@@ -27193,16 +27193,13 @@ for line in sys.stdin:
     /// The one event Claude Code does not deliver in the background: unheard, it prints a
     /// connection-refused warning per session. The official session list covers it.
     @Test @MainActor
-    func neitherProductRegistersSessionEnd() {
-        for vocabulary in [
-            ClaudeCodeHookVocabulary() as any AgentHookVocabulary,
-            CodexHookVocabulary()
-        ] {
-            let registered = Set(vocabulary.managedDefinitions.map(\.event))
-            #expect(!registered.contains("SessionEnd"))
-            #expect(registered.contains("Stop"))
-        }
-        // Codex registered it before, so unrepaired installs still fire it; consumed, not reported.
+    func sessionEndIsRegisteredOnlyWhereItSuppliesExecutionOwnership() {
+        let claude = Set(ClaudeCodeHookVocabulary().managedDefinitions.map(\.event))
+        let codex = Set(CodexHookVocabulary().managedDefinitions.map(\.event))
+        #expect(!claude.contains("SessionEnd"))
+        #expect(codex.contains("SessionEnd"))
+        #expect(claude.contains("Stop") && codex.contains("Stop"))
+        // SessionEnd affects ownership, never Turn completion.
         #expect(
             CodexHookVocabulary().signal(forEvent: "SessionEnd", toolName: nil)
                 == .inert
@@ -27213,7 +27210,7 @@ for line in sys.stdin:
         )
         // The frozen-definition contract pins this exact set: change it and Codex silently stops
         // running it until re-trusted.
-        #expect(CodexHookVocabulary().managedDefinitions.count == 7)
+        #expect(CodexHookVocabulary().managedDefinitions.count == 10)
     }
 
     /// CC-011, measured on 2.1.238 (seven pty sessions): `permission_prompt` has no id and arrives
@@ -27388,7 +27385,7 @@ for line in sys.stdin:
     /// ADR 0004's exact-thread release gate applies to Codex only: Claude Code has no supported way
     /// to focus an existing session.
     @Test @MainActor
-    func exactNavigationRemainsARequirementForCodexOnly() async throws {
+    func desktopCodexNavigationAndTerminalNavigationReportTheirOwnOutcomes() async throws {
         let codexOutcome = try await AgentNavigationRouter([
             .codex: AgentNavigatorStub()
         ]).open(makeSession(agent: .codex, threadID: "t"))

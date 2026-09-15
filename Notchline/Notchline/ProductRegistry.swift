@@ -141,18 +141,24 @@ enum ProductRegistry {
     static let builtIn: [ProductDescriptor] = [
         ProductDescriptor(
             kind: .codex,
-            settingsTitle: "Codex Desktop",
+            settingsTitle: "Codex",
             setup: .managedHooks(SetupDescription(
                 configurationFileRelativeToHome: ".codex/hooks.json",
                 definitionCount: CodexHookVocabulary().managedDefinitions.count,
                 trustStep: "open /hooks in Codex and trust the new definitions",
                 connectedDetail: "compatible version"
             )),
+            watches: "Codex Desktop and local interactive Codex CLI terminals.",
+            notShown: "CLI read removal and exact terminal navigation. Remote and daemon connections, exec, "
+                + "custom CODEX_HOME, SSH and terminal multiplexers.",
             make: {
-                let service = LiveCodexMonitorService(connectionMonitor: ProductInstallationDiscovery.live(.codex))
+                let surfaces = CodexSurfaceLedger()
+                let service = LiveCodexMonitorService(
+                    connectionMonitor: ProductInstallationDiscovery.live(.codex), surfaces: surfaces
+                )
                 return ProductModule(
                     service: service,
-                    navigator: CodexDesktopNavigator(targetChecker: service)
+                    navigator: CodexNavigator(surfaces: surfaces, desktop: CodexDesktopNavigator(targetChecker: service))
                 )
             }
         ),

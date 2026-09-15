@@ -215,7 +215,7 @@ The settings window ~~is a single panel with no sidebar~~ is three toolbar panes
 
 With one product running the setting stays visible but has no effect. Hiding it would make it unfindable at exactly the moment a user is preparing to connect a second product.
 
-The two integration switches no longer take a group each: `Codex Desktop` and `Claude Code` are two rows in the `Products` card, each with a switch, sharing one footnote and one `Recheck` button. A third product therefore costs one row.
+The two integration switches no longer take a group each: `Codex` and `Claude Code` are two rows in the `Products` card, each with a switch, sharing one footnote and one `Recheck` button. A third product therefore costs one row.
 
 ### 6.1 The Claude Code product row
 
@@ -269,7 +269,7 @@ That source is written by the CLI itself, so it works for every Claude Code user
 
 ### 7.3 Project
 
-See [ADR 0009](adr/0009-resolve-project-per-product.md). Project is resolved per product: a Codex row's is the user-created Desktop Project or `Chats`; a Claude Code row's is the thread's working directory (`cwd`), showing the last path component in-row with the full `cwd` as the accessibility name. [ADR 0003](adr/0003-use-codex-desktop-project-identity.md)'s ban on path inference now binds only the Codex side — its reasoning was that paths do not map one-to-one onto Desktop Projects, whereas Claude Code's `cwd` *is* that product's grouping unit.
+See [ADR 0009](adr/0009-resolve-project-per-product.md). Project is resolved per product: a Codex Desktop row's is the user-created Desktop Project or `Chats`, while a local CLI row uses its native `cwd` grouping; a Claude Code row's is the thread's working directory (`cwd`), showing the last path component in-row with the full `cwd` as the accessibility name. [ADR 0003](adr/0003-use-codex-desktop-project-identity.md)'s ban on path inference now binds only the Codex side — its reasoning was that paths do not map one-to-one onto Desktop Projects, whereas Claude Code's `cwd` *is* that product's grouping unit.
 
 ## 8. Open items
 
@@ -436,3 +436,5 @@ Concurrent requests remain attributed to their original product and Thread. The 
 ## Fourth product: Trae
 
 The registry now orders Codex, Claude Code, Antigravity and Trae. Trae uses the same neutral product-name attribution and the user’s theme ink. Its L5 local IDE rows join the existing status sort and summary; it contributes no quota window, token total or subagent count. No new product colour, footer gauge or status is introduced. Its exact scope is in [product-support.md](product-support.md).
+
+Codex Desktop and CLI retain one product badge and one default-account quota reading. Concurrent terminals do not create extra quota rows or add the same account usage twice. API-key/custom-provider Turns are not evidence of ChatGPT quota usage; the footer remains the account reading, or unavailable.

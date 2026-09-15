@@ -331,7 +331,13 @@ nonisolated enum ProductInstallationDiscovery {
         return ProductConnectionMonitor(wakeups: wakeups) {
             switch agent {
             case .codex:
-                return await application(bundleID: CodexDesktopNavigator.desktopBundleIdentifier, name: "Codex")
+                let desktop = await application(bundleID: CodexDesktopNavigator.desktopBundleIdentifier, name: "Codex")
+                let command = await Task.detached { Self.command(named: "codex") }.value
+                var instances: [ProductInstallationInstance] = []
+                if case let .found(found) = desktop { instances = found }
+                if let command { instances.append(.init(url: command, version: nil, surface: "CLI")) }
+                if !instances.isEmpty { return .found(instances) }
+                return desktop
             case .trae:
                 return await application(bundleID: "com.trae.app", name: "Trae")
             case .claudeCode:

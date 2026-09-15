@@ -602,12 +602,14 @@ final class ProcessHostNavigator: AgentNavigating {
     private let activator: any HostApplicationActivating
     private let tabs: any TerminalTabFocusing
     private let controllingTerminalPath: @Sendable (Int32) -> String?
+    private let allowsTerminalFocus: @Sendable (String, Int32) -> Bool
 
     init(
         sessions: any SessionProcessLocating,
         hosts: any SessionHostResolving = ProcessAncestryHostResolver(),
         activator: (any HostApplicationActivating)? = nil,
         tabs: (any TerminalTabFocusing)? = nil,
+        allowsTerminalFocus: @escaping @Sendable (String, Int32) -> Bool = { _, _ in true },
         controllingTerminalPath: @escaping @Sendable (Int32) -> String? = {
             ControllingTerminalGestureReader
                 .systemControllingTerminalPath(forProcessIdentifier: $0)
@@ -618,6 +620,7 @@ final class ProcessHostNavigator: AgentNavigating {
         self.activator = activator ?? AppKitHostApplicationActivator()
         self.tabs = tabs ?? AppleEventsTerminalTabFocuser()
         self.controllingTerminalPath = controllingTerminalPath
+        self.allowsTerminalFocus = allowsTerminalFocus
     }
 
     @discardableResult
@@ -639,7 +642,7 @@ final class ProcessHostNavigator: AgentNavigating {
             }
             return .raisedApplication(host: Self.desktopDisplayName)
         case let .terminal(application):
-            if let device = controllingTerminalPath(pid),
+            if allowsTerminalFocus(session.threadID, pid), let device = controllingTerminalPath(pid),
                await tabs.focusTab(withTerminalDevice: device, in: application) == .focused {
                 return .focusedTerminal(host: application.displayName)
             }

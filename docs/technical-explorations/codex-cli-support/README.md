@@ -1,14 +1,17 @@
 # Codex CLI support — implementation plan and isolated evidence
 
+> Implementation update, 2026-09-15: the current contract is in [product support](../../product-support.md#51-local-codex-cli). Native timing showed that `/new` delays SessionStart until the next submission; the proposed current-view/read/TTY-navigation inference below was rejected. The implementation uses host return only and no CLI read judgement. Home identity uses an open `state_5.sqlite` descriptor because this macOS does not return process environment through KERN_PROCARGS2. The remainder is the historical preflight record.
+
+
 | Field | Value |
 | --- | --- |
-| Status | Proposed; isolated CLI probes completed, no production implementation or new support level |
+| Status | Historical proposal; implementation and corrected boundaries are linked above |
 | Verified | 2026-09-14, macOS 26.6.2, standalone `codex-cli 0.154.0` |
 | Baseline | `af903a2`, branch `feature/codex_cli_integration` |
 | Objective | Support ordinary local Codex CLI alongside Desktop, reusing Codex protocol handling and the shared monitoring model |
 | Recommended first route | Live Hooks plus an independent App Server for metadata and persisted content; terminal evidence for the local CLI |
 
-This is an executable proposal, not an amendment to the current [support contract](../../product-support.md). The current contract still excludes standalone Codex CLI. The [glossary](../../../CONTEXT.md) owns terminology. Proposed changes to its Desktop-only Codex rules are identified below and must land with the implementation.
+This records the preflight proposal, not the current [support contract](../../product-support.md). At preflight, that contract excluded standalone Codex CLI. The [glossary](../../../CONTEXT.md) owns terminology. Proposed changes to its Desktop-only Codex rules are identified below and must land with the implementation.
 
 ## 1. Proposed scope
 

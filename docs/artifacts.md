@@ -83,3 +83,7 @@ Sparkle ([ADR 0022](adr/0022-update-through-sparkle-signed-with-our-own-certific
 Replacing the bundle keeps its path, so nothing else in this inventory moves: hook helpers are rewritten when their bytes differ from the new build's, and the sockets and records under `Application Support` are the new build's to reuse.
 
 The repository carries two related files the app never writes: `appcast.xml`, the feed every copy reads from `master`, and `scripts/release/designated-requirement.txt`, the requirement every release must satisfy.
+
+## Codex CLI extension (2026-09-15)
+
+No additional persistent artefact is created. Desktop and local CLI share the existing Codex helper, socket, registration and `~/.codex/hooks.json`; three lifecycle definitions are appended. Process identities and Thread owners are memory-only and cleared on disconnect. The adapter reads open-file paths to identify `.codex/state_5.sqlite` but never opens, parses or writes that database. No launcher, wrapper, daemon or terminal profile is installed.

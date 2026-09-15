@@ -6,11 +6,12 @@ This is the support contract, adopted on 2026-09-12. It replaces the former thre
 
 ## Current support at a glance
 
-Documentation checked on **2026-09-13** against the current implementation and retained acceptance records. This date does not mean every native product was retested that day. The levels below apply to the stated scope; §3 lists each request form and §5 lists the independent capabilities and operating conditions.
+Documentation checked on **2026-09-15** against the current implementation and retained acceptance records. This date does not mean every native product was retested that day. The levels below apply to the stated scope; §3 lists each request form and §5 lists the independent capabilities and operating conditions.
 
 | Product and scope | Declared level | What the level covers | Key boundary |
 | --- | --- | --- | --- |
-| **Codex Desktop** | **L6 — Request answering** | Lifecycle, Project/title, progress, approval/input waits, request reading and ordinary approval decisions | Synchronous questions and `request_permissions` are reading-only; asynchronous questions are preview-only. This declaration does not cover standalone Codex CLI |
+| **Codex Desktop** | **L6 — Request answering** | Lifecycle, Project/title, progress, approval/input waits, request reading and ordinary approval decisions | Synchronous questions and `request_permissions` are reading-only; asynchronous questions are preview-only. Local CLI has a separate declaration below |
+| **Codex CLI — ordinary local interactive terminals** | **L6 — scoped request answering** | Lifecycle, folder/title, current-Turn progress and ordinary command approval decisions | Default home and verified local TUI only. Synchronous questions are reading-only; automatic read removal and exact terminal navigation are unsupported; §5.1 states native limits |
 | **Claude Code — Desktop and CLI** | **L6 — Request answering** | Lifecycle, folder/title, progress, approval/input waits, tool and plan approvals, and question-set answers | Answers depend on the request's live connection and permitted operations; host navigation and read removal have separate conditions |
 | **Antigravity — Desktop and CLI** | **L3 — Progress monitoring** | Observed lifecycle and elapsed time, context and event-updated progress | No approval/input wait detection, request reading or answering. Desktop cancellation has no observed end event; progress may wait for a long tool call |
 | **Trae Desktop — local IDE/V2 root Threads** | **L5 — Request reading** | Lifecycle, folder/title, displayed root progress, ordinary manual command approvals and structured questions | Verified **3.5.91** build only; requests must be answered in Trae |
@@ -54,9 +55,9 @@ L6 is scoped to the supported forms; it does not mean every request in the produ
 | Product and native form | Detection and reading | Answers from the notch |
 | --- | --- | --- |
 | Codex: ordinary `PermissionRequest` | Approval wait and supplied request fields | Grant or refuse, with optional refusal text, while its hook connection is held |
-| Codex: `request_permissions` | Approval wait and supplied request fields | Unsupported: its `PreToolUse` observation holds no answer connection |
+| Codex Desktop: `request_permissions` | Approval wait and supplied request fields | Unsupported: its `PreToolUse` observation holds no answer connection |
 | Codex: synchronous `request_user_input` | Input wait; question sets with optional choices | Unsupported: the hook encoding accepts no question answers; answer in Codex |
-| Codex: `request_user_input_async` | Question text retained as a preview; **no blocking input wait** is asserted | Unsupported: the Desktop card outlives the hook call and this app has no answer connection to it |
+| Codex Desktop: `request_user_input_async` | Question text retained as a preview; **no blocking input wait** is asserted | Unsupported: the Desktop card outlives the hook call and this app has no answer connection to it |
 | Claude Code: `PermissionRequest` | Approval wait; supplied tool arguments | Grant or refuse, with optional refusal text |
 | Claude Code: `ExitPlanMode` | Plan approval and document | Accept or send back, with text where accepted |
 | Claude Code: `AskUserQuestion` | Input wait; question sets and labelled options | Single or multiple selections as requested, free text and supported per-question notes |
@@ -115,6 +116,24 @@ Antigravity's two surfaces are one engine reading one `~/.gemini/config/hooks.js
 
 Trae is pinned to the verified 3.5.91 application fingerprints. Local IDE/V2 persistent root Threads are supported. IDE-hosted SOLO remains outside the declared L5 coverage, although [native boundary tests](technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md) confirm ordinary local lifecycle and structured-question behaviour. All 22 captured SOLO frames had no preview text: the current reader did not project the tested final answer from `finish.params.summary`. The harmless command ran in the sandbox without a manual wait, so SOLO command-approval acceptance remains unverified. These are separate limits, not proof that SOLO is wholly unobservable. It is distinct from standalone SoloLite; the latter, remote workspaces, Plan/Spec and child activity are excluded. Initial snapshots admit no historical or already-running Turn. Observation loss hides rows without inferring completion; deletion is not a retirement source. Read removal uses fresh per-window evidence in IDE and IDE-hosted SOLO; unreadable or obscured completion controls retain the row. Auxiliary windows and exhaustive OS occlusion remain unverified. The [implementation and native acceptance record](trae-integration.md) states setup, source limits and verification.
 
+### 5.1 Local Codex CLI
+
+The ordinary local interactive CLI is a second surface of the existing Codex product, with one settings switch and account reader. Native acceptance used **0.154.0**, a temporary home, pseudo-terminals and a deterministic localhost model; it did not use user credentials or alter the user's configuration.
+
+| Capability | CLI scope and boundary |
+| --- | --- |
+| Lifecycle and presence | Live submit, Stop and exact Interrupt; process exit retires ownership without claiming completion. Multiple terminals and `/new` retain independent Thread ownership. No cold-start recovery |
+| Context and progress | Native `cwd` grouping, shared missing-folder fallback; public Thread title/preview fallback. Turn-scoped persisted agent messages supply progress; native approval wait displayed the current Turn's progress. Final preview comes from Stop |
+| Ordinary command approval | Native grant and refusal verified through the production listener, Provider and held Hook answer channel. Grant executed a harmless printf and produced PostToolUse; refusal produced no execution and later Stop |
+| Synchronous questions | Wait detection and question-set reading; answer in Codex. Native CLI form verified during preflight; exact interruption/wait clearing is covered by integration tests |
+| Other requests and subagents | Existing projections remain available where native evidence arrives, but asynchronous questions, `request_permissions`, automatic-review CLI mode and subagent request variants have no new standalone acceptance claim |
+| Read removal | Unsupported: `/new` delays SessionStart until the next prompt, so Hooks cannot prove the current view. Keep the row until manual dismissal, next submission or loss of ownership. Desktop unread absence has no authority here |
+| Navigation | Verified host return only, conditional on host reachability. TTY selection is disabled because the displayed Thread cannot be confirmed. Never starts `resume` or another CLI; no terminal focus/read acceptance is claimed |
+| Quota and tokens | One shared default-account reading; no second counting for CLI. API-key/custom-provider work does not prove ChatGPT quota use. Authenticated quota was not tested by the credential-free native probes |
+| Excluded modes | Remote/daemon/agents, exec/SDK/piped runs, SSH/tmux/screen, custom homes and unrecognised invocation options. Independent App Server runtime status never supplies a TUI lifecycle |
+
+Both installed Hook parsers accepted the ten managed definitions: standalone `0.154.0` and Desktop-bundled `0.154.0-alpha.6.2`. The native probe used a one-invocation trust bypass only for its own vetted temporary definitions; production still requires normal `/hooks` review. Shared-owner, stale PID, wrong Thread, late SessionEnd, duplicate request-owner and absent Desktop cases are covered by [CodexCLIIntegrationTests](../Notchline/NotchlineTests/CodexCLIIntegrationTests.swift).
+
 ## 6. Implementation and verification
 
 The shared entry is now typed `MonitoringEvidence` into `MonitoringRepository`; `HookEvidenceBoundary` interprets native Hooks before submission. `ProductMonitoringRuntime` accepts any `MonitoringLifecycleSource`, with `HookProductProvider` supplying the Hooks composition. [MonitoringEvidenceConformanceTests](../Notchline/NotchlineTests/MonitoringEvidenceConformanceTests.swift) verify lifecycle, progress, wait projection/resolution, subagent isolation and observation-epoch rejection through a source with no Hooks, JSON or socket. The five packages in [the implementation plan](product-generalisation-plan.md) are implemented; its follow-up conformance record distinguishes the original fixtures from the completed standalone-request, identity and reading-only coverage.
@@ -144,3 +163,5 @@ Generalisation package 5 adds explicit no-setup configuration, optional source o
 The generalisation follow-up lets reading-only question sets browse every question and lets a row select any of its concurrent requests without answering. Drafts and question positions are isolated per request occurrence. A native request may have no associated tool call. Optional scheduled reads complete behind held values and cannot hold lifecycle refresh. These changes add no native event source, answer operation or product support level.
 
 Connection status is independent of support coverage. A product that is not installed, not set up or not open is not faulty; see [Product connection checks](product-connections.md) for the shared runtime display rules.
+
+CLI implementation validation (2026-09-15): the full unit suite passed with **1,013 tests**, zero failures and zero skips using `-parallel-testing-enabled NO`. An earlier parallel run had four unchanged option/panel arming tests time out; the complete serial run passed them. Native lifecycle, progress and approval round trips used the actual production listener and Provider with an isolated CLI and localhost model. The default-home Desktop process check admitted Desktop's server and excluded Notchline's independent server.

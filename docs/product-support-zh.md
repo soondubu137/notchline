@@ -6,11 +6,12 @@
 
 ## 当前支持速览
 
-文档于 **2026-09-13** 对照当前实现及保留的验收记录核对。此日期不代表当天重新实测了所有原生产品。以下等级仅适用于声明的范围；第 3 节逐项列出请求形态，第 5 节列出独立能力及使用条件。
+文档于 **2026-09-15** 对照当前实现及保留的验收记录核对。此日期不代表当天重新实测了所有原生产品。以下等级仅适用于声明的范围；第 3 节逐项列出请求形态，第 5 节列出独立能力及使用条件。
 
 | 产品与范围 | 已声明等级 | 等级覆盖的功能 | 主要边界 |
 | --- | --- | --- | --- |
-| **Codex Desktop** | **L6 — 请求回答** | 生命周期、Project/标题、进展、审批/输入等待、请求阅读及普通审批决定 | 同步问题和 `request_permissions` 只读，异步问题仅预览；此声明不覆盖独立 Codex CLI |
+| **Codex Desktop** | **L6 — 请求回答** | 生命周期、Project/标题、进展、审批/输入等待、请求阅读及普通审批决定 | 同步问题和 `request_permissions` 只读，异步问题仅预览；本地 CLI 的支持范围在下方单独声明 |
+| **Codex CLI — 普通本地交互式终端** | **L6 — 限定范围的请求回答** | 生命周期、目录/标题、当前 Turn 进展及普通命令审批决定 | 仅默认 home 和经验证的本地 TUI；同步问题只读，不支持自动已读退役和精确终端导航，原生验证边界见 §5.1 |
 | **Claude Code — Desktop 与 CLI** | **L6 — 请求回答** | 生命周期、文件夹/标题、进展、审批/输入等待、工具和计划审批、问题集回答 | 回答取决于请求的实时连接及允许操作；宿主导航和已读后移除另有条件 |
 | **Antigravity — Desktop 与 CLI** | **L3 — 进展监测** | 已观察到的生命周期与经过时间、上下文及事件触发的进展更新 | 不识别审批/输入等待，不支持请求阅读或回答；Desktop 取消没有可观察的结束事件，长时间工具调用可能延迟进展更新 |
 | **Trae Desktop — 本地 IDE/V2 根 Thread** | **L5 — 请求阅读** | 生命周期、文件夹/标题、已显示的根 Thread 进展、普通手动命令审批及结构化问题 | 仅限已验证的 **3.5.91** 构建；须在 Trae 中回答请求 |
@@ -54,9 +55,9 @@ L6 仅适用于已支持的形态，不代表产品中的每个请求都能回�
 | 产品及原生形态 | 识别与阅读 | 从刘海回答 |
 | --- | --- | --- |
 | Codex：普通 `PermissionRequest` | 审批等待及所提供的请求字段 | 在 hook 连接保持有效期间批准或拒绝；拒绝时可附带文本 |
-| Codex：`request_permissions` | 审批等待及所提供的请求字段 | 不支持：其 `PreToolUse` 观察路径不持有回答连接 |
+| Codex Desktop：`request_permissions` | 审批等待及所提供的请求字段 | 不支持：其 `PreToolUse` 观察路径不持有回答连接 |
 | Codex：同步 `request_user_input` | 输入等待；可附带选项的问题集 | 不支持：hook 编码不接受问题答案，须在 Codex 中回答 |
-| Codex：`request_user_input_async` | 保留问题文本作为预览；**不据此认定存在阻塞式输入等待** | 不支持：Desktop 中的卡片在 hook 调用结束后仍然存在，本应用没有连接到该卡片的回答通道 |
+| Codex Desktop：`request_user_input_async` | 保留问题文本作为预览；**不据此认定存在阻塞式输入等待** | 不支持：Desktop 中的卡片在 hook 调用结束后仍然存在，本应用没有连接到该卡片的回答通道 |
 | Claude Code：`PermissionRequest` | 审批等待；所提供的工具参数 | 批准或拒绝；拒绝时可附带文本 |
 | Claude Code：`ExitPlanMode` | 计划审批及文档 | 接受或退回；原产品接受附带文本时可提交文本 |
 | Claude Code：`AskUserQuestion` | 输入等待；问题集和带标签的选项 | 按请求要求单选或多选、输入自由文本，以及附加受支持的逐题备注 |
@@ -115,6 +116,24 @@ Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/h
 
 Trae 固定到已验证的 3.5.91 应用文件指纹。支持本地 IDE/V2 中持久存在的根 Thread。IDE 内的 SOLO 仍不纳入已声明的 L5 覆盖，尽管[原生边界测试](technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md)已确认普通本地生命周期及结构化问题能力。捕获的 22 帧 SOLO 数据均没有预览文本：当前读取器没有投影测试中位于 `finish.params.summary` 的最终答案。无害命令直接在沙箱中执行，没有进入手动等待，因此 SOLO 命令审批的原生验收仍未完成。这是两项独立限制，不代表 SOLO 完全无法观察。它与独立 SoloLite 不同；后者、远程工作区、Plan/Spec 和子级活动仍被排除。初始快照不会准入历史或已经运行的 Turn。失去观察时隐藏监测行，不推断完成；删除不是移除来源。IDE 与 IDE 内 SOLO 的已读移除使用新鲜的逐窗口证据；完成控件无法确认或被遮挡时保留条目。辅助窗口及完整的操作系统遮挡检测仍未验证。[实现及原生验收记录](trae-integration.md)说明安装方式、来源限制和验证。
 
+### 5.1 本地 Codex CLI
+
+普通本地交互式 CLI 是现有 Codex 产品的第二个端，共用一个设置开关和账户读取器。原生验收使用 **0.154.0**、临时 home、伪终端及确定性的本机模型服务；未使用用户凭据，也未修改用户配置。
+
+| 能力 | CLI 范围与边界 |
+| --- | --- |
+| 生命周期与运行存在 | 实时提交、Stop 和精确 Interrupt；进程退出仅退役其归属，不据此认定完成。多个终端及 `/new` 保留独立的 Thread 归属；不恢复启动前状态 |
+| 上下文与进展 | 使用原生 `cwd` 分组及共用的缺失目录回退，标题沿用公开 Thread 名称/预览回退。按 Turn 读取已持久化的 agent 消息；原生审批等待期间已显示当前 Turn 的进展。最终预览来自 Stop |
+| 普通命令审批 | 已通过生产 listener、Provider 和保持的 Hook 回答通道验证批准与拒绝。批准执行了无副作用的 printf 并产生 PostToolUse；拒绝未执行命令，随后出现 Stop |
+| 同步问题 | 检测等待并阅读问题集，须在 Codex 中回答。原生 CLI 表单在预检阶段验证；精确取消与等待清理由集成测试覆盖 |
+| 其他请求与子代理 | 收到原生证据时仍可使用既有投影，但本轮未新增异步问题、`request_permissions`、CLI 自动审查模式及子代理请求变体的独立验收声明 |
+| 已读退役 | 不支持：`/new` 直到下一次提交才产生 SessionStart，Hooks 无法证明当前视图。保留行直到手动移除、下一次提交或失去执行归属；Desktop 未读集合的缺席无权退役 CLI 行 |
+| 导航 | 仅返回经验证的宿主，取决于宿主是否可达。由于无法确认当前显示的 Thread，禁用 TTY 选择；绝不启动 `resume` 或另一 CLI，也不声明已验证终端焦点/已读行为 |
+| 配额与 token | 共用默认账户的一次读取，不因 CLI 重复计数。API key/自定义服务的工作不证明消耗了 ChatGPT 配额；无凭据原生探针未验证登录后的配额行为 |
+| 排除模式 | remote/daemon/agents、exec/SDK/管道、SSH/tmux/screen、自定义 home 及无法识别的启动选项。独立 App Server 的运行状态从不决定 TUI 生命周期 |
+
+本机两个 Hook 解析器均接受十个受管定义：独立 `0.154.0` 和 Desktop 内置 `0.154.0-alpha.6.2`。原生探针仅为已审查的临时定义使用单次信任绕过；生产仍要求正常 `/hooks` 审查。共享归属、过期 PID、错误 Thread、迟到 SessionEnd、重复请求归属及 Desktop 缺席由 [CodexCLIIntegrationTests](../Notchline/NotchlineTests/CodexCLIIntegrationTests.swift) 覆盖。
+
 ## 6. 实现与验证
 
 共享入口现在是提交到 `MonitoringRepository` 的有类型 `MonitoringEvidence`；`HookEvidenceBoundary` 在提交前解释原生 Hooks。`ProductMonitoringRuntime` 接受任意 `MonitoringLifecycleSource`，`HookProductProvider` 提供 Hooks 组合。[MonitoringEvidenceConformanceTests](../Notchline/NotchlineTests/MonitoringEvidenceConformanceTests.swift) 使用不依赖 Hooks、JSON 或 socket 的来源，验证生命周期、进展、等待投影与解除、subagent 隔离和旧观察周期事件拒绝。[实施计划](product-generalisation-plan.md)中的五个工作包已实现；后续验收记录区分了最初的测试证据与补齐后的独立请求、身份隔离和只读浏览覆盖。
@@ -146,3 +165,5 @@ Trae 固定到已验证的 3.5.91 应用文件指纹。支持本地 IDE/V2 中�
 泛化补齐后，只读问题集可浏览所有问题，同一行也可切换任一并发请求，浏览本身不提交答案。草稿和问题浏览位置按请求实例隔离；原生请求可以没有关联工具调用。可选定时读取在后台完成，以已持有的可信值参与当前刷新，不阻塞生命周期刷新。这些改动不增加原生事件来源、回答操作或产品支持等级。
 
 连接状态独立于支持范围。产品未安装、未设置或未打开不属于故障；统一的运行时展示规则见[产品连接检查](product-connections.md)。
+
+CLI 实现验证（2026-09-15）：使用 `-parallel-testing-enabled NO`，完整单元测试 **1,013 项通过**，零失败、零跳过。较早的并行运行中，四个未修改的选项/面板确认激活测试曾超时；完整串行运行全部通过。原生生命周期、进展及审批往返使用实际生产 listener 和 Provider，连接独立 CLI 与本机模型。默认 home 下的 Desktop 进程检查确认了 Desktop 自己的 server，并排除了 Notchline 的独立 server。

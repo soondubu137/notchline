@@ -258,7 +258,7 @@ From `dff7d66` (2026-08-23) until this was split out, both products handed `term
 - Monitor every Project and `Chats` under the current Desktop account, without following the sidebar selection.
 - An active Turn is always shown; a terminal Turn is shown only while Desktop marks it unread.
 - Read, archived, deleted or no longer navigable leaves the list immediately.
-- Subagents, exec runs and standalone CLI/IDE sessions are never top-level rows.
+- Subagents, exec runs and IDE sessions are never top-level rows. Ordinary local CLI roots are admitted only through validated live ownership.
 - A click must reach exactly the same Desktop Thread; opening the home page is not success.
 - Launch shows no cached rows and rebuilds no pre-launch session; the list starts empty and accumulates only Turns producing lifecycle events after launch.
 - Previews are always shown (the former global switch is deleted, PRD §7).
@@ -1253,3 +1253,15 @@ Companion 1.1.0 adds a short-lived `read` connection beside the sole lifecycle w
 ## Connection check interfaces
 
 `AgentMonitoring.recheckConnection()` invalidates read-only check caches. Providers attach `ProductConnectionFacts` to `AgentSnapshot`; `ProductConnectionNotice` carries severity and scope and `ProductConnectionAction` names explicit repair, recheck or removal retry. `MonitorStore` keeps intent in existing preferences and serialises mutations with its existing per-product convergence tasks. Late refreshes cannot republish a disabled product. The presentation does not parse diagnostic text. See [Product connection checks](product-connections.md).
+
+## Codex local CLI boundary (2026-09-15)
+
+`CodexProcessSource` captures `LOCAL_PEERPID` while the unchanged shell/nc helper waits. A bounded ancestry walk classifies a known standalone TUI or Desktop-owned app-server; an independent metadata app-server is not an execution owner. `KERN_PROCARGS2` supplies argv only: macOS 26.6.2 did not return envp in the native probe. `proc_pidfdinfo` instead confirms the execution holds exactly the expected `.codex/state_5.sqlite`, without opening or parsing it. Missing, changed or conflicting homes fail closed. These observed topology/file dependencies are [registered](non-public-codex-integration-features.md).
+
+`CodexSurfaceLedger` records execution identity without claiming a current view. Session end tombstones reject late activity; a new SessionStart can establish a new binding. The Provider drains the ordered inbox, validates live owners and asks the sole `MonitoringRepository` to retain only owned Threads, without the grace used for lagging metadata listings and without resetting other owners' epochs. A second live executor cannot provide a request handle for the same Turn. Process inventory is cached for five seconds; hook capture and navigation validate their named processes directly.
+
+Desktop Project/unread/approval fallback remains Desktop-only. CLI context comes from native `cwd`; Turn-scoped rollout reviewer evidence may still subtract automatic approvals, but Desktop's map cannot do so for CLI. CLI rows receive no read judgement and are never judged by Desktop unread absence. `CodexNavigator` routes Desktop deep links and CLI host return; TTY selection is disabled because the current Thread cannot be verified. The App Server still provides only metadata, persisted progress and shared account usage; `notLoaded` never closes a CLI Turn.
+
+**Current-view inference rejected after native timing validation.** On 2026-09-15, `/new` was submitted at 1789498050.33; the new SessionStart arrived at 1789498053.65, only after the next prompt at 1789498053.32. Thus neither SessionStart nor UserPromptSubmit supplies a reliable ongoing display binding. Focus reporting exists but cannot repair that identity gap. The preliminary plan's automatic read/TTY navigation path was withdrawn before shipping.
+
+The live Desktop provenance check also confirmed a global `-c` override before `app-server`. Role parsing skips recognised global options before identifying that subcommand. The same probe admitted the Desktop-owned server and rejected the independent server whose parent was Notchline.

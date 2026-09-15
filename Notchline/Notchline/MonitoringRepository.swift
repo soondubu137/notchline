@@ -338,6 +338,15 @@ actor MonitoringRepository {
         return snapshot(didConsumeEvents: didConsumeEvents)
     }
 
+    /// Native execution ownership, unlike a metadata listing, needs no new-Turn grace.
+    /// Called after draining the inbox and reading all currently live owners.
+    func retainOwnedThreads(_ threadIDs: Set<String>, didConsumeEvents: Bool) -> MonitoringStateSnapshot {
+        turnsByThreadID = turnsByThreadID.filter { threadIDs.contains($0.key) }
+        reconcileAnswerHandles()
+        signalIfProjectionChanged()
+        return snapshot(didConsumeEvents: didConsumeEvents)
+    }
+
     /// A channel restart ends live observation without revoking facts about
     /// unchanged native setup. Removal/repair also resets boundary bookkeeping.
     func resetIntegrationObservation(clearTurns: Bool, preserveBoundaryObservation: Bool = false) {
@@ -630,6 +639,8 @@ actor MonitoringRepository {
                 $0.waits.resolve(requestID: requestID, revision: event.requestRevision)
                 $0.deriveStatus()
             }
+        case .turnInterrupted:
+            endOpenTurn(ofThread: threadID, named: turnID, at: receivedAt)
         case .turnEnded:
             let assistantPreview = TurnPreviewStore.normalized(event.finalText)
             mutateExactTurn(
@@ -786,7 +797,7 @@ actor MonitoringRepository {
         case .requestResolved:
             guard let requestID = stableIdentifier(event.requestID ?? event.toolUseID) else { break }
             slots.resolve(requestID: requestID, revision: event.requestRevision)
-        case .turnStarted, .turnEnded, .subagentStarted, .subagentStopped, .inert:
+        case .turnStarted, .turnEnded, .turnInterrupted, .subagentStarted, .subagentStopped, .inert:
             return
         }
 

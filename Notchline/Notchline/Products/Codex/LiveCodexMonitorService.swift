@@ -35,6 +35,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     private let client: any CodexAppServerCommunicating
     /// Codex's hook transport; reducer and registrar are also kept by name.
     private let hooks: HookLifecycleSource
+    private let surfaces: CodexSurfaceLedger?
     private let hookEvents: HookEventRepository
     private let hookActivation: CodexHookActivation
     private var hookActivationRetryAllowed = false
@@ -125,6 +126,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         hookEvents: HookEventRepository = HookEventRepository(),
         hookRegistrar: CodexHookRegistrar = CodexHookRegistrar(),
         hookListener: AgentHookListener? = nil,
+        surfaces: CodexSurfaceLedger? = nil,
         projectMetadata: any DesktopProjectMetadataProviding =
             CodexDesktopProjectMetadataRepository(),
         unreadState: any DesktopUnreadStateProviding =
@@ -150,6 +152,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         self.client = client
         self.hookEvents = hookEvents
         self.hookRegistrar = hookRegistrar
+        self.surfaces = surfaces
         let hookActivation = CodexHookActivation(paths: hookRegistrar.integrationPaths, clock: clock)
         self.hookActivation = hookActivation
         // The transport belongs to this service, so the store stays a reducer with an inbox.
@@ -157,7 +160,11 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         self.hooks = HookLifecycleSource(
             setup: hookRegistrar,
             repository: hookEvents,
-            listener: hookListener,
+            listener: hookListener ?? surfaces.map { surfaces in
+                AgentHookListener(clock: clock) { body, date, descriptor in
+                    surfaces.receive(body, at: date, descriptor: descriptor, repository: hookEvents)
+                }
+            },
             clock: clock
         )
         self.projectMetadata = projectMetadata
@@ -195,7 +202,8 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             // what matters (``rolloutWatcher``).
             rolloutEvidence.rolloutWatcher.events(),
             invalidations
-        ] + (connectionMonitor.map { [$0.changes.events()] } ?? []))
+        ] + (connectionMonitor.map { [$0.changes.events()] } ?? [])
+            + (surfaces.map { [$0.changes.events()] } ?? []))
         self.terminalUnreadMembershipGate = TerminalUnreadRowFilter(timing: timing)
         self.presence = RunningApplicationPresence(
             processIdentifier: desktopProcessIdentifierProvider
@@ -239,13 +247,18 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         // no `Stop` and writes no `turn_aborted`, and its Running Turn returned on the relaunched
         // process's first event with nothing to clear it (CR-Fable-007; no activity-status read as
         // ADR 0011 gives Claude Code). Retired before the drain so new events cannot mix in.
-        if let vouchingProcessIdentifier = observedDesktopProcessIdentifier,
+        if surfaces == nil, let vouchingProcessIdentifier = observedDesktopProcessIdentifier,
            vouchingProcessIdentifier != desktopProcessIdentifier {
             await retireHookTurns()
         }
         var hookState = await hookEvents.drainDeliveredEvents()
         let hookDiagnostic = hookState.diagnostic
-        if desktopProcessIdentifier == nil {
+        let ownership = surfaces?.refresh(at: clock.now())
+        if let ownership {
+            hookState = await hookEvents.retainOwnedThreads(
+                ownership.threadIDs, didConsumeEvents: hookState.didConsumeEvents
+            )
+        } else if desktopProcessIdentifier == nil {
             // And after the drain while nothing runs: a dying process's helper can still deliver.
             hookState = await retireHookTurns(
                 didConsumeEvents: hookState.didConsumeEvents
@@ -253,10 +266,11 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         } else if hookState.didConsumeEvents {
             observedDesktopProcessIdentifier = desktopProcessIdentifier
         }
-        // Presence is kernel truth, never `unknown`, and known before anything about turns.
-        let presence = RunningApplicationPresence.presence(of: desktopProcessIdentifier)
+        // Positive presence comes from a running application or verified TUI; a failed inventory stays unknown.
+        let presence: AgentPresence = desktopProcessIdentifier != nil || ownership?.cliIsOpen == true
+            ? .open : (ownership != nil && ownership?.cliIsOpen == nil ? .unknown : .closed)
 
-        let hasLiveHookObservation = hasCurrentHookObservation(
+        let hasLiveHookObservation = surfaces != nil ? hookState.hasObservedLiveEvent : hasCurrentHookObservation(
             hookState: hookState,
             desktopProcessIdentifier: desktopProcessIdentifier
         )
@@ -466,6 +480,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     func nextRefreshDeadline() async -> Date? {
         guard !observationStopped else { return nil }
         var deadlines: [Date] = []
+        if let deadline = surfaces?.deadline() { deadlines.append(deadline) }
         if let deadline = await connectionMonitor?.nextDeadline() { deadlines.append(deadline) }
         if hookActivationRetryAllowed, let deadline = await hookActivation.nextDeadline() {
             deadlines.append(deadline)
@@ -546,6 +561,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         observationStopped = true
         hookActivationRetryAllowed = false
         hooks.disconnect()
+        surfaces?.reset()
         await hookEvents.resetIntegrationObservation(clearTurns: true, preserveBoundaryObservation: true)
         hookTrackedThreadIDs = []
         observedDesktopProcessIdentifier = nil
@@ -740,7 +756,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             let approvalsReachTheUser = approvalRoutingPin.approvalsReachTheUser(
                 forTurn: turn,
                 startedAt: state.startedAt,
-                in: approvalRouting
+                in: surfaces?.hasCLI(state.threadID) == true ? .unknown : approvalRouting
             )
             // Pinned to the turn it was read for: a previous turn's record describes finished work.
             let liveProgress = turnProgressByThreadID[state.threadID]
@@ -752,9 +768,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             guard let session = CodexSnapshotParser.session(
                 from: state,
                 thread: threadRecords[state.threadID].flatMap(\.thread),
-                projectName: projectMetadata.resolution(
-                    for: state.threadID
-                ).displayName,
+                projectName: surfaces?.isCLI(state.threadID) == true
+                    ? ProductMonitoringRuntime.projectName(forWorkingDirectory: state.workingDirectory)
+                    : projectMetadata.resolution(for: state.threadID).displayName,
                 approvalsReachTheUser: approvalsReachTheUser,
                 liveProgress: liveProgress
             ) else {
@@ -771,12 +787,18 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         }
 
         approvalRoutingPin.retain(turns: observedTurns)
-        // Every row is judged against Desktop's own unread set.
+        // Desktop's persisted unread set has no authority over a terminal.
         return terminalUnreadMembershipGate.rows(
             candidates,
             dismissedRowIDs: dismissedRowIDs,
             now: clock.now()
-        ) { _ in .judged(by: unreadState) }
+        ) { candidate in
+            if surfaces?.hasCLI(candidate.row.threadID) == true {
+                // A TUI supplies execution ownership, but no reliable current-view signal.
+                return .cannotBeAsked
+            }
+            return .judged(by: unreadState)
+        }
     }
 
     /// Threads Codex vouches for (ADR 0017): the membership sweep's set as of that sweep's start.

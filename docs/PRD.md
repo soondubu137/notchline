@@ -10,7 +10,7 @@
 
 ## 1. What the product is
 
-Notchline is a live summary of the Turns a user still needs to attend to, at the top of the screen: Turns that are running, waiting on a person, or finished but not yet read in the product that produced them. The monitored products are Codex Desktop, Claude Code, Antigravity (Desktop and CLI), and Trae Desktop (local IDE).
+Notchline is a live summary of the Turns a user still needs to attend to, at the top of the screen: Turns that are running, waiting on a person, or finished but not yet read in the product that produced them. The monitored products are Codex (Desktop and local interactive CLI), Claude Code, Antigravity (Desktop and CLI), and Trae Desktop (local IDE).
 
 It is not a history browser and it does not manage tasks. Each row is a root thread that can be returned to under the same identity, and the row's state is driven by that thread's current — or most recent still-monitored — Turn.
 
@@ -107,9 +107,9 @@ A missing, corrupt, permission-denied or schema-incompatible main state must con
 ### 4.3 Scope and Project
 
 - Monitor every Project and `Chats` under the current Codex Desktop account, without following the sidebar selection.
-- A Project must be a user-created Project entity in the Codex Desktop sidebar, and may span one or more repositories.
+- For Desktop, a Project must be a user-created Project entity in the Codex Desktop sidebar, and may span one or more repositories.
 - A thread with no Project shows `Chats`.
-- Deriving a Project from `cwd`, the Git root or the last path component is forbidden.
+- Deriving a Desktop Project from `cwd`, the Git root or the last path component is forbidden. Local CLI rows use their native `cwd` grouping and the shared missing-name fallback.
 - The current officially supported interfaces do not expose Desktop Project identity; with product approval, the strictly read-only private adapter registered in [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) may be used. `Chats` shows only on an explicit hit in Desktop's `projectless-thread-ids`; missing or corrupt data must show `Project unavailable` and fail closed.
 
 ## 5. First-run onboarding
@@ -349,13 +349,15 @@ Question presentation (2026-09-07): single and multiple choice both select befor
 
 A successful click is defined per product.
 
-**Codex**: activate Codex Desktop and make it show exactly the thread for the given `threadId`.
+**Codex Desktop**: activate Codex Desktop and make it show exactly the thread for the given `threadId`.
+
+**Codex CLI**: raise its verified terminal host and report that weaker outcome. No Hook proves which Thread the TUI currently displays, so exact terminal selection is not enabled. Never start another CLI or issue `resume` as navigation.
 
 **Claude Code**: raise that thread's host — activate Claude Desktop for a desktop-hosted one, focus its tab for a terminal one. Locating the specific thread is not required, because no supported way to do it exists.
 
 **Both products: raising means taking the user to the desktop that window is on.** When every one of the host's windows is on another Space, merely making it frontmost hands the menu bar to an app the user cannot see — they are still looking at their own desktop, where nothing happened. A successful click therefore includes "the current Space becomes the one holding the host's window"; when the host already has a window in the current Space, nothing extra is done ([`tech-design.md` §14.2](tech-design.md)). This does not relax §4's ban: the Space step asks the window server one yes/no question — does this pid have a visible window in the current Space — and never picks a navigation target by window geometry or title. **One case is declared out of reach**: a host whose window is full-screen is a desktop of its own, and no public interface available to this app crosses into it (measured 2026-08-30, `tech-design.md` §14.2) — Codex escapes it only because its deep link goes through Launch Services. Such a click fails and says so; it never reports a raise the user cannot see.
 
-- Direct navigation is a V1 release gate for Codex, and "just open the home page" is not an acceptable success fallback. The gate does not apply to Claude Code ([ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)).
+- Direct navigation is a release gate for Codex Desktop, and "just open the home page" is not an acceptable success fallback. The gate does not apply to Claude Code ([ADR 0004](adr/0004-make-exact-desktop-navigation-a-release-gate.md)).
 - The degradation carries no marker: a row carries one marker and that marker is the timer. The difference is stated only in the feedback sentence after the click, and that sentence must report what was actually done.
 - The panel collapses on success, and the row is removed only on a genuine read event from the desktop app.
 - On failure the panel stays expanded, the row stays visible, and non-destructive feedback is offered.
@@ -397,7 +399,7 @@ from the numeric-dotted marketing version so version comparisons remain valid.
 - **Presence has a trust ceiling.** Claude Code's session list comes from an external read, and a failed read keeps the previous result — right for rows, since one failure should not retire them all. But a cache cannot decide `Connected` indefinitely: after `claude` is uninstalled or renamed the read fails permanently. So "how often to re-read" (30 seconds) is separated from "how long a stale answer is still believed" (90 seconds, three consecutive failures); past the ceiling presence is **unknown**, and unknown falls to `Disconnected`. The ceiling bounds **failures**, not elapsed time: a list that read as empty with no edge saying otherwise is not re-read on a cadence, because re-reading starts a process tree and every way the "not open" answer can change reports itself (CR-Fable-002, `tech-design.md` §15.1).
 - Hooks, `Stop`, `SessionEnd` or other lifecycle signals from before the launch cutoff must never create, restore, terminate or modify a current Turn; current state comes only from live post-launch events. App Server data may only add metadata to threads whose identity a live event established, and can never create a thread on its own.
 - When a user interrupts in Desktop and then continues the same response, live post-launch hooks carrying the new identity must keep that thread Running even though the resumed execution uses a new Turn ID with no new `UserPromptSubmit`, and the final `Stop` must reach Completed correctly; late events for the old Turn must not overwrite the resumed one.
-- After hooks have been verified once, an app restart must not require a new event before the connection is restored; restoration must also confirm that Codex Desktop is currently running.
+- After hooks have been verified once, an app restart must not require a new event before the connection is restored; restoration must also confirm a supported Codex Desktop or local CLI execution is running.
 - A missing, duplicated, or matcher/handler/timeout-altered definition must never show as connected; the master switch shows Off and enters a state the user can repair by switching it on again.
 - Live events carry immediate change; set corrections such as `thread/list` must merge in the background and must never block publishing Connected, Running, Input or Approval.
 - Launch and ordinary refresh must never read per-thread detail; when a status snapshot fails, that Turn keeps its last trustworthy value among the four, and no new thread status is invented from it.
@@ -474,3 +476,9 @@ Read removal covers local IDE and IDE-hosted SOLO, including multiple main windo
 ## Product connection settings
 
 Products distinguishes normal non-use from failed requested observation. An installed, configured product that is closed reads `Not open` (`Not running` for Claude Code), without warning or an instruction to launch it. The switch preserves monitoring intent; missing configuration offers explicit repair and never triggers automatic reinstallation. Installation, setup, activation, presence and observation are independent. The complete display contract and evidence boundaries are in [Product connection checks](product-connections.md).
+
+## Local Codex CLI execution scope
+
+The shared Codex Provider admits ordinary local interactive terminals in the default Codex home. Remote/daemon connections, `exec`, SDK/piped runs, custom homes, SSH and terminal multiplexers are excluded. Current executable identity, arguments, controlling TTY, process creation time and an open default-home database establish provenance; no historical state creates a Turn. `SessionStart` and `SessionEnd` change execution ownership only; exact `Interrupt` ends an observed Turn without inventing a final answer. Process exit retires only that owner's observation, never marks it Completed or removes another owner's row.
+
+CLI read removal is not enabled: SessionStart does not report `/new` until the next submission, and terminal access time cannot identify the displayed Thread. Completed rows stay until manual dismissal, the next submission or loss of ownership. Desktop unread state cannot answer for CLI. See [product support](product-support.md) for the native acceptance boundary.
