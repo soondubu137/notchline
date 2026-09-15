@@ -256,6 +256,9 @@ struct OverlayGeometryTests {
         let store = MonitorStore(preferences: nil)
         store.isExpanded = true
         store.isRecentExpanded = true
+        // The flat queue: grouped, the open seam gives its rule up to the first heading (§4.7), and
+        // this measures the dot against that rule.
+        store.groupsRecentByProduct = false
         store.stageSpecimenQueue([
             RecentDeparture(
                 session: MonitoredSession(

@@ -196,6 +196,8 @@ final class OverlayPanelController {
             store.$isRecentExpanded.map { _ in () }.eraseToAnyPublisher(),
             // Queue members age out and leave by click without republishing the session list.
             store.$recentDepartures.map { _ in () }.eraseToAnyPublisher(),
+            // Grouping the open queue adds its headings to the viewport; nothing else republishes.
+            store.$groupsRecentByProduct.map { _ in () }.eraseToAnyPublisher(),
             // An open row grows from `80` up to the whole viewport.
             store.$openRowID.map { _ in () }.eraseToAnyPublisher(),
             // About replaces the body at a fixed height and leaves `expandsToPillOnly` (width too).

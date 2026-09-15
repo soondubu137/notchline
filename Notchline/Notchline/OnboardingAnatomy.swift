@@ -819,10 +819,7 @@ struct ExpandedPanelAnatomy: View {
         // `64` with two products. Both closing bars are one `32` pt height (`quota-footer-v2.md` §2).
         let list = header + store.sessionViewportHeight
         let seam = list + PanelMetrics.recentSeamHeight / 2
-        let footer = list + PanelMetrics.recentSectionHeight(
-            retiredRowCount: store.recentDepartures.count,
-            isRecentExpanded: store.isRecentExpanded
-        )
+        let footer = list + store.recentSectionHeight
         let spend = footer + PanelMetrics.recentSeamHeight / 2
 
         func left(
@@ -1255,19 +1252,18 @@ struct RecentQueueAnatomy: View {
     }
 
     /// The seam and its own viewport, which is what the section draws.
-    private var height: CGFloat {
-        PanelMetrics.recentSectionHeight(
-            retiredRowCount: store.recentDepartures.count,
-            isRecentExpanded: store.isRecentExpanded
-        )
-    }
+    private var height: CGFloat { store.recentSectionHeight }
 
     var pins: [AnatomyPin] {
         let scale = OpenedSpecimen.scale(plateWidth: store.currentPanelSize.width)
         let plate = store.currentPanelSize.width
         let seam = PanelMetrics.recentSeamHeight / 2
-        // The first retired row, and its trailing end where `2m` stands, one row padding in.
-        let firstRow = PanelMetrics.recentSeamHeight + PanelMetrics.retiredRowHeight / 2
+        // The first retired row, and its trailing end where `2m` stands, one row padding in. Grouped,
+        // the first block's short heading stands between the seam and it (`expanded-panel-v2.md` §4.7).
+        let blockHeader = store.recentGroupHeaderCount > 0
+            ? PanelMetrics.leadingProductGroupHeaderHeight
+            : 0
+        let firstRow = PanelMetrics.recentSeamHeight + blockHeader + PanelMetrics.retiredRowHeight / 2
         let age = plate - OpenedSpecimen.gutter - PanelMetrics.sessionRowPadding - 9
 
         return [

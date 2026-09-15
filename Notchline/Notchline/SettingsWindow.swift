@@ -60,7 +60,7 @@ enum SettingsWindowLayout {
     static let width: CGFloat = 580
 
     /// One height for every pane (Display's), so the closing row never moves; a test holds it.
-    static let paneHeight: CGFloat = 491
+    static let paneHeight: CGFloat = 546
 
     /// For screens shorter than ``paneHeight``.
     @MainActor
@@ -234,6 +234,7 @@ struct DisplaySettings: Equatable {
     let namesWorkOnPill: Bool
     let canNameWorkOnPill: Bool
     let groupsSessionsByProduct: Bool
+    let groupsRecentByProduct: Bool
 
     init(_ store: MonitorStore) {
         displays = store.displays.map { Choice(id: $0.id, title: $0.pickerTitle) }
@@ -247,6 +248,7 @@ struct DisplaySettings: Equatable {
         namesWorkOnPill = store.namesWorkOnPill
         canNameWorkOnPill = store.canNameWorkOnPill
         groupsSessionsByProduct = store.groupsSessionsByProduct
+        groupsRecentByProduct = store.groupsRecentByProduct
     }
 
     private static func description(of display: DisplayOption?) -> String {
@@ -291,6 +293,8 @@ struct DisplaySettingsGroups: View, Equatable {
 
             SettingsGroup(header: "Expanded") {
                 groupByProductRow
+                SettingsSeparator()
+                groupRecentByProductRow
             }
         }
     }
@@ -407,6 +411,22 @@ struct DisplaySettingsGroups: View, Equatable {
                 + "its own badge."
         ) {
             Toggle("Group by product", isOn: binding(\.groupsSessionsByProduct))
+                .labelsHidden()
+                .toggleStyle(.switch)
+        }
+    }
+
+    /// The same blocks under the Recent seam, on a switch of its own (`expanded-panel-v2.md` §4.7).
+    private var groupRecentByProductRow: some View {
+        SettingsRow(
+            title: "Group Recent by product",
+            caption: SettingsCaption.groupRecentByProduct,
+            help: "Stands the sessions under the Recent seam under a heading per "
+                + "product, the way the list above it does, with the most recent "
+                + "first inside each. Off, Recent is one list in the order the "
+                + "sessions left, and every row carries its own badge."
+        ) {
+            Toggle("Group Recent by product", isOn: binding(\.groupsRecentByProduct))
                 .labelsHidden()
                 .toggleStyle(.switch)
         }
@@ -545,6 +565,7 @@ enum SettingsCaption {
     static let privacyMode = "Draws every name and line as a bar. Secondary-click Notchline to toggle."
     static let outline = "A hairline edge, for dark wallpapers."
     static let groupByProduct = "One block per product, each headed by its badge."
+    static let groupRecentByProduct = "The same blocks under the Recent seam, newest first in each."
     static let quotaTableFootnote = "Today’s total counts every connected product, whatever is on here."
     static let checkForUpdates = "Once a day, from the release feed on GitHub."
     static let downloadInBackground = "Installs when Notchline quits or the Mac restarts."
@@ -572,7 +593,7 @@ enum SettingsCaption {
     }
 
     static var all: [String] {
-        [productsFootnote, privacyMode, outline, groupByProduct, quotaTableFootnote,
+        [productsFootnote, privacyMode, outline, groupByProduct, groupRecentByProduct, quotaTableFootnote,
          checkForUpdates, downloadInBackground,
          nameWork(canName: true), nameWork(canName: false)]
             + [true, false].flatMap { canHide in

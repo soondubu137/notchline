@@ -247,6 +247,11 @@ enum PanelMetrics {
     }
     /// The Recent queue's viewport cap: five retired rows.
     static let recentViewportCap: CGFloat = retiredRowHeight * 5
+    /// The grouped queue's: a trail, five retired rows, a trail (`16 + 180 + 16`), so its switch
+    /// never changes the row count either (`expanded-panel-v2.md` §4.7).
+    static var groupedRecentViewportCap: CGFloat {
+        productTrailHeight * 2 + recentViewportCap
+    }
     /// The panel's horizontal inset, collapsed and expanded alike despite the name: compact
     /// margins, wings, expanded rows and footer. See `figma-design.md` §3.3.
     static let expandedHorizontalPadding: CGFloat = 12
@@ -921,14 +926,21 @@ enum PanelMetrics {
         return min(content, cap)
     }
 
-    /// Nothing with no retired rows; a seam is drawn only with something behind it.
-    static func recentContentHeight(retiredRowCount: Int) -> CGFloat {
-        retiredRowHeight * CGFloat(max(retiredRowCount, 0))
+    /// Nothing with no retired rows; a seam is drawn only with something behind it. Headings are
+    /// counted as the live list counts them, and never cost a row on screen.
+    static func recentContentHeight(retiredRowCount: Int, groupHeaderCount: Int = 0) -> CGFloat {
+        guard retiredRowCount > 0 else { return 0 }
+        return retiredRowHeight * CGFloat(retiredRowCount)
+            + groupHeadingsHeight(count: max(groupHeaderCount, 0))
     }
 
-    /// Past five retired rows the queue scrolls rather than growing the panel.
-    static func recentViewportHeight(retiredRowCount: Int) -> CGFloat {
-        min(recentContentHeight(retiredRowCount: retiredRowCount), recentViewportCap)
+    /// Past five retired rows the queue scrolls rather than growing the panel; grouped, past a
+    /// trail, five rows and a trail.
+    static func recentViewportHeight(retiredRowCount: Int, groupHeaderCount: Int = 0) -> CGFloat {
+        min(
+            recentContentHeight(retiredRowCount: retiredRowCount, groupHeaderCount: groupHeaderCount),
+            groupHeaderCount > 0 ? groupedRecentViewportCap : recentViewportCap
+        )
     }
 
     /// The Recent section as a whole: nothing while the queue is empty, its
@@ -936,11 +948,14 @@ enum PanelMetrics {
     /// open.
     static func recentSectionHeight(
         retiredRowCount: Int,
-        isRecentExpanded: Bool
+        isRecentExpanded: Bool,
+        groupHeaderCount: Int = 0
     ) -> CGFloat {
         guard retiredRowCount > 0 else { return 0 }
         return recentSeamHeight
-            + (isRecentExpanded ? recentViewportHeight(retiredRowCount: retiredRowCount) : 0)
+            + (isRecentExpanded
+                ? recentViewportHeight(retiredRowCount: retiredRowCount, groupHeaderCount: groupHeaderCount)
+                : 0)
     }
 
     // MARK: - The open row
@@ -1025,7 +1040,8 @@ enum PanelMetrics {
         retiredRowCount: Int = 0,
         isRecentExpanded: Bool = false,
         footerHeight: CGFloat = restingFooterHeight,
-        groupHeaderCount: Int = 0
+        groupHeaderCount: Int = 0,
+        recentGroupHeaderCount: Int = 0
     ) -> CGFloat {
         sessionViewportHeight(
             liveRowCount: liveRowCount,
@@ -1034,7 +1050,8 @@ enum PanelMetrics {
         )
             + recentSectionHeight(
                 retiredRowCount: retiredRowCount,
-                isRecentExpanded: isRecentExpanded
+                isRecentExpanded: isRecentExpanded,
+                groupHeaderCount: recentGroupHeaderCount
             )
             + footerHeight
     }
@@ -1302,12 +1319,22 @@ final class MonitorStore: ObservableObject {
         }
     }
     /// Whether the live list is one block per product (`expanded-panel-v2.md` §4) or one list
-    /// with a chip per row. The Recent queue is never grouped (§4.1). Defaults on.
+    /// with a chip per row. The Recent queue answers to its own switch. Defaults on.
     @Published var groupsSessionsByProduct: Bool {
         didSet {
             preferences?.set(
                 groupsSessionsByProduct,
                 forKey: Self.groupsSessionsByProductDefaultsKey
+            )
+        }
+    }
+    /// The same question for the Recent queue (§4.7), asked separately: the two lists answer
+    /// different questions, and one can want blocks while the other wants one descent. Defaults on.
+    @Published var groupsRecentByProduct: Bool {
+        didSet {
+            preferences?.set(
+                groupsRecentByProduct,
+                forKey: Self.groupsRecentByProductDefaultsKey
             )
         }
     }
@@ -1322,6 +1349,7 @@ final class MonitorStore: ObservableObject {
     private static let drawsSurfaceOutlineDefaultsKey = "drawsSurfaceOutline"
     private static let namesWorkOnPillDefaultsKey = "namesWorkOnPill"
     private static let groupsSessionsByProductDefaultsKey = "groupsSessionsByProduct"
+    private static let groupsRecentByProductDefaultsKey = "groupsRecentByProduct"
     private static let onboardingDefaultsKey = "hasCompletedOnboarding"
     private static let selectedDisplayDefaultsKey = "selectedDisplayID"
     private let services: [any AgentMonitoring]
@@ -1458,6 +1486,9 @@ final class MonitorStore: ObservableObject {
         ) as? Bool ?? true
         self.groupsSessionsByProduct = preferences?.object(
             forKey: Self.groupsSessionsByProductDefaultsKey
+        ) as? Bool ?? true
+        self.groupsRecentByProduct = preferences?.object(
+            forKey: Self.groupsRecentByProductDefaultsKey
         ) as? Bool ?? true
         self.hasCompletedOnboarding = preferences?.bool(
             forKey: Self.onboardingDefaultsKey
@@ -1929,10 +1960,51 @@ final class MonitorStore: ObservableObject {
     ///
     /// One product is one block. A gate on connected products made headings come and go while
     /// both stayed open. A product with no rows draws no heading (`expanded-panel-v2.md` §4.3
-    /// rule 04). The Recent queue is not grouped (``MonitorAggregation/SessionGroup``). Empty
-    /// while the preference is off: the view draws rows in ``MonitorAggregation/rowOrder``.
+    /// rule 04). The Recent queue has its own (``recentGroups``). Empty while the preference is
+    /// off: the view draws rows in ``MonitorAggregation/rowOrder``.
     var sessionGroups: [MonitorAggregation.SessionGroup] {
         groupsSessionsByProduct ? MonitorAggregation.groups(of: sessions) : []
+    }
+
+    /// The Recent queue as blocks, whenever ``groupsRecentByProduct`` is on (§4.7): the live
+    /// list's block order, each block newest first. Empty while off, or with nothing retired.
+    var recentGroups: [MonitorAggregation.RecentGroup] {
+        groupsRecentByProduct ? MonitorAggregation.groups(of: recentDepartures) : []
+    }
+
+    /// How many headings the queue draws, counted without building the blocks. Counted folded
+    /// too: the fold decides whether the viewport is drawn, not what it would hold.
+    var recentGroupHeaderCount: Int {
+        groupsRecentByProduct ? Set(recentDepartures.map(\.session.agent)).count : 0
+    }
+
+    /// Whether the open queue's first line is a block heading, which draws its own rule; the
+    /// seam's fold rule is drawn on the negation, so one boundary is never drawn twice `24` apart
+    /// (`panel-v2.md` §3.4, as ``listLeadsWithABlockHeading`` for the band).
+    var queueLeadsWithABlockHeading: Bool {
+        isRecentExpanded && recentGroupHeaderCount > 0
+    }
+
+    var recentContentHeight: CGFloat {
+        PanelMetrics.recentContentHeight(
+            retiredRowCount: recentDepartures.count,
+            groupHeaderCount: recentGroupHeaderCount
+        )
+    }
+
+    var recentViewportHeight: CGFloat {
+        PanelMetrics.recentViewportHeight(
+            retiredRowCount: recentDepartures.count,
+            groupHeaderCount: recentGroupHeaderCount
+        )
+    }
+
+    var recentSectionHeight: CGFloat {
+        PanelMetrics.recentSectionHeight(
+            retiredRowCount: recentDepartures.count,
+            isRecentExpanded: isRecentExpanded,
+            groupHeaderCount: recentGroupHeaderCount
+        )
     }
 
     /// How many headers the live list draws, counted without building the blocks (read on every
@@ -2066,7 +2138,8 @@ final class MonitorStore: ObservableObject {
             retiredRowCount: recentDepartures.count,
             isRecentExpanded: isRecentExpanded,
             footerHeight: expandedFooterHeight,
-            groupHeaderCount: sessionGroupHeaderCount
+            groupHeaderCount: sessionGroupHeaderCount,
+            recentGroupHeaderCount: recentGroupHeaderCount
         )
     }
 

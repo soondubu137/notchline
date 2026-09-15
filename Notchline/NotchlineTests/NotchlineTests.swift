@@ -3003,6 +3003,7 @@ struct NotchlineTests {
         #expect(PanelMetrics.sessionViewportCap == 288)
         #expect(PanelMetrics.groupedSessionViewportCap == 320)
         #expect(PanelMetrics.recentViewportCap == 180)
+        #expect(PanelMetrics.groupedRecentViewportCap == 212)
 
         // An empty live list still draws its apology; the fold falls at four `72` pt rows, grouped or
         // flat, so the switch never changes the row count (`expanded-panel-v2.md` §4.6).
@@ -3383,10 +3384,12 @@ struct NotchlineTests {
         let folded = store.currentPanelSize.height
         store.toggleRecent()
         let opened = store.currentPanelSize.height
+        // Grouped by default, so the one block's short heading is paid for with the rows (§4.7).
+        #expect(store.recentGroupHeaderCount == 1)
         #expect(
             opened - folded
-                == PanelMetrics.retiredRowHeight * 4,
-            "four rows is what opening it costs"
+                == PanelMetrics.retiredRowHeight * 4 + PanelMetrics.leadingProductGroupHeaderHeight,
+            "four rows and their heading is what opening it costs"
         )
 
         // Folding again with the pointer where the seam was; the footer keeps the edge below it.
@@ -3463,6 +3466,8 @@ struct NotchlineTests {
         let mutations: [(String, () -> Void)] = [
             ("opening the panel", { store.isExpanded = true }),
             ("opening the queue", { store.toggleRecent() }),
+            ("flattening the open queue", { store.groupsRecentByProduct = false }),
+            ("grouping it again", { store.groupsRecentByProduct = true }),
             ("taking a row out of the queue", {
                 store.removeFromRecent(store.recentDepartures[0])
             }),
@@ -4065,13 +4070,6 @@ struct NotchlineTests {
         )
         #expect(headedRows(store).map(\.0) == [.codex, .claudeCode])
         #expect(headedRows(store).count == store.sessions.count)
-
-        // Below the seam nothing is grouped and the chip stays: a heading would restart the queue's
-        // one descent of ages at every block.
-        #expect(
-            PanelMetrics.recentViewportHeight(retiredRowCount: 4)
-                == PanelMetrics.retiredRowHeight * 4
-        )
     }
 
     /// Inside a block the order is ``MonitorAggregation/rowOrder`` (`PRD.md` §6.2); a status change

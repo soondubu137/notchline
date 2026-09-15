@@ -374,16 +374,31 @@ struct AnatomyAnchors {
     var seamTop: CGFloat { band + store.sessionViewportHeight }
     var seamY: CGFloat { seamTop + PanelMetrics.recentSeamHeight / 2 }
 
+    /// In drawing order: grouped, headings push retired rows as they push live ones.
     func retiredRowY(_ index: Int) -> CGFloat {
-        seamTop
-            + PanelMetrics.recentSeamHeight
-            + PanelMetrics.retiredRowHeight * (CGFloat(index) + 0.5)
+        var y = seamTop + PanelMetrics.recentSeamHeight
+        let groups = store.recentGroups
+        guard !groups.isEmpty else {
+            return y + PanelMetrics.retiredRowHeight * (CGFloat(index) + 0.5)
+        }
+        var drawn = 0
+        for (block, group) in groups.enumerated() {
+            y += block == 0
+                ? PanelMetrics.leadingProductGroupHeaderHeight
+                : PanelMetrics.productGroupHeaderHeight
+            for _ in group.departures {
+                if drawn == index { return y + PanelMetrics.retiredRowHeight / 2 }
+                drawn += 1
+                y += PanelMetrics.retiredRowHeight
+            }
+        }
+        return y
     }
 
     var footerTop: CGFloat {
         seamTop
             + PanelMetrics.recentSeamHeight
-            + PanelMetrics.recentViewportHeight(retiredRowCount: store.recentDepartures.count)
+            + store.recentViewportHeight
     }
 
     var spendY: CGFloat { footerTop + PanelMetrics.recentSeamHeight / 2 }

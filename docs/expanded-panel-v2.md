@@ -5,6 +5,7 @@
 | Status | **§2 is built** (2026-09-05, five commits from `1f2f581` to this one) — the window, the seam, the rows under it and the clock, with `docs/PRD.md` amended for it. ~~What is not built is any of it being *seen*: §9's last item stands.~~ **Seen on the real panel** (2026-09-05, the amendment below), and §9's item says what was checked. **§3 is superseded entire by [`answer-in-notch.md`](answer-in-notch.md)** and is not built here.  ~~**Designed, not implemented.** §2 can be built on its own.~~ **§3 is superseded entire by [`answer-in-notch.md`](answer-in-notch.md)**, which designs the whole answering experience and corrects four of its clauses; read that file instead, and keep this one for §2. |
 | Version | 2.2 |
 | Date | 2026-09-04, amended 2026-09-05 |
+| Amended | **The Recent queue can be grouped by product too, on a switch of its own** (2026-09-14, at the owner's request). §4.7 is the whole of it: the live list's blocks, headings, trails and click-to-scroll, unchanged, at the retired row's `36`; inside a block the queue's own order, most recently departed first. `Group Recent by product` sits under `Group by product` in Settings, default on; off is the queue exactly as it was. **This reverses §4.1's asymmetry and rule 09**, and what §4.1 said it costs is still true and is stated in §4.7 rather than argued away: a heading restarts the ages at every block, so the newest departure can be in the second block. The cap follows the live list's form, *a trail, five rows and a trail*, `212` where the flat queue's `180` stands; the seam gives its open-state rule up to the first heading, as the panel's top rule already does. Touched: §2.3, §4.1, §4.3 rule 09, §4.6, §4.7 (new), §9. Built the same day. |
 | Amended | **§2's queue is a five-hour window, not a five-row queue.** Membership is every row that left within the past five hours; five is now the number the viewport *draws* rather than the number the store *holds*. Touched: §2.2, §2.3, §2.4 (rules 01, 02, 05, 09 and a new 11), §2.5 (new), §2.6, §4, §5, §6, §7, §8.1, §8.5, §8.6, §9, §10. **No metric moves** — `32 + 5 × 40 = 232 ≤ 240 < 272` already said "five, then scroll", and it now says it about the fold instead of the store. One thing gets worse and is stated rather than finessed: the queue is now literally the "fixed time window" [`PRD.md`](PRD.md) §3 bans, and §8.1 rewrites that sentence instead of arguing with it. |
 | Amended | **Every heading is on screen, on one badge line at each edge, and grouping is a switch** (2026-09-09). §4.6 is the whole of it. The shipped pinning let a long first block push the later headings below the fold and the passed one off the top; now the block you are in holds the top strip, the blocks you have passed stand beside its chip as dimmed names, and the blocks still to come wait on the viewport's last line as names alone — every one of them a control that scrolls its block to the top, and a block holding a row that wants a person flipping its badge instead of dimming. **The cap changes with it**: a trail, four rows and a trail, `320`, where it was three rows plus a bar per block; the flat list shows the same four (`288`, from `216`), and an approval's body follows to `196`. `Group by product` in Settings turns §4 off entire — one list in one order, a chip on every row, the panel's own top rule back. Touched: §4.3 rules 06 and 07, §4.4, §4.5, §4.6 (new), §9. Built the same day. |
 | Amended | **The live list is grouped by product** (2026-09-08), and the queue is not. §4 is the whole of it: one block per product that has a row, headed by the bar §2.2 already defines, in the fixed product order, with the chip coming off the live row and staying on the retired one. Nothing in §2 moves — the seam, the window, the ages, the fold and the five rows are untouched — and nothing in §3 is touched either. Built the same day. |
@@ -70,7 +71,7 @@ A label, a hairline and a chevron, on one `32` pt line at the foot of the live l
 
 ### 2.3 A retired row
 
-One line: **product · project · subject**, `13` pt Regular. ~~The product name takes that product's caption ink (`#4D81B7` / `#9C553E`)~~ — **the product is a badge** ([`colour-v2.md`](colour-v2.md) §5), ground and text from the `Theme colour` pair, ~~drawn only while more than one product is connected~~ **drawn always** (2026-09-09; nothing below the seam is grouped, so this is the only place the product is ever said here). `· project ·` takes `#7C7C80`, and the subject takes `#C7C7CC` — one step below a live title's white-at-98% and one step above a caption. It ends in a fade like every other line here.
+One line: **product · project · subject**, `13` pt Regular. ~~The product name takes that product's caption ink (`#4D81B7` / `#9C553E`)~~ — **the product is a badge** ([`colour-v2.md`](colour-v2.md) §5), ground and text from the `Theme colour` pair, ~~drawn only while more than one product is connected~~ **drawn always** (2026-09-09; ~~nothing below the seam is grouped, so this is the only place the product is ever said here~~) — **except on the grouped queue** (2026-09-14, §4.7), where the block's heading says it and the row gives its chip up exactly as a grouped live row does. `· project ·` takes `#7C7C80`, and the subject takes `#C7C7CC` — one step below a live title's white-at-98% and one step above a caption. It ends in a fade like every other line here.
 
 **The badge is `16` on a `13` pt line**, which is the same two points a live row's caption pays (§2.1). The line's own ~~`40`~~ **`36`** is measured from the half-row it has to equal rather than from its text, so it moved when the live row did and for no reason of its own — and `16` still clears it, with `10` above and `10` below.
 
@@ -140,8 +141,11 @@ order.** That asymmetry is the design, not an omission:
 | Its own reading | A status, a project, a title and a preview — of which the product is one more fact | A breadcrumb and an **age**, and the age is doing nearly all of the work |
 | What a division by product costs it | Nothing it was not already paying: rows of one product were already adjacent whenever the sort put them there | The column. Today the ages run in one descent — §2.3's ceiling of `4h` exists so the reading never grows a unit and the column never moves — and a heading restarts that sequence at every block, putting the newest thing on the surface fourth |
 
-So the queue keeps its order and keeps its chip, and everything below is about
-the list above the seam.
+~~So the queue keeps its order and keeps its chip, and everything below is about
+the list above the seam.~~ **The queue can be grouped as well, on its own switch
+(§4.7, 2026-09-14).** The table's third row is still what that costs, and §4.7
+says so; what changed is who decides whether it is worth paying. Everything from
+§4.2 to §4.6 is about the list above the seam, and §4.7 applies it below.
 
 ### 4.2 The heading
 
@@ -265,7 +269,7 @@ heading at every product count.
 | 06 | **The heading pins** — ~~and holds the top until the next one pushes it out~~ **every heading stays on screen, on one badge line at each edge (§4.6, 2026-09-09)** — and that is what makes rule 05 safe: a row can be scrolled away from its heading but never orphaned from its name. **Except while a row is open**, where opening scrolls the row to the top of the viewport and a pinned heading would sit over its caption line — whose trailing end is the chevron that closes it. An open row is the subject and everything else is at `45%`, so the list is not being scanned, which is pinning's only job. The open row keeps its own chip for the same reason, and because the product decides what its answer footer can do ([`answer-in-notch.md`](answer-in-notch.md) §14.2) | |
 | 07 | **A heading is chrome and is never paid for out of rows.** ~~The cap is `216 + the headings drawn`~~ **The cap is a trail, four rows and a trail — `320` at every product count (§4.6, 2026-09-09)**; what follows is the earlier arithmetic. The cap was `216 + the headings drawn` — the first `16` and every one after it `32` — so a grouped list shows the three rows a flat one shows and scrolls in the same place. Holding the cap flat was the alternative and is declined: `16 + 72 + 32 + 72` leaves two rows visible, which is a third of what the panel is for spent on chrome | §4.4 |
 | 08 | **The count is lit while its block holds a row that wants a person** — `#C7C7CC` rather than `#7C7C80`, on derived status like the summary and the sort. Grouped, the most urgent row on the surface may be inside the second block and below the fold; this is the whole of what says so, in the channel [`panel-v2.md`](panel-v2.md) §1.1 reserves for exactly that meaning | §4.5 |
-| 09 | **The queue is not grouped**, keeps its chip and keeps its cap. §4.1 | |
+| 09 | ~~**The queue is not grouped**, keeps its chip and keeps its cap.~~ **The queue is grouped on its own switch** (2026-09-14): the same blocks, headings and trails at the retired row's height, and off it keeps its order, its chip and its cap. §4.7 | §4.1 |
 | 10 | **The band and both collapsed forms are untouched.** Nothing here is visible with the panel shut | |
 | 11 | **The first heading is drawn short, and the panel's own top rule is drawn on the negation of "a heading leads the list"** (2026-09-08). One question, asked once — `MonitorStore.listLeadsWithABlockHeading` — because the two halves have to agree: a short bar under a rule opens the panel on a chip `10` from the matrix with no line at all, and a whole bar with the rule kept is the pair of hairlines this rule exists to remove. Every heading after the first keeps its `32`, which is what a heading needs to stand clear of the row above it | §4.2 |
 
@@ -406,9 +410,62 @@ always drew* was reaching for.
 **`Group by product` is a switch** — Settings, the Display card, beside
 `Outline the panel`, default on. Off, §4 is off entire: one list in
 `rowOrder` across products, every row carrying its own chip as it did before
-§4, the panel's own top rule back, the Recent queue exactly as it is either
-way. It is a standing answer rather than a display-dependent one, so it is
-never greyed.
+§4, the panel's own top rule back, ~~the Recent queue exactly as it is either
+way~~ **the Recent queue answering to its own switch (§4.7)**. It is a standing
+answer rather than a display-dependent one, so it is never greyed.
+
+### 4.7 Grouping the Recent queue
+
+> Asked for and built 2026-09-14. It reverses §4.1's *the queue is one list in
+> departure order* and rule 09, and keeps the argument that led there, because
+> the argument is still true.
+
+**The queue draws §4.2 to §4.6 unchanged, inside its own viewport.** One block
+per product holding a retired row, in `AgentKind`'s order (rule 02); the
+heading is the live heading — chip, dot, count, the rule to the trailing edge,
+the first one short at `16`; every later heading `24`; the rows under a heading
+carry no chip (rule 05) and VoiceOver still names the product on each. The two
+trails stand at the edges of the queue's viewport rather than the list's, and
+every trail badge is the same control: a click scrolls its block to the top, as
+far as the content lets it. One piece has nothing to do here: **nothing below
+the seam wants anybody** (§2.4 rule 06), so a queue block's count is never lit
+and its trail badge never flips, whatever its rows were last drawn as.
+
+**Inside a block, the queue's own order**: most recently departed first. The
+ages still run in one descent — per block. That is §4.1's cost, and it is paid
+rather than solved: with Codex first in the register, a Claude Code row that
+left a minute ago stands under every Codex row. The newest thing in the queue is
+not always first; the newest thing *of each product* is. Nothing here
+compensates the way rule 08's lit count does above, because nothing here is
+urgent.
+
+**The cap is the live list's form at the retired row's height**: a trail, five
+rows and a trail, `16 + 180 + 16 = 212`, where the flat queue stays `180` — so
+the switch never changes how many rows are on screen, the same promise §4.6
+makes above. Headings are paid for in the content (rule 07) and a folded queue
+pays nothing: the seam is `32` whichever way the switch stands.
+
+**The seam gives its rule up to the first heading.** Open, the seam draws a
+hairline through its own middle, and the first block's chip line draws one
+`24` lower: the same boundary twice with nothing said between them, which is
+what rule 11 removed from under the band. The heading's carries a name, so it
+takes the job; the chevron alone says the queue is open. One question decides
+it, `MonitorStore.queueLeadsWithABlockHeading`, and it is false whenever the
+queue is folded or flat.
+
+**A switch of its own, not `Group by product`.** The two lists answer different
+questions (§4.1's first row), and the reasons to want blocks above — *which
+product is holding somebody* — are not reasons to want them below, where the
+reading is an age. So `Group Recent by product` stands under `Group by product`
+in Settings' `Expanded` card, default on, and one never moves the other. The
+`Display` pane is one row taller for it (`546` under the toolbar, from `491`).
+
+**Declined:** one switch for both lists, for the reason above; and giving the
+queue's first heading its slack back so the chip sits nearer its rows than the
+seam's caption. By line boxes the chip stands `9` under the caption and `10`
+over the first row's text, and on the real panel that reads as belonging to the
+rows — near enough to even that a second heading geometry, and a trail layout
+whose top strip no longer starts at `0`, buy nothing.
 
 ## 3. Answering in the notch
 
@@ -593,6 +650,7 @@ Notchline observes through hooks, and a hook is a notification. To answer a live
 - [ ] Three live rows draw no seam and cost the queue nothing; the third retiring puts the seam back inside the viewport.
 - [ ] A retiring row halves in place and the seam rises over it; nothing travels the length of the panel.
 - [ ] Nothing below the seam draws a status ground, and every age reads as an age.
+- [x] **The grouped queue** (§4.7, 2026-09-14): blocks in register order, newest first inside each, no chip on a row, the seam's rule handed to the first heading, the pending block on the foot line, and its badge scrolling it up — seen on a staged Release panel and pinned by `RecentGroupingTests`.
 - [x] ~~**Not yet seen on the real panel:** the seam and a retired row are unit-tested but have never been drawn on screen.~~ **Seen** (2026-09-05): a row staged through the Claude Code hook socket and dismissed by a secondary click draws the apology, `Recent · 1`, its hairline and chevron, and one retired row with its badge, breadcrumb and `now` — the panel `180` at one product with the quota folded. The blank `8` points went with the fold's arithmetic (§2.4 rule 02); a two-digit count and the breadcrumb's fade are still visual claims resting on the code alone.
 - [ ] The queue is empty at launch, admits every departure, and drops each one five hours after it left — with the panel open, folded, and never opened at all.
 - [ ] With nothing live, five retirements draw the apology, four rows and a seam reading `Recent · 5`; the fifth is reached by the panel's own viewport scroller, and no second scroller appears anywhere.

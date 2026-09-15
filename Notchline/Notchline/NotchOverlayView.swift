@@ -1080,7 +1080,11 @@ struct ActiveSessionList: View {
                         rows(store.sessions)
                     } else {
                         ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
-                            headingSlot(for: group, isLeading: index == 0)
+                            if store.openRowID != nil {
+                                ProductGroupHeader(group: group, isLeading: index == 0)
+                            } else {
+                                productHeadingSlot(for: group.agent, isLeading: index == 0)
+                            }
                             rows(group.sessions)
                         }
                     }
@@ -1138,34 +1142,6 @@ struct ActiveSessionList: View {
         }
     }
 
-    /// The scroll target for a heading's chip line. Its own type: the block's `AgentKind` already
-    /// identifies the `ForEach` item, and a scroll target must name the line, not the item.
-    private struct ProductHeadingSlotID: Hashable {
-        let agent: AgentKind
-    }
-
-    /// A heading's slot in the flow. Closed, the overlay draws the heading and the slot keeps the
-    /// slack plus the chip's line, which carries the block's scroll identity. Open, the bar stands here.
-    @ViewBuilder
-    private func headingSlot(
-        for group: MonitorAggregation.SessionGroup,
-        isLeading: Bool
-    ) -> some View {
-        if store.openRowID != nil {
-            ProductGroupHeader(group: group, isLeading: isLeading)
-        } else {
-            // Two siblings with their own identity on the chip's line: wrapped in a `VStack` or
-            // given the `ForEach` item's `id`, `scrollTo(_:anchor: .top)` lands on the slack and
-            // the chip is `16` short.
-            if !isLeading {
-                Color.clear.frame(height: PanelMetrics.productGroupHeaderSlack)
-            }
-            Color.clear
-                .frame(height: PanelMetrics.productTrailHeight)
-                .id(ProductHeadingSlotID(agent: group.agent))
-        }
-    }
-
     @ViewBuilder
     private func rows(_ sessions: [MonitoredSession]) -> some View {
         ForEach(sessions) { session in
@@ -1190,7 +1166,29 @@ struct ActiveSessionList: View {
     }
 }
 
-/// The Recent queue: the seam, and the retired rows behind it while open.
+/// The scroll target for a heading's chip line. Its own type: the block's `AgentKind` already
+/// identifies the `ForEach` item, and a scroll target must name the line, not the item.
+private struct ProductHeadingSlotID: Hashable {
+    let agent: AgentKind
+}
+
+/// A closed heading's slot in the flow, on either list: the overlay draws the heading, and the
+/// slot keeps the slack plus the chip's line, which carries the block's scroll identity.
+@ViewBuilder
+private func productHeadingSlot(for agent: AgentKind, isLeading: Bool) -> some View {
+    // Two siblings with their own identity on the chip's line: wrapped in a `VStack` or given the
+    // `ForEach` item's `id`, `scrollTo(_:anchor: .top)` lands on the slack and the chip is `16`
+    // short.
+    if !isLeading {
+        Color.clear.frame(height: PanelMetrics.productGroupHeaderSlack)
+    }
+    Color.clear
+        .frame(height: PanelMetrics.productTrailHeight)
+        .id(ProductHeadingSlotID(agent: agent))
+}
+
+/// The Recent queue: the seam, and the retired rows behind it while open — grouped by product
+/// exactly as the live list is, when its own switch is on (`expanded-panel-v2.md` §4.7).
 ///
 /// Internal so the first-run window can draw one on its own (`OnboardingAnatomy.swift`).
 struct RecentSessionSection: View {
@@ -1210,15 +1208,24 @@ struct RecentSessionSection: View {
         )
     }
 
-    private var contentHeight: CGFloat {
-        PanelMetrics.recentContentHeight(retiredRowCount: store.recentDepartures.count)
-    }
+    /// From the store, the same arithmetic the panel was sized by, headings included.
+    private var contentHeight: CGFloat { store.recentContentHeight }
 
-    private var viewportHeight: CGFloat {
-        PanelMetrics.recentViewportHeight(retiredRowCount: store.recentDepartures.count)
-    }
+    private var viewportHeight: CGFloat { store.recentViewportHeight }
 
-    private var isScrolling: Bool { contentHeight > PanelMetrics.recentViewportCap }
+    private var isScrolling: Bool { contentHeight > viewportHeight }
+
+    /// Where every heading stands for the current offset, at the retired row's height.
+    private func trailLayout(_ groups: [MonitorAggregation.RecentGroup]) -> ProductTrailLayout {
+        ProductTrailLayout.laidOut(
+            groups: groups,
+            badgeWidths: groups.map { PanelMetrics.productBadgeWidth($0.agent.displayName) },
+            offset: scrollOffset,
+            viewportHeight: viewportHeight,
+            contentHeight: contentHeight,
+            rowHeight: PanelMetrics.retiredRowHeight
+        )
+    }
 
     var body: some View {
         if !store.recentDepartures.isEmpty {
@@ -1226,25 +1233,54 @@ struct RecentSessionSection: View {
                 RecentSeam(count: store.recentDepartures.count)
 
                 if store.isRecentExpanded {
-                    ScrollView(.vertical) {
-                        LazyVStack(spacing: 0) {
-                            ForEach(store.recentDepartures) { departure in
-                                RetiredRow(departure: departure)
+                    ScrollViewReader { list in
+                        ScrollView(.vertical) {
+                            // As ``ActiveSessionList``: ``ProductTrails`` draws the headings over the
+                            // list, and the flow keeps a blank slot of each one's height. Nothing
+                            // below the seam opens, so they never go back into the flow.
+                            LazyVStack(spacing: 0) {
+                                // Switch off: the flat queue, each row with its own chip.
+                                let groups = store.recentGroups
+                                if groups.isEmpty {
+                                    rows(store.recentDepartures)
+                                } else {
+                                    ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                                        productHeadingSlot(for: group.agent, isLeading: index == 0)
+                                        rows(group.departures)
+                                    }
+                                }
+                            }
+                        }
+                        .frame(
+                            width: viewportWidth + legacyScrollerGutter(isScrolling: isScrolling),
+                            height: viewportHeight
+                        )
+                        .scrollIndicators(.hidden)
+                        .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                            geometry.contentOffset.y
+                        } action: { _, offset in
+                            scrollOffset = offset
+                        }
+                        // Folding drops the scroller; the next one opens at the top.
+                        .onDisappear { scrollOffset = 0 }
+                        .frame(width: viewportWidth, alignment: .leading)
+                        .clipped()
+                        .overlay(alignment: .topLeading) {
+                            let groups = store.recentGroups
+                            if !groups.isEmpty {
+                                ProductTrails(
+                                    groups: groups,
+                                    layout: trailLayout(groups),
+                                    width: viewportWidth,
+                                    height: viewportHeight
+                                ) { agent in
+                                    withAnimation(PanelMotion.slot(isOpening: true)) {
+                                        list.scrollTo(ProductHeadingSlotID(agent: agent), anchor: .top)
+                                    }
+                                }
                             }
                         }
                     }
-                    .frame(
-                        width: viewportWidth + legacyScrollerGutter(isScrolling: isScrolling),
-                        height: viewportHeight
-                    )
-                    .scrollIndicators(.hidden)
-                    .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                        geometry.contentOffset.y
-                    } action: { _, offset in
-                        scrollOffset = offset
-                    }
-                    .frame(width: viewportWidth, alignment: .leading)
-                    .clipped()
                     .frame(width: laneWidth, alignment: .leading)
                     .overlay(alignment: .trailing) {
                         ScrollRail(
@@ -1256,6 +1292,12 @@ struct RecentSessionSection: View {
                     }
                 }
             }
+        }
+    }
+
+    private func rows(_ departures: [RecentDeparture]) -> some View {
+        ForEach(departures) { departure in
+            RetiredRow(departure: departure)
         }
     }
 }
@@ -2815,7 +2857,10 @@ private struct SeamContent: View {
                 .foregroundStyle(ink)
                 .fixedSize()
 
-                FoldSeamRule(isVisible: store.isRecentExpanded)
+                // Grouped, the open queue's first heading draws this boundary `24` lower.
+                FoldSeamRule(
+                    isVisible: store.isRecentExpanded && !store.queueLeadsWithABlockHeading
+                )
 
                 Image(systemName: "chevron.down")
                     .font(.system(size: 9, weight: .medium))
@@ -2959,11 +3004,14 @@ private struct RetiredRowContent: View {
         )
     }
 
-    /// **product · project · subject** in the panel's three inks; overflows and fades. The badge is
-    /// always drawn (§8.6): nothing below the seam is grouped.
+    /// **product · project · subject** in the panel's three inks; overflows and fades. The badge
+    /// comes off on the grouped queue, where the heading above already names it (§4.7), exactly
+    /// as on a grouped live row.
     private var breadcrumb: some View {
         HStack(spacing: 6) {
-            ProductBadge(name: departure.session.agent.displayName)
+            if !store.groupsRecentByProduct {
+                ProductBadge(name: departure.session.agent.displayName)
+            }
 
             if store.coversWords(of: departure.session) {
                 // One bar at the title's length; a retired row is a single run (`cover-the-words.md` §4.1).
@@ -3344,8 +3392,9 @@ private struct ProductBadge: View {
 ///   scrolls, and a conditional ground let rows slide through the chip.
 /// - Grounds are laid before any chip, so an arriving heading never blacks out badges.
 /// - Hit-tests only where it draws; everything else falls through to the rows.
-private struct ProductTrails: View {
-    let groups: [MonitorAggregation.SessionGroup]
+/// - Drawn over the live list and over the grouped Recent queue alike (§4.7).
+private struct ProductTrails<Block: ProductBlock>: View {
+    let groups: [Block]
     let layout: ProductTrailLayout
     let width: CGFloat
     let height: CGFloat
@@ -3393,8 +3442,8 @@ private struct ProductTrails: View {
 
 /// One heading as the overlay draws it: ``ProductGroupHeader``'s chip line, the badge a control,
 /// the rest faded by trail progress.
-private struct TrailHeading: View {
-    let group: MonitorAggregation.SessionGroup
+private struct TrailHeading<Block: ProductBlock>: View {
+    let group: Block
     let heading: ProductTrailLayout.Heading
     let select: (AgentKind) -> Void
 
@@ -3414,7 +3463,7 @@ private struct TrailHeading: View {
                         )
                         .accessibilityHidden(true)
 
-                    Text(verbatim: "\(group.sessions.count)")
+                    Text(verbatim: "\(group.rowCount)")
                         .font(Font(PanelMetrics.captionFont))
                         .foregroundStyle(
                             group.wantsAttention
@@ -3441,8 +3490,8 @@ private struct TrailHeading: View {
 ///
 /// On a trail it dims, or flips if its block wants a person (§4.5), crossfading with docking so
 /// flip and lit count never show at once. Hover brightens a dimmed badge and shows the hand.
-private struct TrailBadge: View {
-    let group: MonitorAggregation.SessionGroup
+private struct TrailBadge<Block: ProductBlock>: View {
+    let group: Block
     let trailed: CGFloat
     let action: () -> Void
 
@@ -3477,7 +3526,7 @@ private struct TrailBadge: View {
     }
 
     private var spokenLabel: String {
-        let count = group.sessions.count
+        let count = group.rowCount
         let rows = "\(count) session\(count == 1 ? "" : "s")"
         return group.wantsAttention
             ? "\(name), \(rows), one waiting for you"

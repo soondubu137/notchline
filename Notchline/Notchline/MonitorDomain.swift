@@ -777,6 +777,14 @@ enum AgentSnapshotMerge {
     }
 }
 
+/// What a block heading reads off its block, on the live list or the Recent queue: whose it is,
+/// how many rows it heads, and whether one of them wants a person.
+nonisolated protocol ProductBlock: Identifiable where ID == AgentKind {
+    var agent: AgentKind { get }
+    var rowCount: Int { get }
+    var wantsAttention: Bool { get }
+}
+
 enum MonitorAggregation {
     /// Whether this thread is still working, not the turn status the row draws: a subagent outlives
     /// its turn. Read by the collapsed summary, product marks, row order and terminal membership
@@ -861,9 +869,8 @@ enum MonitorAggregation {
             .max { $0.actionRank < $1.actionRank } ?? .connecting
     }
 
-    /// One product's block on the live list. The queue stays ungrouped: its ages run in one
-    /// descent (`refreshRecentDepartures` sorts on `departedAt`), and headers would restart it.
-    struct SessionGroup: Identifiable, Equatable, Sendable {
+    /// One product's block on the live list.
+    nonisolated struct SessionGroup: ProductBlock, Equatable, Sendable {
         let agent: AgentKind
         let sessions: [MonitoredSession]
         /// Derived status (`PRD.md` §6.2): a subagent stuck at a dialogue counts, a finished turn
@@ -871,6 +878,19 @@ enum MonitorAggregation {
         let wantsAttention: Bool
 
         var id: AgentKind { agent }
+        var rowCount: Int { sessions.count }
+    }
+
+    /// One product's block on the Recent queue (`expanded-panel-v2.md` §4.7). Its rows keep the
+    /// queue's newest-first order, so the ages still run in one descent inside a block.
+    nonisolated struct RecentGroup: ProductBlock, Equatable, Sendable {
+        let agent: AgentKind
+        let departures: [RecentDeparture]
+
+        var id: AgentKind { agent }
+        var rowCount: Int { departures.count }
+        /// Nothing below the seam wants anybody (§2.4 rule 06), whatever the row was last drawn as.
+        var wantsAttention: Bool { false }
     }
 
     /// One block per product that has a row, in `AgentKind` order — never by urgency, because
@@ -887,6 +907,18 @@ enum MonitorAggregation {
                 sessions: own,
                 wantsAttention: own.contains { effectiveStatus(of: $0).wantsPerson }
             )
+        }
+    }
+
+    /// The queue's blocks: the live list's order of blocks, each holding its departures in the
+    /// order given, which is the queue's own (most recently departed first).
+    nonisolated static func groups(
+        of departures: [RecentDeparture]
+    ) -> [RecentGroup] {
+        AgentKind.allCases.compactMap { agent in
+            let own = departures.filter { $0.session.agent == agent }
+            guard !own.isEmpty else { return nil }
+            return RecentGroup(agent: agent, departures: own)
         }
     }
 
@@ -1123,7 +1155,8 @@ nonisolated struct ShareReading: Equatable, Sendable {
 /// - On the foot line (the viewport's last `16`): blocks still to come, nearest first; the
 ///   next one lifts straight up at its flow `x`.
 ///
-/// A list that fits its viewport pins nothing.
+/// A list that fits its viewport pins nothing. The Recent queue lays its blocks out the same way,
+/// at its own row height (§4.7).
 struct ProductTrailLayout: Equatable, Sendable {
     struct Heading: Equatable, Sendable {
         let agent: AgentKind
@@ -1153,12 +1186,13 @@ struct ProductTrailLayout: Equatable, Sendable {
         1 - pow(1 - t, 3)
     }
 
-    nonisolated static func laidOut(
-        groups: [MonitorAggregation.SessionGroup],
+    nonisolated static func laidOut<Block: ProductBlock>(
+        groups: [Block],
         badgeWidths: [CGFloat],
         offset: CGFloat,
         viewportHeight: CGFloat,
-        contentHeight: CGFloat
+        contentHeight: CGFloat,
+        rowHeight: CGFloat = PanelMetrics.sessionRowHeight
     ) -> ProductTrailLayout {
         let count = groups.count
         guard count > 0, badgeWidths.count == count else {
@@ -1182,7 +1216,7 @@ struct ProductTrailLayout: Equatable, Sendable {
             if index > 0 { y += slack }
             flowChips.append(y)
             y += line
-            y += CGFloat(group.sessions.count) * PanelMetrics.sessionRowHeight
+            y += CGFloat(group.rowCount) * rowHeight
         }
         let chips = flowChips.map { $0 - offset }
 
