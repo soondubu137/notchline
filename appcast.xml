@@ -6,6 +6,27 @@
     <description>Notchline's update feed, read by every copy through SUFeedURL. Items are added by scripts/release/build-release.sh, newest first; do not rename or move this file.</description>
     <language>en</language>
     <item>
+      <title>Notchline 0.5.3 Beta</title>
+      <pubDate>Tue, 15 Sep 2026 08:15:32 GMT</pubDate>
+      <sparkle:version>20</sparkle:version>
+      <sparkle:shortVersionString>0.5.3</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/soondubu137/notchline/releases/tag/v0.5.3</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown"><![CDATA[**A long answer typed on the notch now stays inside its field.** The field grows a line at a time up to four lines, then scrolls. (`docs/answer-in-notch.md` §7.1.)
+
+### Fixed
+
+- **Typed text no longer spills out of the answer field.** A second line, whether wrapped or entered with ⇧⏎, was drawn below the field and over the row beneath it. The field now grows 16 pt a line up to four lines, then scrolls inside itself with a thin rail. Back and Submit stay where they were, and a one-line answer looks exactly as before.
+
+### Known limitations
+
+- **Not yet typed into a live Claude Code question.** The field was checked in unit tests and offscreen snapshots. Nobody has watched the panel grow on screen as a line arrives.
+
+Everything listed under `0.5.2` and earlier still stands, unchanged.
+]]></description>
+      <enclosure url="https://github.com/soondubu137/notchline/releases/download/v0.5.3/Notchline-0.5.3.zip" type="application/octet-stream" sparkle:edSignature="VwjakIbIxnnUm6RP4Plop68x3B99O6nnRSw3ONgnrzIaFqW5lT2S6PxVvQDF9j4BDypOAslBCnO4RIioFWgeAA==" length="3982956"/>
+    </item>
+    <item>
       <title>Notchline 0.5.2 Beta</title>
       <pubDate>Tue, 15 Sep 2026 04:18:20 GMT</pubDate>
       <sparkle:version>19</sparkle:version>
