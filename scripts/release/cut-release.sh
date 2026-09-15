@@ -1,7 +1,8 @@
 #!/bin/bash
 # Cuts, builds and publishes one Notchline version, end to end.
 #
-#   scripts/release/cut-release.sh <version> [--stage <word> | --stage none] [--local] [--skip-tests] [--yes]
+#   scripts/release/cut-release.sh <version> [--stage <word> | --stage none] [--local] [--skip-tests]
+#                                  [--keep-build] [--yes]
 #
 # Write the version's CHANGELOG.md section first, under `## Unreleased` or under its final heading
 # `## <version> <Stage> — <date>`. It needs a bold lead paragraph and an `Everything listed under …`
@@ -18,6 +19,8 @@
 #   6. Feed     commit appcast.xml and push it, only after the upload.                  (asks)
 #   7. Verify   signed out: wait for raw.githubusercontent.com's cache to serve the new feed, then
 #               download the archive from the feed's link and check its size and signature.
+#   8. Clean    delete what this version left under build/release: the app, archive, logs, test
+#               results and DerivedData. Only after step 7; a failed run keeps all of it.
 #
 # Every step first checks whether it has already happened, so a run that stopped part-way resumes
 # when the same command is run again. Nothing leaves this Mac without a yes.
@@ -25,6 +28,7 @@
 #   --stage <word>  change the stage word (`Beta`, `RC`); `none` drops it. Default: keep it.
 #   --local         stop after step 1, to read the cut commit before anything is published.
 #   --skip-tests    do not run the unit suite in step 1.
+#   --keep-build    skip step 8 and leave the build where it is.
 #   --yes           answer yes to every question; needed when stdin is not a terminal.
 
 source "$(dirname "$0")/common.sh"
@@ -46,12 +50,14 @@ version=
 stage_argument=
 local_only=false
 skip_tests=false
+keep_build=false
 assume_yes=false
 while [ $# -gt 0 ]; do
     case $1 in
         --stage) [ $# -ge 2 ] || die "--stage needs a word, or none"; stage_argument=$2; shift ;;
         --local) local_only=true ;;
         --skip-tests) skip_tests=true ;;
+        --keep-build) keep_build=true ;;
         --yes) assume_yes=true ;;
         -h | --help) usage; exit 0 ;;
         -*) die "unknown option $1" ;;
@@ -378,6 +384,31 @@ echo "    $item_url: $item_length bytes"
 signature_result=$(verify_signature "$item_signature" "$scratch/$archive_name")
 echo "    $signature_result"
 
+# --- 8. Clean --------------------------------------------------------------------------------
+# Not before step 7 passes: until then a re-run needs the archive (a rebuild never matches the
+# uploaded asset) and a failure needs the logs. A published version's re-run never reads any of it.
+build_note=
+if $keep_build; then
+    build_note="  - $BUILD_ROOT holds the build and its DerivedData (--keep-build); delete it when you like."
+else
+    step "8. Clean"
+    removable=("$BUILD_ROOT/$version" "$BUILD_ROOT/build-$version.log"
+        "$BUILD_ROOT/tests-$version.log" "$BUILD_ROOT/tests-$version.xcresult")
+    # A DERIVED_DATA overridden to somewhere else may be shared; only the default one is this run's.
+    if [ "$DERIVED_DATA" = "$BUILD_ROOT/DerivedData" ]; then
+        removable+=("$DERIVED_DATA")
+    fi
+    rm -rf "${removable[@]}"
+    if rmdir "$BUILD_ROOT" 2>/dev/null; then
+        echo "    removed $BUILD_ROOT"
+    elif [ -d "$BUILD_ROOT" ]; then
+        echo "    removed $version's build; $BUILD_ROOT keeps files this run did not make:"
+        ls -A "$BUILD_ROOT" | sed 's/^/      /'
+    else
+        echo "    nothing to remove"
+    fi
+fi
+
 cat <<EOF
 
 Notchline $label ($build) is published.
@@ -385,5 +416,5 @@ Notchline $label ($build) is published.
 Left for you:
   - On an installed copy: About → Check for Updates → Install, then check About reads
     Version $label ($build).
-  - $BUILD_ROOT holds the build and its DerivedData; delete it when you like.
 EOF
+[ -z "$build_note" ] || echo "$build_note"
