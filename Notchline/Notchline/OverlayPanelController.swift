@@ -200,7 +200,8 @@ final class OverlayPanelController {
             store.$openRowID.map { _ in () }.eraseToAnyPublisher(),
             // About replaces the body at a fixed height and leaves `expandsToPillOnly` (width too).
             store.$isShowingAbout.map { _ in () }.eraseToAnyPublisher(),
-            // Each question in a set can change the body height; row identity does not move.
+            // Each question in a set can change the body height, and a draft the field's height
+            // (`answer-in-notch.md` §7.1); row identity moves for neither.
             store.$answerRevision.map { _ in () }.eraseToAnyPublisher(),
             // `Hide Notchline` changes the notched width or the pill's height; nothing else republishes.
             store.$hidesNotchline.map { _ in () }.eraseToAnyPublisher(),
@@ -594,7 +595,7 @@ final class OverlayPanel: NSPanel {
     private static func isAnswerField(_ view: NSView) -> Bool {
         var candidate: NSView? = view
         while let current = candidate {
-            if current is AnswerFieldView { return true }
+            if current is AnswerFieldView || current is AnswerFieldBox { return true }
             candidate = current.superview
         }
         return false

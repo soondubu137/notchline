@@ -4,6 +4,20 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## 0.5.3 Beta — 2026-09-15
+
+**A long answer typed on the notch now stays inside its field.** The field grows a line at a time up to four lines, then scrolls. (`docs/answer-in-notch.md` §7.1.)
+
+### Fixed
+
+- **Typed text no longer spills out of the answer field.** A second line, whether wrapped or entered with ⇧⏎, was drawn below the field and over the row beneath it. The field now grows 16 pt a line up to four lines, then scrolls inside itself with a thin rail. Back and Submit stay where they were, and a one-line answer looks exactly as before.
+
+### Known limitations
+
+- **Not yet typed into a live Claude Code question.** The field was checked in unit tests and offscreen snapshots. Nobody has watched the panel grow on screen as a line arrives.
+
+Everything listed under `0.5.2` and earlier still stands, unchanged.
+
 ## 0.5.2 Beta — 2026-09-14
 
 **Clicking a Trae row now brings forward the Trae window that holds its Thread, not whichever Trae window you used last.** It needs companion 1.2.3: press Repair for Trae in Settings, then restart extensions when Trae asks. (`docs/trae-integration.md`.)

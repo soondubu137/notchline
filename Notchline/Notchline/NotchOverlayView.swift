@@ -1833,18 +1833,22 @@ private struct OpenRowChevron: View {
 ///
 /// The white ground marks what `⏎` does; only typing moves it, onto the text answer (§6).
 /// Controls are text plus `12` a side either way. A one-answer form omits the refusal.
+///
+/// The field grows downward and the controls stay on its first line (§7.1): a control that
+/// followed the last line would walk down the screen under a pointer resting on it.
 private struct AnswerRow: View {
     @EnvironmentObject private var store: MonitorStore
     let session: MonitoredSession
     let shape: AnswerRowShape
 
     var body: some View {
-        HStack(spacing: 8) {
+        HStack(alignment: .top, spacing: 8) {
             if let placeholder = shape.placeholder {
                 AnswerField(
                     identity: "\(session.id)#\(store.answerDraftGeneration)",
                     placeholder: placeholder,
                     initialText: store.answerDraft,
+                    textWidth: store.answerFieldTextWidth,
                     // §8 state 01: in flight, stop taking keys and drop the caret.
                     takesKeys: !store.isAnswerInFlight,
                     // §5.4 reversed: a ticked option overrules typed text.
@@ -1854,7 +1858,7 @@ private struct AnswerRow: View {
                     onEscape: { store.closeOpenRow() }
                 )
                 .frame(maxWidth: .infinity)
-                .frame(height: PanelMetrics.answerRowHeight)
+                .frame(height: store.answerFieldHeight)
             } else {
                 Spacer(minLength: 0)
             }
@@ -1891,7 +1895,7 @@ private struct AnswerRow: View {
             .allowsHitTesting(store.canSubmitCurrentAnswer)
             .disabled(!store.canSubmitCurrentAnswer)
         }
-        .frame(height: PanelMetrics.answerRowHeight)
+        .frame(height: store.answerFieldHeight, alignment: .top)
         // §8 state 01: in flight, drop to `45%` and stop taking input. Nothing resizes, no spinner.
         .opacity(store.isAnswerInFlight ? 0.45 : 1)
         .allowsHitTesting(!store.isAnswerInFlight)
@@ -1982,7 +1986,8 @@ private struct AnswerControl: View {
 ///
 /// - The caret must not be a SwiftUI animation (§13.2, `AGENTS.md` §7): it would invalidate the
 ///   whole panel twice a second. The text system draws it in its own layer.
-/// - Text never reaches `@Published`; the store publishes only where the ground is.
+/// - Text never reaches `@Published`; the store publishes where the ground is, and when the field
+///   gains or loses a drawn line (§7.1).
 /// - An ordinary focusable field (§6.6, corrected 2026-09-07): a click gives the caret, a click
 ///   elsewhere takes it (``OverlayPanel/sendEvent(_:)``); panel keys arrive only while nothing
 ///   holds it (``PanelKey``).
@@ -1992,28 +1997,35 @@ private struct AnswerField: NSViewRepresentable {
     let identity: String
     let placeholder: String
     let initialText: String
+    /// ``MonitorStore/answerFieldTextWidth``. The text wraps where the store measured it rather
+    /// than at the view's width, so the height reserved for it is the height it draws.
+    let textWidth: CGFloat
     let takesKeys: Bool
     let superseded: Bool
     let onEdit: (String) -> Void
     let onReturn: () -> Void
     let onEscape: () -> Void
 
-    func makeNSView(context: Context) -> AnswerFieldView {
-        let view = AnswerFieldView()
+    func makeNSView(context: Context) -> AnswerFieldBox {
+        let box = AnswerFieldBox()
+        let view = box.field
         view.delegate = context.coordinator
         view.placeholder = placeholder
+        view.textWidth = textWidth
         view.string = initialText
         view.isEditable = takesKeys
         view.isSuperseded = superseded
         context.coordinator.identity = identity
-        return view
+        return box
     }
 
-    func updateNSView(_ view: AnswerFieldView, context: Context) {
+    func updateNSView(_ box: AnswerFieldBox, context: Context) {
+        let view = box.field
         context.coordinator.onEdit = onEdit
         context.coordinator.onReturn = onReturn
         context.coordinator.onEscape = onEscape
         view.placeholder = placeholder
+        view.textWidth = textWidth
         view.isEditable = takesKeys
         view.isSuperseded = superseded
         // §8 state 01: an answered row stops taking keys, so the caret leaves too.
@@ -2080,107 +2092,78 @@ private struct AnswerField: NSViewRepresentable {
     }
 }
 
-/// The text view: one line of `13` pt, drawing its own ground.
+/// The field as it stands in the row: its ground, and a clip showing at most
+/// ``PanelMetrics/answerFieldMaximumLines`` of the text view (§7.1).
 ///
-/// Clicked into, not focused on open (§6.6, corrected 2026-09-07). With no caret at rest, the
-/// ground marks hover and focus, and is nothing when neither holds.
-final class AnswerFieldView: NSTextView {
-    var placeholder: String = ""
-
-    /// Whether a ticked option has taken the answer. Overruled text is dimmed, not removed (§5.4).
-    var isSuperseded = false {
-        didSet {
-            guard isSuperseded != oldValue else { return }
-            textColor = Self.ink(superseded: isSuperseded)
-            needsDisplay = true
-        }
-    }
-
-    private static func ink(superseded: Bool) -> NSColor {
-        superseded
-            ? NotchPalette.countsSessionDrawingColor.withAlphaComponent(0.45)
-            : NotchPalette.countsSessionDrawingColor
-    }
+/// - The ground is drawn here and not by the text view, which is as tall as its text and slides
+///   under the clip once the field scrolls. With no caret at rest (§6.6), the ground marks hover
+///   and focus, and is nothing when neither holds.
+/// - The clip stands inside the ground's vertical inset, so lines scroll within whole lines and
+///   never through the padding.
+/// - A field that scrolls wears the body's rail at its trailing edge (§4.4): what was typed above
+///   the fold is still the person's answer, and it goes with the send.
+final class AnswerFieldBox: NSView {
+    /// TextKit 1, the stack ``PanelMetrics/answerFieldLineCount(_:width:)`` measures with, so the
+    /// two cannot break a line in different places.
+    let field = AnswerFieldView(usingTextLayoutManager: false)
+    private let clip = AnswerFieldScrollView()
+    private var hoverArea: NSTrackingArea?
 
     private var isHovered = false {
         didSet { if isHovered != oldValue { needsDisplay = true } }
     }
 
-    /// `⇧⏎` inserts a new line; only `⏎` sends (§9.2).
-    ///
-    /// Read off the event: in a plain text view `⇧⏎` is `insertNewline:`, same as `⏎`.
-    override func keyDown(with event: NSEvent) {
-        if event.keyCode == 36, event.modifierFlags.contains(.shift) {
-            insertText("\n", replacementRange: selectedRange())
-            return
-        }
-        super.keyDown(with: event)
-    }
-
-    /// The panel's recessed step: the one surface meant for input is drawn set into the row.
-    override init(frame: NSRect, textContainer: NSTextContainer?) {
-        super.init(frame: frame, textContainer: textContainer)
-        configure()
-    }
-
-    /// Through `NSTextView`'s `init(frame:)`, never the designated initialiser with a `nil`
-    /// container: that has no text system, and keystrokes fell through to the panel (measured,
-    /// Release).
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
-        configure()
+        clip.frame = clipFrame
+        clip.documentView = field
+        addSubview(clip)
     }
 
     convenience init() {
-        self.init(frame: NSRect(x: 0, y: 0, width: 200, height: 28))
+        self.init(frame: NSRect(x: 0, y: 0, width: 200, height: PanelMetrics.answerRowHeight))
     }
 
-    required init?(coder: NSCoder) {
-        super.init(coder: coder)
-        configure()
+    required init?(coder: NSCoder) { nil }
+
+    /// The padding around the clip is still the field: a press there gives the caret.
+    override func mouseDown(with event: NSEvent) {
+        guard field.isEditable else { return }
+        window?.makeFirstResponder(field)
     }
 
-    private func configure() {
-        drawsBackground = false
-        isRichText = false
-        importsGraphics = false
-        allowsUndo = true
-        isVerticallyResizable = false
-        isHorizontallyResizable = false
-        font = NSFont.systemFont(ofSize: 13, weight: .regular)
-        textColor = Self.ink(superseded: false)
-        insertionPointColor = .white
-        textContainerInset = NSSize(width: 8, height: 5)
-        textContainer?.lineFragmentPadding = 0
-        // `13` pt line in a `28` pt box: a second line scrolls rather than growing the row (§12).
-        textContainer?.widthTracksTextView = true
+    override func resetCursorRects() {
+        addCursorRect(bounds, cursor: .iBeam)
     }
 
-    override var intrinsicContentSize: NSSize {
-        NSSize(width: NSView.noIntrinsicMetric, height: PanelMetrics.answerRowHeight)
+    /// Set rather than autoresized: SwiftUI can pass the box through a zero height, and an
+    /// autoresizing mask loses a fixed margin there for good (measured, a `28` pt clip in a `28`
+    /// pt box).
+    private var clipFrame: NSRect {
+        let inset = PanelMetrics.answerFieldTextInset.height
+        return NSRect(x: 0, y: inset, width: bounds.width, height: max(bounds.height - inset * 2, 0))
     }
 
-    /// Ground, text and placeholder all drawn here: a SwiftUI overlay would need every keystroke
-    /// and focus change published.
-    ///
-    /// The ground is the quiet button wash (as on `Back`, `Deny`, `Submit`), not §4.2's recessed
-    /// step, and is drawn only while hovered or focused (§7).
+    override func resizeSubviews(withOldSize oldSize: NSSize) {
+        clip.frame = clipFrame
+        needsLayout = true
+    }
+
+    /// Keeps the text view at least the clip's height, so a press anywhere in the clip lands in
+    /// the text.
+    override func layout() {
+        super.layout()
+        if clip.frame != clipFrame { clip.frame = clipFrame }
+        let visible = clip.contentSize.height
+        guard field.minSize.height != visible else { return }
+        field.minSize = NSSize(width: 0, height: visible)
+        field.sizeToFit()
+    }
+
+    /// The quiet button wash (as on `Back`, `Deny`, `Submit`), not §4.2's recessed step, drawn only
+    /// while hovered or focused (§7). The whole grown field wears it.
     override func draw(_ dirtyRect: NSRect) {
-        drawGround()
-        super.draw(dirtyRect)
-        guard string.isEmpty, !placeholder.isEmpty else { return }
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font ?? NSFont.systemFont(ofSize: 13),
-            .foregroundColor: NotchPalette.labelDrawingColor
-        ]
-        (placeholder as NSString).draw(
-            at: NSPoint(x: textContainerInset.width, y: textContainerInset.height),
-            withAttributes: attributes
-        )
-    }
-
-    private func drawGround() {
-        let isFocused = window?.firstResponder === self && isEditable
+        let isFocused = window?.firstResponder === field && field.isEditable
         let wash: Double = isFocused
             ? NotchPalette.RowEmphasis.controlHoverFillOpacity
             : (isHovered ? NotchPalette.RowEmphasis.controlRestFillOpacity : 0)
@@ -2194,60 +2177,229 @@ final class AnswerFieldView: NSTextView {
             path.fill()
         }
         // The focus mark matches the option card's selected stroke.
-        guard isFocused else { return }
-        NotchPalette.themeInk.onDrawingColor(Self.focusEdgeOpacity).setStroke()
-        path.lineWidth = 1
-        path.stroke()
+        if isFocused {
+            NotchPalette.themeInk.onDrawingColor(Self.focusEdgeOpacity).setStroke()
+            path.lineWidth = 1
+            path.stroke()
+        }
+        drawRail()
     }
 
     private static let focusEdgeOpacity = 0.5
 
-    /// Tracking area so an empty field still reads as one under the pointer.
-    ///
-    /// - `.activeAlways`: the panel is hovered long before it holds the keyboard (ADR 0020).
-    /// - Tagged, and only the tagged area is removed: `NSTextView` owns its own areas, which also
-    ///   deliver `mouseEntered:` here.
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        for area in trackingAreas where Self.isHoverArea(area) {
-            removeTrackingArea(area)
-        }
-        addTrackingArea(
-            NSTrackingArea(
-                rect: .zero,
-                options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                owner: self,
-                userInfo: [Self.hoverAreaKey: true]
-            )
-        )
+    /// ``ScrollRail``'s marks in AppKit: a `1.5` pt track at white `15%` and a `3` pt thumb at
+    /// white `50%`, no shorter than `24`. Drawn here so a wheel over the field redraws this view
+    /// and not the panel.
+    private func drawRail() {
+        let visible = clip.contentSize.height
+        let content = field.frame.height
+        let travel = content - visible
+        guard travel > 0.5 else { return }
+        let offset = clip.contentView.bounds.minY
+        let thumb = max(24, visible * visible / content)
+        let progress = min(max(offset / travel, 0), 1)
+        let width = PanelMetrics.scrollRailWidth
+        let x = bounds.maxX - PanelMetrics.answerFieldRailInset - width
+        // The clip's top edge in this unflipped view, which the thumb travels down from.
+        let top = clip.frame.maxY
+        NSColor.white.withAlphaComponent(0.15).setFill()
+        NSBezierPath(
+            roundedRect: NSRect(x: x + (width - 1.5) / 2, y: clip.frame.minY, width: 1.5, height: visible),
+            xRadius: 0.75,
+            yRadius: 0.75
+        ).fill()
+        NSColor.white.withAlphaComponent(0.5).setFill()
+        NSBezierPath(
+            roundedRect: NSRect(
+                x: x,
+                y: top - thumb - (visible - thumb) * progress,
+                width: width,
+                height: thumb
+            ),
+            xRadius: width / 2,
+            yRadius: width / 2
+        ).fill()
     }
 
-    private static let hoverAreaKey = "notchlineAnswerFieldHover"
-
-    private static func isHoverArea(_ area: NSTrackingArea?) -> Bool {
-        area?.userInfo?[hoverAreaKey] as? Bool == true
+    /// So an empty field still reads as one under the pointer.
+    ///
+    /// - `.activeAlways`: the panel is hovered long before it holds the keyboard (ADR 0020).
+    /// - Enter and exit are matched to this area: `NSTextView` owns areas of its own, and what it
+    ///   does not handle travels up the responder chain to here.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        hoverArea.map(removeTrackingArea)
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverArea = area
     }
 
     override func mouseEntered(with event: NSEvent) {
-        super.mouseEntered(with: event)
-        if Self.isHoverArea(event.trackingArea) { isHovered = true }
+        if event.trackingArea === hoverArea { isHovered = true }
     }
 
     override func mouseExited(with event: NSEvent) {
-        super.mouseExited(with: event)
-        if Self.isHoverArea(event.trackingArea) { isHovered = false }
+        if event.trackingArea === hoverArea { isHovered = false }
+    }
+}
+
+/// The field's clip: no scroller, no rubber band. A field whose text fits has nothing to scroll,
+/// so its wheel goes on up the chain to the list, as it did before the field could scroll.
+private final class AnswerFieldScrollView: NSScrollView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        drawsBackground = false
+        contentView.drawsBackground = false
+        borderType = .noBorder
+        hasVerticalScroller = false
+        hasHorizontalScroller = false
+        verticalScrollElasticity = .none
+        horizontalScrollElasticity = .none
+        automaticallyAdjustsContentInsets = false
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    override func scrollWheel(with event: NSEvent) {
+        guard let document = documentView,
+              document.frame.height > contentSize.height + 0.5 else {
+            nextResponder?.scrollWheel(with: event)
+            return
+        }
+        super.scrollWheel(with: event)
+    }
+
+    /// Every scroll and every change to what is scrolled comes through here; the box's rail
+    /// follows it.
+    override func reflectScrolledClipView(_ clipView: NSClipView) {
+        super.reflectScrolledClipView(clipView)
+        superview?.needsDisplay = true
+    }
+}
+
+/// The text view: `13` pt on a `16` pt line, as tall as what it holds.
+///
+/// Clicked into, not focused on open (§6.6, corrected 2026-09-07). ``AnswerFieldBox`` draws the
+/// ground; this reports the caret's arrival and departure to it.
+final class AnswerFieldView: NSTextView {
+    var placeholder: String = ""
+
+    /// Where the text wraps (``MonitorStore/answerFieldTextWidth``), independent of the view.
+    var textWidth: CGFloat = PanelMetrics.requestBodyWidth {
+        didSet {
+            guard textWidth != oldValue else { return }
+            textContainer?.containerSize = NSSize(
+                width: textWidth,
+                height: CGFloat.greatestFiniteMagnitude
+            )
+        }
+    }
+
+    /// Whether a ticked option has taken the answer. Overruled text is dimmed, not removed (§5.4).
+    var isSuperseded = false {
+        didSet {
+            guard isSuperseded != oldValue else { return }
+            textColor = Self.ink(superseded: isSuperseded)
+            needsDisplay = true
+        }
+    }
+
+    /// The ground reads it: a field that has stopped taking keys shows no focus (§8 state 01).
+    override var isEditable: Bool {
+        didSet { if isEditable != oldValue { box?.needsDisplay = true } }
+    }
+
+    private var box: NSView? { enclosingScrollView?.superview }
+
+    private static func ink(superseded: Bool) -> NSColor {
+        superseded
+            ? NotchPalette.countsSessionDrawingColor.withAlphaComponent(0.45)
+            : NotchPalette.countsSessionDrawingColor
+    }
+
+    /// `⇧⏎` inserts a new line; only `⏎` sends (§9.2).
+    ///
+    /// Read off the event: in a plain text view `⇧⏎` is `insertNewline:`, same as `⏎`.
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 36, event.modifierFlags.contains(.shift) {
+            insertText("\n", replacementRange: selectedRange())
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    override init(frame: NSRect, textContainer: NSTextContainer?) {
+        super.init(frame: frame, textContainer: textContainer)
+        configure()
+    }
+
+    /// Never the designated initialiser with a `nil` container: that has no text system, and
+    /// keystrokes fell through to the panel (measured, Release). ``AnswerFieldBox`` builds this
+    /// through `init(usingTextLayoutManager:)`, which supplies one.
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        configure()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        configure()
+    }
+
+    private func configure() {
+        drawsBackground = false
+        isRichText = false
+        importsGraphics = false
+        allowsUndo = true
+        font = PanelMetrics.answerFieldFont
+        textColor = Self.ink(superseded: false)
+        insertionPointColor = .white
+        // The vertical inset is the clip's, outside this view (``AnswerFieldBox``).
+        textContainerInset = NSSize(width: PanelMetrics.answerFieldTextInset.width, height: 0)
+        textContainer?.lineFragmentPadding = 0
+        // Grows with its text inside the clip; the clip, not this, is the row's height (§7.1).
+        isVerticallyResizable = true
+        isHorizontallyResizable = false
+        autoresizingMask = [.width]
+        minSize = NSSize(width: 0, height: PanelMetrics.answerFieldLineHeight)
+        maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        textContainer?.widthTracksTextView = false
+        textContainer?.containerSize = NSSize(
+            width: textWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+    }
+
+    /// Text and placeholder are drawn here, the ground by ``AnswerFieldBox``: a SwiftUI overlay
+    /// would need every keystroke and focus change published.
+    override func draw(_ dirtyRect: NSRect) {
+        super.draw(dirtyRect)
+        guard string.isEmpty, !placeholder.isEmpty else { return }
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: font ?? PanelMetrics.answerFieldFont,
+            .foregroundColor: NotchPalette.labelDrawingColor
+        ]
+        (placeholder as NSString).draw(
+            at: NSPoint(x: textContainerInset.width, y: textContainerInset.height),
+            withAttributes: attributes
+        )
     }
 
     /// Report caret arrival and departure; they never take it (``OverlayPanel/sendEvent(_:)``).
     override func becomeFirstResponder() -> Bool {
         let took = super.becomeFirstResponder()
-        if took { needsDisplay = true }
+        if took { box?.needsDisplay = true }
         return took
     }
 
     override func resignFirstResponder() -> Bool {
         let gave = super.resignFirstResponder()
-        if gave { needsDisplay = true }
+        if gave { box?.needsDisplay = true }
         return gave
     }
 }
