@@ -31,7 +31,7 @@ nonisolated struct CodexProcessSource: Sendable {
             ControllingTerminalGestureReader.systemProcessStartedAt(forProcessIdentifier: execution.pid)
                 == execution.startedAt
         }, localProcesses: {
-            LibprocProcessTable().processes(named: "codex")?.compactMap {
+            LibprocProcessTable().processes(named: CodexNativeProcesses.executableName)?.compactMap {
                 reader.localTUI($0.processIdentifier)
             }
         })
@@ -40,15 +40,14 @@ nonisolated struct CodexProcessSource: Sendable {
 
 /// Observed on 0.154.0; unsupported modes and unreadable process arguments fail closed.
 nonisolated struct CodexNativeProcesses: Sendable {
-    private let home: URL
-    /// Read per use: a CLI installed while this app runs must not need a relaunch to be seen,
-    /// and the settings reading resolves it the same way on every check.
-    private let command: @Sendable () -> URL?
+    /// What the kernel calls both surfaces' executable, and what ``CodexProcessSource/live()``
+    /// asks the process table for.
+    static let executableName = "codex"
 
-    init(home: URL = FileManager.default.homeDirectoryForCurrentUser,
-         command: @escaping @Sendable () -> URL? = { ProductInstallationDiscovery.command(named: "codex") }) {
+    private let home: URL
+
+    init(home: URL = FileManager.default.homeDirectoryForCurrentUser) {
         self.home = home
-        self.command = command
     }
 
     func owner(of peer: Int32) -> CodexExecution? {
@@ -57,7 +56,7 @@ nonisolated struct CodexNativeProcesses: Sendable {
             guard pid > 1,
                   let path = ProcessAncestryHostResolver.systemExecutablePath(ofProcess: pid)
             else { return nil }
-            if URL(fileURLWithPath: path).lastPathComponent == "codex" {
+            if URL(fileURLWithPath: path).lastPathComponent == Self.executableName {
                 if let local = localTUI(pid) { return local }
                 // Only an app-server belonging to the actual Desktop application can vouch for it.
                 guard let arguments = Self.arguments(pid), Self.isAppServer(arguments),
@@ -82,10 +81,26 @@ nonisolated struct CodexNativeProcesses: Sendable {
         return nil
     }
 
+    /// A local interactive TUI, identified by what the process **is** rather than by where it was
+    /// installed from.
+    ///
+    /// An install location is not an identity. This used to require the running executable to
+    /// resolve to the single path ``ProductInstallationDiscovery/command(named:)`` found first, and
+    /// that silently costs rows in ordinary setups: a machine can hold two `codex` binaries — a
+    /// Homebrew one and a version manager's — and the one the user runs is not necessarily the one
+    /// a fixed search order picks, while a mise- or asdf-style shim is a different file from the
+    /// binary it executes and an nvm-style layout keeps the binary under a version directory that
+    /// changes on every upgrade. In each of those the process is plainly Codex and matched nothing,
+    /// so its Turns got no rows at all.
+    ///
+    /// What is left identifies it without reference to any list, and is no weaker: the kernel's own
+    /// name for the running executable, TUI-shaped argv (`exec`, `app-server` and every other
+    /// subcommand are rejected), a controlling terminal, no multiplexer or SSH ancestor, and
+    /// `proc_pidfdinfo` reporting this user's own `~/.codex/state_5.sqlite` open and no other
+    /// home's. A process holding that database open is Codex; nothing else has reason to.
     func localTUI(_ pid: Int32) -> CodexExecution? {
         guard let path = ProcessAncestryHostResolver.systemExecutablePath(ofProcess: pid),
-              let installed = command()?.resolvingSymlinksInPath(),
-              URL(fileURLWithPath: path).resolvingSymlinksInPath() == installed,
+              URL(fileURLWithPath: path).lastPathComponent == Self.executableName,
               let arguments = Self.arguments(pid),
               Self.isLocalTUI(arguments),
               let tty = ControllingTerminalGestureReader.systemControllingTerminalPath(forProcessIdentifier: pid),

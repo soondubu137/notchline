@@ -284,6 +284,159 @@ struct CodexCLIIntegrationTests {
             "an inventory that found nothing must not book the store's next wake")
         await service.disconnect()
     }
+
+    /// One list, so the two readings cannot answer different questions about the same machine.
+    /// `CodexExecutableLocator` picks the binary that runs `app-server`; `command(named:)` names
+    /// the CLI install Settings shows. They are allowed to name different binaries — Desktop ships
+    /// its own `codex` and it is preferred for the App Server — but they must not search different
+    /// *places*, or a CLI in a directory only one of them knows is half-seen: present in Settings
+    /// and unusable for metadata, or the reverse.
+    @Test func theAppServerAndTheCLIReadingSearchTheSameInstallDirectories() {
+        let home = URL(fileURLWithPath: "/Users/someone")
+        let environment = ["PATH": "/usr/bin:/opt/custom/bin"]
+        let directories = ProductInstallationDiscovery.commandDirectories(home: home, environment: environment)
+        let candidates = CodexExecutableLocator.candidates(home: home, environment: environment)
+
+        let desktop = candidates.prefix(2).map(\.path)
+        #expect(desktop == ["/Applications/ChatGPT.app/Contents/Resources/codex",
+                            "/Applications/Codex.app/Contents/Resources/codex"],
+            "Desktop's own build answers for Desktop's App Server, and stays first")
+        #expect(Array(candidates.dropFirst(2)) == directories.map { $0.appendingPathComponent("codex") },
+            "everything after it is the shared list, in the shared order")
+        #expect(!directories.contains { $0.path.hasPrefix("/Applications/") },
+            "a Desktop bundle is not a CLI install and is never offered as one")
+    }
+
+    /// A CLI shipped on npm lands wherever the user's package or version manager keeps binaries,
+    /// and `PATH` cannot be relied on to find it: the window server launches this app, so its
+    /// `PATH` is the system default. The directories are therefore named outright, and `PATH` is
+    /// appended after them without repeating one.
+    @Test func macPortsAndVersionManagerShimsAreSearchedWithoutTrustingPATH() {
+        let home = URL(fileURLWithPath: "/Users/someone")
+        let directories = ProductInstallationDiscovery.commandDirectories(
+            home: home, environment: ["PATH": "/opt/homebrew/bin:/opt/custom/bin"]
+        ).map(\.path)
+
+        for expected in ["/Users/someone/.local/bin", "/opt/homebrew/bin", "/usr/local/bin",
+                         "/opt/local/bin", "/Users/someone/.local/share/mise/shims",
+                         "/Users/someone/.asdf/shims", "/Users/someone/.volta/bin",
+                         "/Users/someone/.bun/bin"] {
+            #expect(directories.contains(expected), "\(expected) is searched without help from PATH")
+        }
+        #expect(directories.firstIndex(of: "/Users/someone/.local/bin") == 0,
+            "the products' own installer location still breaks a tie first")
+        #expect(directories.filter { $0 == "/opt/homebrew/bin" }.count == 1,
+            "a PATH that repeats a named directory does not search it twice")
+        #expect(directories.last == "/opt/custom/bin", "PATH is the fallback, after every named directory")
+    }
+
+    /// Identity is not an install location. Everything `localTUI` still reads describes the running
+    /// process — its name, its argv, its terminal, its open home database — so a TUI started from a
+    /// shim, a second Homebrew prefix or a version directory is the same evidence as one started
+    /// from the path a search happens to find first. Nothing here consults a list of paths.
+    @Test func aTUIIsIdentifiedByTheProcessAndNotByWhereItWasInstalled() {
+        #expect(CodexNativeProcesses.isLocalTUI(["/opt/local/bin/codex"]))
+        #expect(CodexNativeProcesses.isLocalTUI(["/Users/someone/.local/share/mise/installs/npm-openai-codex/0.154.0/bin/codex", "--search"]))
+        #expect(!CodexNativeProcesses.isLocalTUI(["/opt/local/bin/codex", "app-server"]),
+            "a subcommand is still what separates the surfaces, wherever the binary lives")
+        #expect(!CodexNativeProcesses.isLocalTUI(["/opt/local/bin/codex", "exec", "do the thing"]))
+
+        let home = URL(fileURLWithPath: "/Users/someone")
+        #expect(CodexNativeProcesses.hasHomeDatabase(
+            in: ["/Users/someone/.codex/state_5.sqlite"], home: home
+        ), "the home database is read from the process, not from where the binary sits")
+        #expect(!CodexNativeProcesses.hasHomeDatabase(
+            in: ["/Users/elsewhere/.codex/state_5.sqlite"], home: home
+        ))
+    }
+
+    /// The same claim against the kernel rather than against pure functions, because this is the
+    /// defect's actual shape: a real process, running a binary in a directory **no list contains**,
+    /// holding this home's database open on a real terminal. Matching the running executable
+    /// against the one discovered install path failed exactly here, and the Turn got no row.
+    ///
+    /// The pty is allocated here and the staged process makes it its own controlling terminal —
+    /// `script(1)` cannot do it, since it needs a terminal on its own stdin and a window server
+    /// launch has none. The staged binary is a copy of `perl` named `codex`: it takes a script as
+    /// its one positional argument, which is the argv shape of a TUI started with a prompt.
+    @Test func aTUIInstalledWhereNoListLooksIsStillIdentifiedFromTheKernel() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nc-tui-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let database = home.appendingPathComponent(".codex/state_5.sqlite")
+        let installed = root.appendingPathComponent("no/list/knows/this/bin")
+        try FileManager.default.createDirectory(at: database.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
+        try Data().write(to: database)
+        let executable = installed.appendingPathComponent(CodexNativeProcesses.executableName)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/perl"), to: executable)
+
+        let master = posix_openpt(O_RDWR | O_NOCTTY)
+        try #require(master >= 0, "no pty available")
+        defer { close(master) }
+        try #require(grantpt(master) == 0 && unlockpt(master) == 0)
+        let terminal = String(cString: ptsname(master))
+
+        // A session leader with no controlling terminal takes the first one it opens, which is how
+        // a TUI in Terminal.app gets its own. The session has to come from the spawn:
+        // `Foundation.Process` makes the child a process-group leader, and a group leader's
+        // `setsid()` fails, so the staged process would never acquire the terminal.
+        let script = root.appendingPathComponent("hold.pl")
+        try """
+            open(TTY, "+<", "\(terminal)") or exit 3;
+            open(DB, "<", "\(database.path)") or exit 4;
+            sleep 120;
+            """.write(to: script, atomically: true, encoding: .utf8)
+
+        let pid = try #require(Self.spawnInItsOwnSession(executable.path, script.path))
+        defer { kill(pid, SIGKILL) }
+
+        let reader = CodexNativeProcesses(home: home)
+        var execution: CodexExecution?
+        // The terminal and the database are opened a moment after exec, so the poll races the
+        // staging rather than the code under test.
+        for _ in 0 ..< 200 where execution == nil {
+            execution = reader.localTUI(pid)
+            if execution == nil { try await Task.sleep(for: .milliseconds(25)) }
+        }
+        let tui = try #require(execution, """
+            a process named codex, with TUI-shaped argv, a controlling terminal and this home's \
+            database open is a local TUI wherever it was installed from
+            """)
+        #expect(tui.surface == .cli)
+        #expect(tui.pid == pid)
+        #expect(tui.terminal == terminal, "the controlling terminal is the row's read authority")
+        #expect(reader.usesDefaultHome(pid), "and it is this home, not another")
+        #expect(
+            LibprocProcessTable().processes(named: CodexNativeProcesses.executableName)?
+                .contains { $0.processIdentifier == pid } == true,
+            "and the inventory that answers the presence dot lists it too"
+        )
+
+        // The same process read against another home is not this user's TUI: still fails closed.
+        let elsewhere = CodexNativeProcesses(home: root.appendingPathComponent("someone-else"))
+        #expect(elsewhere.localTUI(pid) == nil)
+    }
+
+    private static func spawnInItsOwnSession(_ executable: String, _ argument: String) -> pid_t? {
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        for descriptor in Int32(0) ... 2 {
+            posix_spawn_file_actions_addopen(&actions, descriptor, "/dev/null", O_RDWR, 0)
+        }
+        let argv = [strdup(executable), strdup(argument), nil]
+        defer { argv.forEach { free($0) } }
+        var pid: pid_t = 0
+        guard posix_spawn(&pid, executable, &actions, &attributes, argv, environ) == 0 else { return nil }
+        return pid
+    }
 }
 
 private nonisolated final class ScanCounter: @unchecked Sendable {

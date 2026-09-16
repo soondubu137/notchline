@@ -159,34 +159,42 @@ enum CodexAppServerError: LocalizedError, Equatable, Sendable {
 }
 
 enum CodexExecutableLocator {
+    /// An override for tests and for a user whose install is somewhere unusual.
+    static let overrideEnvironmentKey = "NOTCHLINE_CODEX_PATH"
+
+    /// Desktop ships its own `codex`, and it is preferred for the App Server because it is the
+    /// build the running Desktop was released with. Everything after it is
+    /// ``ProductInstallationDiscovery/commandDirectories(home:environment:)``, unchanged and in
+    /// the same order, so the two readings cannot disagree about where a CLI install lives: a
+    /// directory added there is searched here on the same commit.
+    ///
+    /// The two can still name different binaries, and that is the intent — this answers "what can
+    /// run `app-server`", Settings answers "which CLI is installed". Neither answer decides which
+    /// Turns get rows.
+    nonisolated static func candidates(
+        home: URL,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [URL] {
+        var candidates: [URL] = []
+        if let override = environment[overrideEnvironmentKey], !override.isEmpty {
+            candidates.append(URL(fileURLWithPath: override))
+        }
+        candidates += [
+            URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
+            URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex")
+        ]
+        candidates += ProductInstallationDiscovery
+            .commandDirectories(home: home, environment: environment)
+            .map { $0.appendingPathComponent("codex") }
+        return candidates
+    }
+
     nonisolated static func locate(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> URL? {
-        var candidates: [String] = []
-
-        if let override = environment["NOTCHLINE_CODEX_PATH"], !override.isEmpty {
-            candidates.append(override)
-        }
-
-        candidates.append(contentsOf: [
-            "/Applications/ChatGPT.app/Contents/Resources/codex",
-            "/Applications/Codex.app/Contents/Resources/codex",
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".local/bin/codex").path,
-            "/opt/homebrew/bin/codex",
-            "/usr/local/bin/codex"
-        ])
-
-        if let path = environment["PATH"] {
-            candidates.append(contentsOf: path.split(separator: ":").map {
-                String($0) + "/codex"
-            })
-        }
-
-        for path in candidates where fileManager.isExecutableFile(atPath: path) {
-            return URL(fileURLWithPath: path)
-        }
-        return nil
+        candidates(home: fileManager.homeDirectoryForCurrentUser, environment: environment)
+            .first { fileManager.isExecutableFile(atPath: $0.path) }
     }
 }
 
