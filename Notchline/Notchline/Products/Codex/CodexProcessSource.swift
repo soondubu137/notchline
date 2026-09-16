@@ -23,8 +23,8 @@ nonisolated struct CodexProcessSource: Sendable {
         return Self(resolvePeer: { descriptor in
             var pid: pid_t = 0
             var length = socklen_t(MemoryLayout<pid_t>.size)
-            // Darwin SOL_LOCAL / LOCAL_PEERPID: nc is still blocked waiting for our reply.
-            guard getsockopt(descriptor, 0, 2, &pid, &length) == 0,
+            // nc is still blocked waiting for our reply, so the peer is alive to be named.
+            guard getsockopt(descriptor, SOL_LOCAL, LOCAL_PEERPID, &pid, &length) == 0,
                   length == MemoryLayout<pid_t>.size else { return nil }
             return reader.owner(of: pid)
         }, isAlive: { execution in
@@ -41,12 +41,14 @@ nonisolated struct CodexProcessSource: Sendable {
 /// Observed on 0.154.0; unsupported modes and unreadable process arguments fail closed.
 nonisolated struct CodexNativeProcesses: Sendable {
     private let home: URL
-    private let command: URL?
+    /// Read per use: a CLI installed while this app runs must not need a relaunch to be seen,
+    /// and the settings reading resolves it the same way on every check.
+    private let command: @Sendable () -> URL?
 
     init(home: URL = FileManager.default.homeDirectoryForCurrentUser,
-         command: URL? = ProductInstallationDiscovery.command(named: "codex")) {
+         command: @escaping @Sendable () -> URL? = { ProductInstallationDiscovery.command(named: "codex") }) {
         self.home = home
-        self.command = command?.resolvingSymlinksInPath()
+        self.command = command
     }
 
     func owner(of peer: Int32) -> CodexExecution? {
@@ -82,8 +84,8 @@ nonisolated struct CodexNativeProcesses: Sendable {
 
     func localTUI(_ pid: Int32) -> CodexExecution? {
         guard let path = ProcessAncestryHostResolver.systemExecutablePath(ofProcess: pid),
-              let command,
-              URL(fileURLWithPath: path).resolvingSymlinksInPath() == command,
+              let installed = command()?.resolvingSymlinksInPath(),
+              URL(fileURLWithPath: path).resolvingSymlinksInPath() == installed,
               let arguments = Self.arguments(pid),
               Self.isLocalTUI(arguments),
               let tty = ControllingTerminalGestureReader.systemControllingTerminalPath(forProcessIdentifier: pid),
