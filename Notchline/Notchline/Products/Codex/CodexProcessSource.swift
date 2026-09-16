@@ -130,28 +130,78 @@ nonisolated struct CodexNativeProcesses: Sendable {
         return databases == [expected]
     }
 
+    /// The subcommands that open the interactive TUI. **This is the only list that has to stay
+    /// current**: a bare word that is not one of these is refused, whether it is a subcommand this
+    /// app has classified or one a newer CLI has just added. Measured from `codex --help` on
+    /// 0.154.0, where both take `[SESSION_ID] [PROMPT]` and the interactive options below.
+    static let interactiveCommands: Set<String> = ["resume", "fork"]
+
+    /// The rest of the command surface, which is **not consulted at run time** — an unknown bare
+    /// word is refused by the same rule that refuses these. It is declared so
+    /// ``CodexCLIIntegrationTests`` can tell a subcommand this app has looked at from one a new
+    /// version added, which is the whole drift signal for this dependency.
+    static let nonInteractiveCommands: Set<String> = ["agents", "exec", "e", "review", "login",
+        "logout", "mcp", "plugin", "app-server", "remote-control", "app", "completion", "update",
+        "doctor", "sandbox", "debug", "apply", "a", "queue", "archive", "delete", "migrate-rollouts",
+        "unarchive", "cloud", "exec-server", "features", "help",
+        // Names an older CLI had; harmless to keep, and refused either way.
+        "mcp-server", "agent"]
+
+    /// Interactive options that take a value, and those that do not. The union of `codex`,
+    /// `codex resume` and `codex fork` on 0.154.0, plus names older versions had (`--full-auto`).
+    static let valueOptions: Set<String> = ["-c", "--config", "--enable", "--disable", "-m", "--model",
+        "-p", "--profile", "-C", "--cd", "--add-dir", "-s", "--sandbox", "-a", "--ask-for-approval",
+        "-i", "--image", "--local-provider"]
+    static let booleanOptions: Set<String> = ["--search", "--full-auto", "--oss", "--approve-for-me",
+        "--dangerously-bypass-approvals-and-sandbox", "--no-alt-screen", "--last", "--all",
+        "--strict-config", "--worktree", "--dangerously-bypass-hook-trust", "--include-non-interactive"]
+
+    /// Interactive options this app deliberately does not admit, so the drift check can tell them
+    /// from an option nobody has classified. `--remote` and its token variable point the TUI at a
+    /// remote app server, which is not a local execution and is outside what this app watches;
+    /// `--help` and `--version` print and exit, so the process is never a session.
+    static let unmonitoredOptions: Set<String> = ["--remote", "--remote-auth-token-env",
+        "-h", "--help", "-V", "--version"]
+
+    /// Whether clap could route this token to a subcommand. Every subcommand this CLI has had is
+    /// spelled in lowercase ASCII, digits and hyphens, so a prompt that steps outside that
+    /// alphabet — a space, a capital, a question mark, a path — cannot be one whatever a future
+    /// version adds, and is admitted as the prompt it is.
+    static func couldNameASubcommand(_ argument: String) -> Bool {
+        !argument.isEmpty && argument.allSatisfy {
+            ($0.isASCII && $0.isLowercase) || ($0.isASCII && $0.isNumber) || $0 == "-"
+        }
+    }
+
+    /// Whether this argv is the interactive TUI rather than one of the CLI's other modes.
+    ///
+    /// **Refuses what it does not recognise, in both directions.** An unknown option was always
+    /// refused; an unknown bare word used to be taken for the prompt, which admitted any
+    /// subcommand a future version might add — `codex <newsubcommand>` would have been monitored
+    /// as an interactive session, silently and wrongly. The first bare word is now the prompt only
+    /// when it *cannot* be a subcommand; otherwise the process is left alone.
+    ///
+    /// The cost is a single lowercase word used as a prompt (`codex fix`), which is refused. That
+    /// is deliberate: refusing is **loud** — the payloads arrive, cannot be attributed, and are
+    /// counted into the Codex row's diagnostic in Settings — while admitting is silent. Refusing
+    /// is also what the rest of this boundary does with an unreadable home or an unknown option.
     static func isLocalTUI(_ argv: [String]) -> Bool {
-        let values: Set<String> = ["-c", "--config", "--enable", "--disable", "-m", "--model", "-p", "--profile",
-            "-C", "--cd", "--add-dir", "-s", "--sandbox", "-a", "--ask-for-approval", "-i", "--image"]
-        let flags: Set<String> = ["--search", "--full-auto", "--dangerously-bypass-approvals-and-sandbox",
-            "--no-alt-screen", "--last", "--all", "--strict-config", "--worktree",
-            "--dangerously-bypass-hook-trust"]
-        let commands: Set<String> = ["exec", "e", "review", "login", "logout", "mcp", "mcp-server", "app-server",
-            "app", "completion", "sandbox", "debug", "apply", "a", "cloud", "features", "help", "agent", "agents",
-            "plugin", "remote-control", "update", "doctor", "queue", "archive", "delete", "migrate-rollouts", "unarchive", "exec-server"]
         var index = 1
         var positional = false
         while index < argv.count {
             let argument = argv[index]
             let option = argument.split(separator: "=", maxSplits: 1).first.map(String.init) ?? argument
-            if values.contains(option) {
+            if valueOptions.contains(option) {
                 if option == argument { index += 1; if index >= argv.count { return false } }
-            } else if flags.contains(argument) {
+            } else if booleanOptions.contains(argument) {
                 // A supported boolean option.
             } else if argument.hasPrefix("-") { return false
             } else if !positional {
-                if commands.contains(argument) { return false }
-                positional = true
+                // clap routes the first bare word to a subcommand when it names one and treats it
+                // as the prompt otherwise, and only the running CLI knows its own list.
+                if interactiveCommands.contains(argument) { positional = true }
+                else if couldNameASubcommand(argument) { return false }
+                else { positional = true }
             }
             index += 1
         }

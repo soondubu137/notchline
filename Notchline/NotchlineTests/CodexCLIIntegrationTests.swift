@@ -420,6 +420,155 @@ struct CodexCLIIntegrationTests {
         #expect(elsewhere.localTUI(pid) == nil)
     }
 
+    /// A future `codex <newsubcommand>` used to be admitted as an interactive session, because an
+    /// unknown bare word was taken for the prompt. It is refused now, and a prompt that cannot be
+    /// a subcommand still is not.
+    @Test func anUnknownBareWordIsRefusedRatherThanTakenForAPrompt() {
+        for argv in [["codex", "newsubcommand"], ["codex", "serve"], ["codex", "tui2"],
+                     ["codex", "-m", "gpt-5", "brand-new-verb"]] {
+            #expect(!CodexNativeProcesses.isLocalTUI(argv),
+                "a bare word clap could route to a subcommand is not assumed to be a prompt")
+        }
+        for argv in [["codex", "fix the login bug"], ["codex", "Fix it."], ["codex", "why?"],
+                     ["codex", "read src/main.swift"], ["codex", "--search", "explain this repo"]] {
+            #expect(CodexNativeProcesses.isLocalTUI(argv),
+                "a prompt outside clap's subcommand alphabet cannot be a subcommand, so it is one")
+        }
+        // The interactive subcommands stay in, with their own options and positionals.
+        #expect(CodexNativeProcesses.isLocalTUI(["codex", "resume", "--last"]))
+        #expect(CodexNativeProcesses.isLocalTUI(["codex", "fork", "0198f3a1-0000-7000-8000-000000000000"]))
+        #expect(CodexNativeProcesses.isLocalTUI(["codex", "resume", "--include-non-interactive"]))
+        // Options measured on 0.154.0 that this app used to reject, losing the rows of a TUI that
+        // merely passed one of them.
+        for argv in [["codex", "--oss"], ["codex", "--approve-for-me"],
+                     ["codex", "--local-provider", "ollama"]] {
+            #expect(CodexNativeProcesses.isLocalTUI(argv))
+        }
+        // A remote TUI is not a local execution, and --help/--version print and exit.
+        for argv in [["codex", "--remote", "ws://host:1"], ["codex", "--help"], ["codex", "-V"]] {
+            #expect(!CodexNativeProcesses.isLocalTUI(argv))
+        }
+    }
+
+    /// The drift signal for this dependency. The three argument sets describe a CLI that ships
+    /// often, and nothing in the app can notice when it grows: an unknown option or subcommand
+    /// just means a TUI stops being monitored, reported only as an unattributable payload count on
+    /// the Codex row. So the check happens here, against the CLI actually installed on this
+    /// machine — `--help` only, no session and no state touched.
+    ///
+    /// When this fails, Codex has added something. Classify it: an interactive subcommand goes in
+    /// `interactiveCommands`, anything else in `nonInteractiveCommands`; an option the interactive
+    /// form accepts goes in `valueOptions` or `booleanOptions`, one that names a mode this app does
+    /// not watch in `unmonitoredOptions`. Nothing is skipped in silence.
+    @Test func theInstalledCLIOffersNothingThisVersionHasNotClassified() throws {
+        guard let codex = ProductInstallationDiscovery.command(named: "codex"),
+              let top = Self.help(codex, []) else { return }
+
+        // A parse that reads nothing would pass every check below without looking at anything, so
+        // it is pinned first: these have been in `codex --help` for as long as this app has read it.
+        let parsedCommands = Set(Self.subcommands(in: top))
+        let parsedOptions = Self.options(in: top)
+        #expect(parsedCommands.isSuperset(of: ["exec", "e", "resume", "app-server", "help"]),
+            "the Commands block is no longer parsed as this check assumes; fix the parse first")
+        #expect(parsedOptions.contains { $0 == ("--model", true) }
+            && parsedOptions.contains { $0 == ("--search", false) },
+            "the Options block is no longer parsed as this check assumes; fix the parse first")
+
+        var unclassifiedCommands: [String] = []
+        let known = CodexNativeProcesses.interactiveCommands
+            .union(CodexNativeProcesses.nonInteractiveCommands)
+        for name in parsedCommands where !known.contains(name) {
+            unclassifiedCommands.append(name)
+        }
+        #expect(unclassifiedCommands.isEmpty, """
+            codex offers subcommand(s) this version has not classified: \
+            \(unclassifiedCommands.sorted().joined(separator: ", ")). Interactive ones belong in \
+            `interactiveCommands`; every other one in `nonInteractiveCommands`.
+            """)
+
+        var unclassifiedOptions: [String] = []
+        let classified = CodexNativeProcesses.valueOptions
+            .union(CodexNativeProcesses.booleanOptions)
+            .union(CodexNativeProcesses.unmonitoredOptions)
+        // The interactive form is the top level plus the subcommands that open the TUI.
+        for arguments in [[]] + CodexNativeProcesses.interactiveCommands.sorted().map({ [$0] }) {
+            guard let help = Self.help(codex, arguments) else { continue }
+            for (name, takesValue) in Self.options(in: help) where !classified.contains(name) {
+                unclassifiedOptions.append("\(name)\(takesValue ? " <value>" : "")")
+            }
+        }
+        #expect(unclassifiedOptions.isEmpty, """
+            codex's interactive form accepts option(s) this version has not classified: \
+            \(Set(unclassifiedOptions).sorted().joined(separator: ", ")). One the TUI accepts \
+            belongs in `valueOptions` or `booleanOptions`; one naming a mode this app does not \
+            watch in `unmonitoredOptions`.
+            """)
+
+        // An option's arity is what decides whether the next argv element is its value.
+        for (name, takesValue) in parsedOptions {
+            if CodexNativeProcesses.valueOptions.contains(name) {
+                #expect(takesValue, "\(name) no longer takes a value; move it to `booleanOptions`")
+            } else if CodexNativeProcesses.booleanOptions.contains(name) {
+                #expect(!takesValue, "\(name) now takes a value; move it to `valueOptions`")
+            }
+        }
+    }
+
+    /// `--help` written to a pipe, with a bound on both the wait and the output.
+    private static func help(_ executable: URL, _ arguments: [String]) -> String? {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments + ["--help"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = (try? output.fileHandleForReading.readToEnd()) ?? Data()
+        process.waitUntilExit()
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// The names under `Commands:`, plus any `[aliases: …]` they declare. A name sits at exactly
+    /// two spaces of indent; a wrapped description sits far deeper, so it cannot be mistaken for one.
+    private static func subcommands(in help: String) -> [String] {
+        var names: [String] = []
+        var inCommands = false
+        for line in help.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = String(line)
+            if text.hasSuffix(":") && !text.hasPrefix(" ") {
+                inCommands = text == "Commands:"
+                continue
+            }
+            guard inCommands, text.hasPrefix("  "), !text.hasPrefix("   ") else { continue }
+            let fields = text.split(separator: " ", omittingEmptySubsequences: true)
+            guard let name = fields.first, !name.hasPrefix("-") else { continue }
+            names.append(String(name))
+            if let marker = text.range(of: "[aliases: "), let close = text[marker.upperBound...].firstIndex(of: "]") {
+                names += text[marker.upperBound ..< close].split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+            }
+        }
+        return names
+    }
+
+    /// Every option name in a help page, with whether it takes a value — `<…>` after the names.
+    private static func options(in help: String) -> [(name: String, takesValue: Bool)] {
+        var found: [(String, Bool)] = []
+        for line in help.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = String(line)
+            let indent = text.prefix { $0 == " " }.count
+            guard indent >= 2, indent <= 6 else { continue }
+            let fields = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+            guard let first = fields.first, first.hasPrefix("-") else { continue }
+            let names = fields.prefix { $0.hasPrefix("-") || $0.hasSuffix(",") }
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ",")) }
+                .filter { $0.hasPrefix("-") }
+            let takesValue = fields.dropFirst(names.count).first?.hasPrefix("<") == true
+            found += names.map { ($0, takesValue) }
+        }
+        return found
+    }
+
     private static func spawnInItsOwnSession(_ executable: String, _ argument: String) -> pid_t? {
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)

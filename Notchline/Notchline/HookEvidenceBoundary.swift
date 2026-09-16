@@ -251,7 +251,8 @@ nonisolated final class HookEvidenceBoundary: MonitoringBoundaryObserver, @unche
             unattributedPayloadCount > 0
                 ? "Ignored \(Self.payloadCount(unattributedPayloadCount)) Notchline could not attribute to a "
                     + "supported \(vocabulary.agent.displayName) process, such as one run under a custom home, "
-                    + "an excluded mode or a terminal multiplexer." : nil,
+                    + "an excluded mode, a terminal multiplexer, or a command line this version of "
+                    + "Notchline does not recognise." : nil,
             statistics.unplacedEvidenceCount > 0
                 ? "Ignored \(Self.payloadCount(statistics.unplacedEvidenceCount)) with no stable identity, or of an unsupported kind." : nil,
             undelivered, untrusted
