@@ -119,9 +119,13 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     private var lastConnectFailure: (any Error)?
     private var lastTrustedSnapshot: AgentSnapshot?
     private var observationStopped = false
-    /// Keeps a finished row listed until Desktop no longer reports it unread
-    /// (``TerminalUnreadRowFilter``).
+    /// Keeps a finished row listed until the surface that ran it says it was read — Desktop's
+    /// unread set, or a CLI Thread's own terminal (``TerminalUnreadRowFilter``).
     private var terminalUnreadMembershipGate: TerminalUnreadRowFilter
+    /// The terminal half of read state, for a Thread only a local TUI owns. Desktop keeps its own
+    /// unread record; a terminal has none, so its controlling device answers instead
+    /// (``TerminalReadEvidence``). Nil without a surface ledger: nothing could name the process.
+    private let terminalRead: TerminalReadEvidence?
     /// The routing each live Turn started under; Desktop's current value stops describing a row
     /// once the reviewer changes mid-turn (``TurnApprovalRoutingPin``).
     private var approvalRoutingPin = TurnApprovalRoutingPin()
@@ -144,6 +148,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             CodexRolloutTurnAbortReader(),
         screenAvailability: any ScreenAvailabilityReporting =
             ScreenAvailabilityWatcher(),
+        /// Built only alongside a surface ledger, so a service with no CLI ownership registers no
+        /// workspace observer.
+        terminalGestures: (any ControllingTerminalGestureReporting)? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard,
         desktopProcessIdentifierProvider: @escaping @MainActor @Sendable () -> pid_t? = {
@@ -211,6 +218,13 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         ] + (connectionMonitor.map { [$0.changes.events()] } ?? [])
             + (surfaces.map { [$0.changes.events()] } ?? []))
         self.terminalUnreadMembershipGate = TerminalUnreadRowFilter(timing: timing)
+        self.terminalRead = surfaces.map { ledger in
+            TerminalReadEvidence(
+                sessions: ledger,
+                gestures: terminalGestures ?? ControllingTerminalGestureReader(),
+                screen: screenAvailability
+            )
+        }
         self.presence = RunningApplicationPresence(
             processIdentifier: desktopProcessIdentifierProvider
         )
@@ -799,17 +813,67 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         }
 
         approvalRoutingPin.retain(turns: observedTurns)
-        // Desktop's persisted unread set has no authority over a terminal.
+        // One instant for the readings, the verdicts and the gate entries they write.
+        let now = clock.now()
         return terminalUnreadMembershipGate.rows(
             candidates,
             dismissedRowIDs: dismissedRowIDs,
-            now: clock.now()
-        ) { candidate in
-            if surfaces?.hasCLI(candidate.row.threadID) == true {
-                // A TUI supplies execution ownership, but no reliable current-view signal.
-                return .cannotBeAsked
+            now: now,
+            verdict: await terminalVerdicts(
+                for: candidates,
+                dismissedRowIDs: dismissedRowIDs,
+                unreadState: unreadState,
+                now: now
+            )
+        )
+    }
+
+    /// Which reading may retire each finished row.
+    ///
+    /// Desktop's persisted unread set has no authority over a terminal, and a terminal's access
+    /// time has none over a Desktop window; a Thread live on both surfaces has no unique authority
+    /// at all and stays out of the gate. A CLI-only Thread is answered by its own controlling
+    /// device, which is fit for the job on measured native behaviour: the TUI stamps it on a
+    /// keystroke, a paste and a focus report (`ESC[?1004h`, `ESC[?2004h` on `0.154.0`) and on
+    /// nothing else — an idle TUI, a Turn's own output and a Turn ending all left it untouched
+    /// (30 s of a spinning Turn, no movement, 2026-09-15). Codex enables no mouse tracking, so
+    /// unlike Claude Code a pointer crossing the window is never a gesture; typing in that terminal
+    /// is, and so is coming back to it where the terminal reports focus — measured on real windows,
+    /// Ghostty stamps the focused TUI's device on the way in and out and leaves a TUI in another of
+    /// its windows alone, while Apple Terminal reports no focus at all and the row waits for a
+    /// keystroke there. Both are safe: the second only keeps a row longer.
+    ///
+    /// Execution ownership is still not a current-view signal, and this does not pretend it is:
+    /// `/new` leaves the previous Thread owned by the same TUI, so a gesture retires every ended
+    /// Turn that TUI owns. It says the user was at that terminal after the Turn finished, which is
+    /// the same thing every other terminal row is retired on; naming *which* Thread was on screen
+    /// is only needed for navigation, which stays host-only.
+    private func terminalVerdicts(
+        for candidates: [ReadGateCandidate],
+        dismissedRowIDs: Set<String>,
+        unreadState: DesktopUnreadStateSnapshot,
+        now: Date
+    ) async -> (ReadGateCandidate) -> ReadGateVerdict {
+        let terminalCandidates = candidates.filter {
+            surfaces?.isCLI($0.row.threadID) == true && !dismissedRowIDs.contains($0.row.id)
+        }
+        // Every verdict is a fresh kernel reading, so none is taken unless a finished, unremoved
+        // CLI row is listed (CR-Fable-041, CR-Fable-003).
+        var verdicts: [String: ReadGateVerdict] = [:]
+        if let terminalRead, TerminalUnreadRowFilter.needsReadEvidence(
+            terminalCandidates.map(\.row),
+            dismissedRowIDs: dismissedRowIDs
+        ) {
+            verdicts = await terminalRead.verdicts(for: terminalCandidates, now: now).verdicts
+        }
+        return { [surfaces] candidate in
+            guard surfaces?.hasCLI(candidate.row.threadID) == true else {
+                return .judged(by: unreadState)
             }
-            return .judged(by: unreadState)
+            // No askable device (`tmux`, `ssh`, a reused pid) and a Thread Desktop holds too: kept
+            // out of the gate, so it books no re-check and leaves on the next submission, when its
+            // owner goes, or by removal.
+            return verdicts[candidate.row.id] ?? .cannotBeAsked
         }
     }
 

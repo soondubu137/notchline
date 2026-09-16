@@ -275,6 +275,8 @@ struct CodexCLIIntegrationTests {
         timing.terminalReadSettlingInterval = 0
         let service = LiveCodexMonitorService(client: CLIMetadataClient(), hookEvents: repository,
             hookRegistrar: registrar, surfaces: surfaces, unreadState: CLIEmptyDesktopReading(),
+            // Nothing set: neither terminal can be asked, so only Desktop's reading is left to try.
+            terminalGestures: CLIGestureFixture(),
             timing: timing, desktopProcessIdentifierProvider: { nil })
         for (thread, owner) in [("one", first), ("two", second)] {
             surfaces.record(owner: owner, thread: thread, event: "UserPromptSubmit")
@@ -301,6 +303,118 @@ struct CodexCLIIntegrationTests {
         await service.disconnect()
         #expect(await service.nextRefreshDeadline() == nil)
         #expect(surfaces.refresh(at: Date()).threadIDs.isEmpty)
+    }
+
+    /// A finished CLI row leaves when the user has been at the terminal that ran it, and only then.
+    ///
+    /// The row used to stay until the TUI exited or the user removed it, because execution
+    /// ownership is not a current-view signal — `/new` announces its Thread on the next submission,
+    /// not when it opens. That answers a different question. Retiring a terminal row has never
+    /// needed to know which Thread is on screen: it needs a move only a person makes, at that
+    /// Thread's own device, after the Turn ended, with the hosting application in front — the rule
+    /// every other terminal row is judged by (``TerminalReadEvidence``). Native readings back it:
+    /// `codex-cli 0.154.0` sets focus reporting and bracketed paste and no mouse tracking, so the
+    /// access time moves on a keystroke, a paste or coming back to that window, and not for the
+    /// TUI's own output or a Turn ending.
+    @Test func aFinishedCLIRowLeavesOnlyOnAGestureAtItsOwnTerminalAfterTheTurnEnded() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-read-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HookIntegrationPaths(supportDirectory: root.appendingPathComponent("support"),
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json"))
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        let repository = HookEventRepository(paths: paths)
+        let owner = cli()
+        let surfaces = CodexSurfaceLedger(source: CLIProcessFixture([owner]).source)
+        let gestures = CLIGestureFixture()
+        var timing = MonitorTiming.standard
+        timing.terminalReadSettlingInterval = 0
+        let service = LiveCodexMonitorService(client: CLIMetadataClient(), hookEvents: repository,
+            hookRegistrar: registrar, surfaces: surfaces, unreadState: CLIEmptyDesktopReading(),
+            terminalGestures: gestures, timing: timing, desktopProcessIdentifierProvider: { nil })
+
+        surfaces.record(owner: owner, thread: "one", event: "UserPromptSubmit")
+        _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "UserPromptSubmit",
+            "session_id": "one", "turn_id": "t-one", "cwd": "/work/shared", "prompt": "Live prompt"]),
+            at: Date().addingTimeInterval(-2))
+        var reading = await service.fetchSnapshot()
+        for _ in 0..<100 where reading.sessions.count != 1 {
+            try await Task.sleep(for: .milliseconds(10))
+            reading = await service.fetchSnapshot()
+        }
+        #expect(reading.sessions.first?.status == .running)
+
+        // Typing at the prompt is what submitted the Turn. A running row is not waiting to be read,
+        // and pays for no kernel reading (CR-Fable-041).
+        gestures.wasAtTheTerminal(of: owner.pid, at: Date().addingTimeInterval(-2))
+        #expect(await service.fetchSnapshot().sessions.first?.status == .running)
+        #expect(gestures.timesAsked == 0, "a list with no finished row must not buy a reading")
+
+        let ended = Date()
+        _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "Stop",
+            "session_id": "one", "turn_id": "t-one", "last_assistant_message": "Finished"]), at: ended)
+        #expect(await service.fetchSnapshot().sessions.first?.status == .completed,
+            "the gesture that submitted the Turn cannot be the one that read its answer")
+        #expect(gestures.timesAsked > 0)
+
+        // Back at that terminal, but its window is not the one in front: a pointer crossing an
+        // unfocused terminal, or a focus-out as another application takes over, says nothing.
+        gestures.wasAtTheTerminal(of: owner.pid, at: ended.addingTimeInterval(1), hostIsInFront: false)
+        #expect(await service.fetchSnapshot().sessions.first?.status == .completed)
+
+        // Another terminal's gesture is not this one's: the access time is per device.
+        gestures.set(owner.pid + 1, ControllingTerminalReading(lastGesture: ended.addingTimeInterval(2),
+            hostIsInFrontOfTheUser: true, hostCanEverBeInFrontOfTheUser: true))
+        #expect(await service.fetchSnapshot().sessions.first?.status == .completed)
+
+        gestures.wasAtTheTerminal(of: owner.pid, at: ended.addingTimeInterval(3))
+        #expect(await service.fetchSnapshot().sessions.isEmpty, "read at its own terminal, so it retires")
+        await service.disconnect()
+    }
+
+    /// A Thread two surfaces are running has no unique terminal authority, and a TUI with no
+    /// application ancestor — `tmux`, `screen`, `ssh` — has none at all. Both stay out of the gate,
+    /// so neither books a re-check nor is retired by a reading that cannot speak for it.
+    @Test func aSharedOrUnreachableSurfaceIsNeverRetiredByATerminalReading() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-shared-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HookIntegrationPaths(supportDirectory: root.appendingPathComponent("support"),
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json"))
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        let repository = HookEventRepository(paths: paths)
+        let terminal = cli(), multiplexed = cli(101)
+        let desktop = CodexExecution(pid: 200, startedAt: now, surface: .desktop, terminal: nil)
+        let surfaces = CodexSurfaceLedger(source: CLIProcessFixture([terminal, multiplexed, desktop]).source)
+        let gestures = CLIGestureFixture()
+        gestures.wasAtTheTerminal(of: terminal.pid, at: .distantFuture)
+        gestures.set(multiplexed.pid, ControllingTerminalReading(lastGesture: .distantFuture,
+            hostIsInFrontOfTheUser: false, hostCanEverBeInFrontOfTheUser: false))
+        var timing = MonitorTiming.standard
+        timing.terminalReadSettlingInterval = 0
+        let service = LiveCodexMonitorService(client: CLIMetadataClient(), hookEvents: repository,
+            hookRegistrar: registrar, surfaces: surfaces, unreadState: CLIEmptyDesktopReading(),
+            terminalGestures: gestures, timing: timing, desktopProcessIdentifierProvider: { nil })
+        surfaces.record(owner: terminal, thread: "one", event: "SessionStart")
+        surfaces.record(owner: desktop, thread: "one", event: "SessionStart")
+        surfaces.record(owner: multiplexed, thread: "two", event: "SessionStart")
+        for thread in ["one", "two"] {
+            _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "UserPromptSubmit",
+                "session_id": thread, "turn_id": "t-\(thread)", "cwd": "/work/shared", "prompt": "Live prompt"]),
+                at: Date().addingTimeInterval(-2))
+            _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "Stop",
+                "session_id": thread, "turn_id": "t-\(thread)", "last_assistant_message": "Finished"]),
+                at: Date().addingTimeInterval(-1))
+        }
+        var reading = await service.fetchSnapshot()
+        for _ in 0..<100 where reading.sessions.count != 2 {
+            try await Task.sleep(for: .milliseconds(10))
+            reading = await service.fetchSnapshot()
+        }
+        #expect(reading.sessions.allSatisfy { $0.status == .completed })
+        #expect(Set(reading.sessions.map(\.threadID)) == ["one", "two"],
+            "a gesture at either device speaks for neither of these rows")
+        await service.disconnect()
     }
 
     /// A scan nothing can schedule. The process inventory answers the presence dot and nothing else,
@@ -660,6 +774,32 @@ private nonisolated final class ScanCounter: @unchecked Sendable {
 private nonisolated struct CLINoScreen: ScreenAvailabilityReporting {
     func isAvailable() -> Bool { false }
     func changeEvents() -> AsyncStream<Void> { AsyncStream { $0.finish() } }
+}
+
+/// What a TUI's controlling device says. Measured native behaviour on `codex-cli 0.154.0`
+/// (2026-09-15): the TUI sets `ESC[?1004h` and `ESC[?2004h` and no mouse-tracking mode, so a
+/// keystroke, a paste and a focus report move the access time; an idle TUI, a Turn's output and a
+/// Turn ending do not (30 s of a spinning Turn, no movement).
+private nonisolated final class CLIGestureFixture: ControllingTerminalGestureReporting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var readings: [Int32: ControllingTerminalReading] = [:]
+    private var asks = 0
+
+    func set(_ pid: Int32, _ reading: ControllingTerminalReading?) {
+        lock.lock(); readings[pid] = reading; lock.unlock()
+    }
+
+    func wasAtTheTerminal(of pid: Int32, at date: Date, hostIsInFront: Bool = true) {
+        set(pid, ControllingTerminalReading(lastGesture: date,
+            hostIsInFrontOfTheUser: hostIsInFront, hostCanEverBeInFrontOfTheUser: true))
+    }
+
+    var timesAsked: Int { lock.lock(); defer { lock.unlock() }; return asks }
+
+    func reading(forProcessIdentifier pid: Int32) async -> ControllingTerminalReading? {
+        lock.lock(); asks += 1; let answer = readings[pid]; lock.unlock()
+        return answer
+    }
 }
 
 private nonisolated struct CLIEmptyDesktopReading: DesktopUnreadStateProviding {

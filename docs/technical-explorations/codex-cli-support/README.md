@@ -1,6 +1,6 @@
 # Codex CLI support — implementation plan and isolated evidence
 
-> Implementation update, 2026-09-15: the current contract is in [product support](../../product-support.md#51-local-codex-cli). Native timing showed that `/new` delays SessionStart until the next submission; the proposed current-view/read/TTY-navigation inference below was rejected. The implementation uses host return only and no CLI read judgement. Home identity uses an open `state_5.sqlite` descriptor because this macOS does not return process environment through KERN_PROCARGS2. The remainder is the historical preflight record.
+> Implementation update, 2026-09-15: the current contract is in [product support](../../product-support.md#51-local-codex-cli). Native timing showed that `/new` delays SessionStart until the next submission; the proposed current-view/TTY-navigation inference below was rejected, and the implementation uses host return only. §5's rule that read evidence needs the *displayed* root was rejected with it, on 2026-09-15 pty readings: a Codex TUI's device is moved by a keystroke, a paste or a focus report and by nothing the TUI itself does, so a gesture there is the same evidence every other terminal row is retired on, and read removal is enabled without a display binding. Home identity uses an open `state_5.sqlite` descriptor because this macOS does not return process environment through KERN_PROCARGS2. The remainder is the historical preflight record.
 
 
 | Field | Value |
