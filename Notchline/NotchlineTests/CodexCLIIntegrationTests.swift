@@ -158,6 +158,66 @@ struct CodexCLIIntegrationTests {
         #expect(tabs.calls == 0 && activator.calls == 2)
     }
 
+    /// Routing asks one liveness question for both surfaces. It used to ask two that disagreed: the
+    /// CLI side read the owners the last refresh left behind while the Desktop side re-read the
+    /// kernel, so a terminal that closed in between was still routed to the terminal navigator and
+    /// failed there — safe, but under a second error type and a second sentence for a condition
+    /// identical to the Desktop one. Both now answer `sessionEnded`, from the one place that asked.
+    @Test @MainActor func anOwnerThatExitedSinceTheLastRefreshEndsTheSessionOnEitherSurface() async throws {
+        let terminal = cli(), desktopExecution = CodexExecution(pid: 200, startedAt: now,
+            surface: .desktop, terminal: nil)
+        let alive = CLIProcessFixture([terminal, desktopExecution])
+        let ledger = CodexSurfaceLedger(source: alive.source)
+        ledger.record(owner: terminal, thread: "in-terminal", event: "SessionStart")
+        ledger.record(owner: desktopExecution, thread: "in-desktop", event: "SessionStart")
+        let desktop = CLINavigatorFixture(outcome: .raisedApplication(host: "Codex"))
+        let host = CLINavigatorFixture(outcome: .raisedApplication(host: "Terminal"))
+        let navigator = CodexNavigator(surfaces: ledger, desktop: desktop, terminal: host)
+        func row(_ thread: String) -> MonitoredSession {
+            MonitoredSession(threadID: thread, turnID: "t", projectName: "work", title: "title",
+                preview: nil, status: .completed, startedAt: now)
+        }
+
+        #expect(try await navigator.open(row("in-terminal")) == .raisedApplication(host: "Terminal"))
+        #expect(try await navigator.open(row("in-desktop")) == .raisedApplication(host: "Codex"))
+        #expect(host.calls == 1 && desktop.calls == 1)
+
+        // Both owners exit. Nothing has refreshed, so the ledger still lists both Threads.
+        alive.replace([])
+        for thread in ["in-terminal", "in-desktop"] {
+            await #expect(throws: CodexNavigationError.sessionEnded) { try await navigator.open(row(thread)) }
+        }
+        #expect(host.calls == 1 && desktop.calls == 1, "neither navigator is reached for a dead owner")
+        #expect(CodexNavigationError.sessionEnded.errorDescription
+            != CodexNavigationError.targetUnavailable.errorDescription,
+            "an execution that exited is not Codex saying the Thread itself is gone")
+    }
+
+    /// Desktop answers for a Thread held on both surfaces, and a live terminal still answers when
+    /// the Desktop execution that also held it has gone.
+    @Test @MainActor func aThreadOnBothSurfacesPrefersDesktopUntilOnlyTheTerminalIsLeft() async throws {
+        let terminal = cli(), desktopExecution = CodexExecution(pid: 200, startedAt: now,
+            surface: .desktop, terminal: nil)
+        let alive = CLIProcessFixture([terminal, desktopExecution])
+        let ledger = CodexSurfaceLedger(source: alive.source)
+        for owner in [terminal, desktopExecution] {
+            ledger.record(owner: owner, thread: "shared", event: "SessionStart")
+        }
+        let desktop = CLINavigatorFixture(outcome: .raisedApplication(host: "Codex"))
+        let host = CLINavigatorFixture(outcome: .raisedApplication(host: "Terminal"))
+        let navigator = CodexNavigator(surfaces: ledger, desktop: desktop, terminal: host)
+        let row = MonitoredSession(threadID: "shared", turnID: "t", projectName: "work",
+            title: "title", preview: nil, status: .completed, startedAt: now)
+
+        #expect(try await navigator.open(row) == .raisedApplication(host: "Codex"))
+        #expect(ledger.navigableSurface(ofThread: "shared") == .desktop)
+
+        alive.replace([terminal])
+        #expect(ledger.navigableSurface(ofThread: "shared") == .cli,
+            "a dead Desktop owner no longer speaks for a Thread a live terminal still holds")
+        #expect(try await navigator.open(row) == .raisedApplication(host: "Terminal"))
+    }
+
     /// A drop nobody counts is indistinguishable from "the hooks never fired", which is the one
     /// reading a user cannot act on. Provenance failure is the shape an unsupported home or mode
     /// arrives in, so it is the drop that has to be said out loud.
@@ -607,6 +667,13 @@ private nonisolated struct CLIEmptyDesktopReading: DesktopUnreadStateProviding {
         .init(unreadThreadIDs: [], source: .current, currentAsOf: .distantFuture)
     }
     func changeEvents() -> AsyncStream<Void> { AsyncStream { $0.finish() } }
+}
+
+@MainActor private final class CLINavigatorFixture: AgentNavigating {
+    private let outcome: NavigationOutcome
+    var calls = 0
+    init(outcome: NavigationOutcome) { self.outcome = outcome }
+    func open(_ session: MonitoredSession) async throws -> NavigationOutcome { calls += 1; return outcome }
 }
 
 private nonisolated final class CLIProcessFixture: @unchecked Sendable {

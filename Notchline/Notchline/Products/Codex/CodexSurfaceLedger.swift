@@ -136,9 +136,21 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
         return owners[thread, default: []].contains { $0.surface == .cli }
     }
 
-    func hasDesktop(_ thread: String) -> Bool {
+    /// Which surface can be raised for this Thread **right now**, or nil when none can.
+    ///
+    /// One question for both surfaces, asked at click time. Routing used to ask two that disagreed
+    /// about liveness: the CLI side read the owners the last refresh left behind, while the Desktop
+    /// side re-read the kernel. A terminal that closed in between was still routed to, and failed
+    /// further down under a different error type and a different sentence than the identical
+    /// Desktop case. An owner that has exited is gone on either surface, and is said so once here.
+    ///
+    /// Desktop answers for a Thread open on both: a Thread this app can deep-link is not navigated
+    /// by raising a terminal that also holds it.
+    func navigableSurface(ofThread thread: String) -> CodexExecution.Surface? {
         lock.lock(); defer { lock.unlock() }
-        return owners[thread, default: []].contains { $0.surface == .desktop && source.isAlive($0) }
+        let live = owners[thread, default: []].filter(source.isAlive)
+        if live.contains(where: { $0.surface == .desktop }) { return .desktop }
+        return live.isEmpty ? nil : .cli
     }
 
     func processIdentifier(forThreadID threadID: String) async -> Int32? {

@@ -8,6 +8,9 @@ protocol CodexNavigationTargetChecking: Sendable {
 enum CodexNavigationError: LocalizedError, Equatable {
     case invalidThreadID
     case targetUnavailable
+    /// No live execution owns the Thread any more, on either surface. Distinct from
+    /// ``targetUnavailable``, which is Codex answering that the Thread itself is gone.
+    case sessionEnded
     case validationFailed
     case desktopUnavailable
     case openRejected
@@ -18,6 +21,8 @@ enum CodexNavigationError: LocalizedError, Equatable {
             "The session identifier is not valid."
         case .targetUnavailable:
             "That session has been archived, deleted, or is no longer available."
+        case .sessionEnded:
+            "That session has ended and can no longer be opened."
         case .validationFailed:
             "Could not confirm that the session still exists; please try again shortly."
         case .desktopUnavailable:

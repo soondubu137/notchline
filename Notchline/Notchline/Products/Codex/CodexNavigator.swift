@@ -17,11 +17,14 @@ final class CodexNavigator: AgentNavigating {
         )
     }
 
+    /// One liveness reading decides the target, so an owner that exited since the last refresh
+    /// gives the same answer whichever surface it was: `sessionEnded`, from here, rather than one
+    /// sentence from this navigator and another from whichever navigator the stale routing reached.
     func open(_ session: MonitoredSession) async throws -> NavigationOutcome {
-        if surfaces.isCLI(session.threadID) {
-            return try await terminal.open(session)
+        switch surfaces.navigableSurface(ofThread: session.threadID) {
+        case .desktop: return try await desktop.open(session)
+        case .cli: return try await terminal.open(session)
+        case nil: throw CodexNavigationError.sessionEnded
         }
-        guard surfaces.hasDesktop(session.threadID) else { throw CodexNavigationError.targetUnavailable }
-        return try await desktop.open(session)
     }
 }
