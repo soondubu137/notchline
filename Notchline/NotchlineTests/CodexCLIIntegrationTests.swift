@@ -242,6 +242,62 @@ struct CodexCLIIntegrationTests {
         #expect(await service.nextRefreshDeadline() == nil)
         #expect(surfaces.refresh(at: Date()).threadIDs.isEmpty)
     }
+
+    /// A scan nothing can schedule. The process inventory answers the presence dot and nothing else,
+    /// and "a TUI that has never sent a Hook may have started" is not a condition any refresh
+    /// clears: published as a deadline it woke every product every five seconds for the life of the
+    /// app, an asleep screen included, because the refresh it woke only booked the next one. So it
+    /// is read inside a refresh that is already happening, exactly as `AntigravityConversationScanner`
+    /// reads its presence locks, and costs nothing while nothing else wakes the provider. The
+    /// accepted degradation: a TUI started before this app, or with Hooks untrusted, moves the dot
+    /// at the next refresh from any cause instead of within five seconds. One started normally sends
+    /// `SessionStart`, which books an owner and wakes the store itself.
+    @Test func theCLIInventoryIsScannedOpportunisticallyAndAsksForNoWakeUp() async throws {
+        let process = cli()
+        let scans = ScanCounter()
+        let ledger = CodexSurfaceLedger(source: CodexProcessSource(resolvePeer: { _ in process },
+            isAlive: { _ in true }, localProcesses: { scans.record(); return [process] }))
+
+        // Presence with no Hook at all, and one reading answers the burst of refreshes around it.
+        #expect(ledger.refresh(at: now).cliIsOpen == true)
+        #expect(ledger.refresh(at: now.addingTimeInterval(CodexSurfaceLedger.scanLifetime - 0.5))
+            .cliIsOpen == true)
+        #expect(scans.count == 1)
+        #expect(ledger.refresh(at: now.addingTimeInterval(CodexSurfaceLedger.scanLifetime)).cliIsOpen == true)
+        #expect(scans.count == 2, "the lifetime caps repeat cost within a burst; it never asks to be woken")
+
+        // The idle provider: no Desktop, no TUI, no Hook and no screen leaves nothing to wake for.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-idle-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HookIntegrationPaths(supportDirectory: root.appendingPathComponent("support"),
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json"))
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        let empty = CodexSurfaceLedger(source: CodexProcessSource(resolvePeer: { _ in nil },
+            isAlive: { _ in false }, localProcesses: { [] }))
+        let service = LiveCodexMonitorService(client: CLIMetadataClient(),
+            hookEvents: HookEventRepository(paths: paths), hookRegistrar: registrar, surfaces: empty,
+            unreadState: CLIEmptyDesktopReading(), screenAvailability: CLINoScreen(),
+            desktopProcessIdentifierProvider: { nil })
+        #expect(await service.fetchSnapshot().presence == .closed)
+        #expect(await service.nextRefreshDeadline() == nil,
+            "an inventory that found nothing must not book the store's next wake")
+        await service.disconnect()
+    }
+}
+
+private nonisolated final class ScanCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var scans = 0
+    func record() { lock.lock(); scans += 1; lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return scans }
+}
+
+/// No screen, so the quota and terminal-recheck deadlines park and the inventory is the only
+/// candidate left for `nextRefreshDeadline()` to report.
+private nonisolated struct CLINoScreen: ScreenAvailabilityReporting {
+    func isAvailable() -> Bool { false }
+    func changeEvents() -> AsyncStream<Void> { AsyncStream { $0.finish() } }
 }
 
 private nonisolated struct CLIEmptyDesktopReading: DesktopUnreadStateProviding {

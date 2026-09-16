@@ -480,7 +480,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     func nextRefreshDeadline() async -> Date? {
         guard !observationStopped else { return nil }
         var deadlines: [Date] = []
-        if let deadline = surfaces?.deadline() { deadlines.append(deadline) }
+        // No entry for the CLI process inventory: it answers only presence, and the arrival of a TUI
+        // that has never sent a Hook is not a condition a refresh can clear. `CodexSurfaceLedger`
+        // scans opportunistically instead, inside the refresh it is already paying for.
         if let deadline = await connectionMonitor?.nextDeadline() { deadlines.append(deadline) }
         if hookActivationRetryAllowed, let deadline = await hookActivation.nextDeadline() {
             deadlines.append(deadline)

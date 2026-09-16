@@ -8,11 +8,15 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
     private let lock = NSLock()
     private var owners: [String: Set<CodexExecution>] = [:]
     private var discovered: [CodexExecution] = []
-    private var nextScan: Date?
+    private var scannedAt: Date?
     private var scanKnown = false
     private var turnOwners: [String: (turn: String, owner: CodexExecution)] = [:]
     private struct EndedBinding: Hashable { let thread: String; let owner: CodexExecution }
     private var ended: Set<EndedBinding> = []
+
+    /// How long one process inventory answers for. A ceiling on repeat cost within a burst of
+    /// refreshes, never a cadence: nothing wakes the store to re-scan (see ``refresh(at:)``).
+    static let scanLifetime: TimeInterval = 5
 
     init(source: CodexProcessSource = .live()) { self.source = source }
 
@@ -82,14 +86,22 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
         let cliIsOpen: Bool?
     }
 
+    /// The inventory is read opportunistically, as `AntigravityConversationScanner` reads its locks:
+    /// it answers presence and nothing else, and no state says when a TUI that has never sent a Hook
+    /// appeared, so a due date for it is one no refresh can clear — it would wake every product every
+    /// five seconds for the life of the app, screen asleep included. A TUI started normally sends
+    /// `SessionStart`, which books an owner and wakes the store on its own; one started before this
+    /// app, or with Hooks untrusted, is found at the next refresh from any cause and until then the
+    /// dot is the last reading. Liveness is not on this cache: an exited owner or TUI retires below
+    /// on every refresh, so a stale inventory can only under-report, never keep a dead TUI open.
     func refresh(at now: Date) -> Reading {
         lock.lock()
         defer { lock.unlock() }
-        if nextScan == nil || now >= nextScan! {
+        if scannedAt.map({ now < $0 || now.timeIntervalSince($0) >= Self.scanLifetime }) ?? true {
             let processes = source.localProcesses()
             scanKnown = processes != nil
             if let processes { discovered = processes }
-            nextScan = now.addingTimeInterval(5)
+            scannedAt = now
         }
         owners = owners.mapValues { Set($0.filter(source.isAlive)) }.filter { !$0.value.isEmpty }
         turnOwners = turnOwners.filter { owners[$0.key] != nil }
@@ -98,8 +110,6 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
         let anyCLI = !discovered.isEmpty || owners.values.contains { $0.contains { $0.surface == .cli } }
         return Reading(threadIDs: Set(owners.keys), cliIsOpen: anyCLI ? true : (scanKnown ? false : nil))
     }
-
-    func deadline() -> Date? { lock.lock(); defer { lock.unlock() }; return nextScan }
 
     func isCLI(_ thread: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
@@ -132,6 +142,6 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
     func reset() {
         lock.lock(); defer { lock.unlock() }
         owners.removeAll(); turnOwners.removeAll(); ended.removeAll()
-        discovered.removeAll(); nextScan = nil; scanKnown = false
+        discovered.removeAll(); scannedAt = nil; scanKnown = false
     }
 }
