@@ -29,6 +29,22 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
             (repository.boundary as? HookEvidenceBoundary)?.recordUnattributedPayload()
             return .close
         }
+        // A local TUI's connection is never held for a person, and this is the one place that can
+        // tell: the peer of this very connection is the execution that raised the request.
+        //
+        // Codex puts a request to the Hook and **waits** for it rather than racing a dialogue of
+        // its own (`answer-in-notch.md` §14.2: 28,285 ms of hook, and the client was never asked at
+        // all). On Desktop that is the whole point — there is no prompt a person walked away from,
+        // so the notch is the surface. At a terminal it is the opposite: the person is sitting in
+        // front of the surface Codex would have asked in, and holding the connection does not add
+        // the notch beside that prompt, it replaces it. Reported 2026-09-15 with its own control:
+        // the TUI showed `Working` for as long as Notchline was open and asked properly the moment
+        // it was quit. Claude Code needs none of this — it raises its dialogue 0.32 s in and takes
+        // whichever answer arrives first (§14.2), which is why this lives at the Codex boundary.
+        //
+        // So a terminal's request is read here and answered there, and the cost is bounded: `nc`
+        // returns 22 ms after this app closes (measured 2026-09-15), the same as if it were closed.
+        let replyDescriptor: Int32? = owner.surface == .cli ? nil : descriptor
         // No identity or no supported kind: this ledger can book no ownership from it, but the
         // repository's boundary already counts an unreadable payload and an unsupported kind under
         // sentences of their own. Short-circuiting here is what lost them.
@@ -36,14 +52,14 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
               let thread = event.sessionID, !thread.isEmpty,
               let name = event.hookEventName,
               CodexHookVocabulary().signal(forEvent: name, toolName: event.toolName) != nil
-        else { return repository.deliver(body, at: date, on: descriptor) }
+        else { return repository.deliver(body, at: date, on: replyDescriptor) }
         // Refused by the ownership contract, and silent by design: a late event under an ended
         // binding and a second executor's handle for a live Turn are both expected here, so
         // reporting them would cry wolf on the one diagnostic that means monitoring is broken.
         guard record(owner: owner, thread: thread, event: name, isSubagent: event.agentID != nil),
               event.agentID != nil || admit(owner: owner, thread: thread, turn: event.turnID, event: name)
         else { return .close }
-        return repository.deliver(body, at: date, on: descriptor)
+        return repository.deliver(body, at: date, on: replyDescriptor)
     }
 
     /// Two executors cannot supply interchangeable request handles for the same native Turn.

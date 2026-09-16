@@ -260,6 +260,68 @@ struct CodexCLIIntegrationTests {
         #expect(settled.diagnostic == reading.diagnostic)
     }
 
+    /// A terminal's approval is read here and answered there, and Desktop's is still answered here.
+    ///
+    /// Codex puts a request to the Hook and waits for it instead of racing a prompt of its own, so
+    /// holding the connection does not add the notch beside the TUI's own question — it takes its
+    /// place, and the terminal sits on `Working` for as long as this app is open (reported
+    /// 2026-09-15). This drives the production listener over a real socket because the observable
+    /// is the helper's connection: `nc` returns as soon as this end closes, which is what lets Codex
+    /// ask in the terminal. Desktop has no terminal to ask in, so its connection is still handed
+    /// over and its row keeps the decision.
+    @Test func aTerminalsApprovalFreesTheHookWhileDesktopsIsStillHeld() async throws {
+        for surface in [CodexExecution.Surface.cli, .desktop] {
+            let root = URL(fileURLWithPath: "/tmp")
+                .appendingPathComponent("nc-free-\(UUID().uuidString.prefix(8))")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let repository = HookEventRepository(paths: HookIntegrationPaths(
+                supportDirectory: root.appendingPathComponent("support"),
+                hooksConfiguration: root.appendingPathComponent(".codex/hooks.json")
+            ))
+            let owner = CodexExecution(pid: 100, startedAt: now, surface: surface,
+                terminal: surface == .cli ? "/dev/ttys100" : nil)
+            let surfaces = CodexSurfaceLedger(source: CodexProcessSource(
+                resolvePeer: { _ in owner }, isAlive: { _ in true },
+                localProcesses: { surface == .cli ? [owner] : [] }
+            ))
+            let listener = AgentHookListener(deliver: { body, date, descriptor in
+                surfaces.receive(body, at: date, descriptor: descriptor, repository: repository)
+            })
+            defer { listener.stop() }
+            let socket = root.appendingPathComponent("hook.sock")
+            try #require(listener.start(socketURL: socket))
+
+            let opening = CLIHookConnection(to: socket)
+            try #require(opening.send([
+                "hook_event_name": "UserPromptSubmit", "session_id": "s-1", "turn_id": "t-1",
+                "prompt": "Delete the temporary file"
+            ]))
+            try #require(opening.waitForClose())
+            let calling = CLIHookConnection(to: socket)
+            try #require(calling.send([
+                "hook_event_name": "PreToolUse", "session_id": "s-1", "turn_id": "t-1",
+                "tool_name": "Bash", "tool_use_id": "call-1",
+                "tool_input": ["command": "rm /tmp/x"]
+            ]))
+            try #require(calling.waitForClose())
+
+            // The one connection the helper would be sitting in `nc` on.
+            let asking = CLIHookConnection(to: socket)
+            try #require(asking.send([
+                "hook_event_name": "PermissionRequest", "session_id": "s-1", "turn_id": "t-1",
+                "tool_name": "Bash", "tool_input": ["command": "rm /tmp/x"]
+            ]))
+            #expect(asking.waitForClose() == (surface == .cli),
+                "a \(surface) approval's connection should \(surface == .cli ? "close" : "stay open")")
+
+            let reading = await eventuallyDrained(repository) { $0.requestAwaitingAnAnswer != nil }
+            let request = try #require(reading?.requestAwaitingAnAnswer)
+            #expect(request.form.name == "command")
+            #expect(request.canBeAnswered == (surface == .desktop))
+        }
+    }
+
     @Test func providerKeepsCLIWithoutDesktopAndRetiresOnlyExitedOwner() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-cli-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }
@@ -860,4 +922,79 @@ private struct CLIHostFixture: SessionHostResolving {
 @MainActor private final class CLIActivationFixture: HostApplicationActivating {
     var calls = 0
     func activate(_ application: HostApplication) async -> Bool { calls += 1; return true }
+}
+
+/// One hook connection in the shape the helper makes it: connect, write the payload, half-close,
+/// then wait to see whether this app closes its end. `nc -U` does exactly this and returns 22 ms
+/// after the close (measured 2026-09-15), so the close is what frees the product.
+private nonisolated final class CLIHookConnection {
+    private let descriptor: Int32
+
+    init(to socketURL: URL) {
+        descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketURL.path.utf8)
+        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else { return }
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
+        address.sun_len = UInt8(
+            MemoryLayout<sockaddr_un>.size - MemoryLayout.size(ofValue: address.sun_path)
+                + pathBytes.count
+        )
+        _ = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        var noSignal: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSignal,
+                   socklen_t(MemoryLayout<Int32>.size))
+    }
+
+    deinit { close(descriptor) }
+
+    func send(_ body: [String: Any]) -> Bool {
+        guard descriptor >= 0, let bytes = try? JSONSerialization.data(withJSONObject: body) else {
+            return false
+        }
+        let written = bytes.withUnsafeBytes { raw -> Int in
+            var sent = 0
+            while sent < raw.count {
+                let count = write(descriptor, raw.baseAddress! + sent, raw.count - sent)
+                guard count > 0 else { break }
+                sent += count
+            }
+            return sent
+        }
+        shutdown(descriptor, SHUT_WR)
+        return written == bytes.count
+    }
+
+    /// Whether this app closed its end, which is where the helper exits and Codex carries on.
+    /// `false` after the window means the connection is being held for a person.
+    func waitForClose(within seconds: TimeInterval = 2) -> Bool {
+        var timeout = timeval(tv_sec: Int(seconds), tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                   socklen_t(MemoryLayout<timeval>.size))
+        var byte: UInt8 = 0
+        return recv(descriptor, &byte, 1, 0) == 0
+    }
+}
+
+/// The listener hands over on its own queue, so the row arrives after the send returns.
+@MainActor
+private func eventuallyDrained(
+    _ repository: HookEventRepository,
+    within seconds: TimeInterval = 5,
+    matching isWanted: (MonitoredTurnState) -> Bool
+) async -> MonitoredTurnState? {
+    let deadline = Date().addingTimeInterval(seconds)
+    while true {
+        if let found = await repository.drainDeliveredEvents().turns.first(where: isWanted) {
+            return found
+        }
+        if Date() >= deadline { return nil }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+    }
 }
