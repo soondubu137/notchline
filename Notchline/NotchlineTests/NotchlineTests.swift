@@ -31190,82 +31190,6 @@ private final class MutableDesktopProcessIdentifier: @unchecked Sendable {
 }
 
 extension NotchlineTests {
-    /// Losing Desktop must not freeze the Codex gate at 1 Hz. Entries are pruned only in
-    /// `sessions(from:)` (live-hook branch); the stuck-deadline filter misses it because the
-    /// instant moves on every call.
-    @Test @MainActor
-    func losingHookObservationPrunesTheCodexUnreadGate() async throws {
-        let paths = makeTemporaryHookPaths()
-        defer {
-            try? FileManager.default.removeItem(
-                at: paths.supportDirectory.deletingLastPathComponent()
-            )
-        }
-        let installer = CodexHookRegistrar(paths: paths)
-        let repository = HookEventRepository(paths: paths)
-        try await installer.install()
-        for event in ["UserPromptSubmit", "Stop"] {
-            try JSONSerialization.data(withJSONObject: [
-                "received_at": Date().timeIntervalSince1970,
-                "hook_event_name": event,
-                "session_id": "thread-frozen",
-                "turn_id": "turn-frozen"
-            ]).deliver(to: repository)
-        }
-
-        let client = CodexAppServerStub(
-            listedThreads: [.object([
-                "id": .string("thread-frozen"),
-                "ephemeral": .bool(false),
-                "threadSource": .string("user"),
-                "updatedAt": .number(Date().timeIntervalSince1970),
-                "name": .string("Frozen")
-            ])],
-            loadedListResults: []
-        )
-        let unreadState = DesktopUnreadStateStub(
-            unreadThreadIDs: ["thread-frozen"]
-        )
-        let desktop = MutableDesktopProcessIdentifier(4_242)
-        let service = LiveCodexMonitorService(
-            client: client,
-            hookEvents: repository,
-            hookRegistrar: installer,
-            unreadState: unreadState,
-            desktopProcessIdentifierProvider: { desktop.value }
-        )
-        defer { Task { await service.disconnect() } }
-
-        var listed = false
-        for _ in 0 ..< 100 {
-            let snapshot = await service.fetchSnapshot()
-            if snapshot.sessions.first?.status == .completed {
-                listed = true
-                break
-            }
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        #expect(listed, "an unread finished row is listed")
-        let asking = await service.nextRefreshDeadline()
-        #expect(
-            (asking?.timeIntervalSinceNow ?? .infinity) <= 1.1,
-            "while it is on screen, the row asks to be looked at again"
-        )
-
-        // Quitting Desktop loses hook observation; this branch publishes no rows.
-        desktop.value = nil
-        let quiet = await service.fetchSnapshot()
-        #expect(quiet.sessions.isEmpty, "nothing is on screen any more")
-        let deadline = await service.nextRefreshDeadline()
-        #expect(
-            (deadline?.timeIntervalSinceNow ?? .infinity) > 1.5,
-            """
-            a branch that cannot evaluate a row must not book a re-check for \
-            one: this is the 1 Hz that ran with an empty notch
-            """
-        )
-    }
-
     /// CR-Fable-023: without a live Hook no sessions can be produced (PRD §3), so this branch
     /// only confirms the transport and never paginates `thread/list`.
     @Test @MainActor
@@ -31330,8 +31254,10 @@ extension NotchlineTests {
         )
     }
 
-    /// CR-Fable-023: with no live Turn, the membership deadline is not reported; only the
-    /// live-Hook branch re-reads membership, so it spun at the 1 Hz floor (cf. CR-Fable-050).
+    /// CR-Fable-023: with no live Turn, the membership deadline is not reported, and the read it
+    /// would have woken for is not issued either — a set nothing reads corrects nothing (cf.
+    /// CR-Fable-050). Leaving the live-Hook branch used to be what stopped both; observation now
+    /// outlives the owner that produced it, so the retired Turn is what has to stop them.
     @Test @MainActor
     func aMembershipSetWithNoLiveTurnBehindItIsNotWokenFor() async throws {
         let paths = makeTemporaryHookPaths()
@@ -31349,12 +31275,14 @@ extension NotchlineTests {
             timing: timing
         )
         try await installer.install()
+        let executions = CodexDesktopExecutionFixture()
+        let surfaces = CodexSurfaceLedger(source: executions.source)
         try JSONSerialization.data(withJSONObject: [
             "received_at": clock.now().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
             "session_id": "thread-live",
             "turn_id": "turn-live"
-        ]).deliver(to: repository)
+        ]).deliver(to: repository, owning: surfaces)
 
         let client = CodexAppServerStub(
             listedThreads: [.object([
@@ -31370,6 +31298,7 @@ extension NotchlineTests {
             client: client,
             hookEvents: repository,
             hookRegistrar: installer,
+            surfaces: surfaces,
             clock: clock,
             timing: timing,
             desktopProcessIdentifierProvider: { desktop.value }
@@ -31381,6 +31310,7 @@ extension NotchlineTests {
         await waitForThreadListRequests(client, atLeast: 1, completed: true)
         let sweeps = await client.requestCount(method: "thread/list")
 
+        executions.quit()
         desktop.value = nil
         let quiet = await service.fetchSnapshot()
         #expect(quiet.sessions.isEmpty)
@@ -31545,94 +31475,6 @@ extension NotchlineTests {
             """
             a row nobody can see must not book a snapshot a second to ask \
             whether it has been read
-            """
-        )
-    }
-    /// CR-Fable-007: a Turn dies with the Desktop pid that produced it. Otherwise a crash
-    /// mid-turn left a Running Turn in the reducer that the relaunched process's first hook event
-    /// republished, with nothing able to end it. Both threads stay listed and unarchived.
-    @Test @MainActor
-    func aCrashedDesktopTakesItsRunningTurnWithIt() async throws {
-        let paths = makeTemporaryHookPaths()
-        defer {
-            try? FileManager.default.removeItem(
-                at: paths.supportDirectory.deletingLastPathComponent()
-            )
-        }
-        let installer = CodexHookRegistrar(paths: paths)
-        let repository = HookEventRepository(paths: paths)
-        try await installer.install()
-        try JSONSerialization.data(withJSONObject: [
-            "received_at": Date().timeIntervalSince1970,
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "thread-crashed",
-            "turn_id": "turn-crashed"
-        ]).deliver(to: repository)
-
-        func listed(_ id: String, _ name: String) -> JSONValue {
-            .object([
-                "id": .string(id),
-                "ephemeral": .bool(false),
-                "threadSource": .string("user"),
-                "updatedAt": .number(Date().timeIntervalSince1970),
-                "name": .string(name)
-            ])
-        }
-        let client = CodexAppServerStub(
-            listedThreads: [
-                listed("thread-crashed", "Interrupted"),
-                listed("thread-after", "Afterwards")
-            ],
-            loadedListResults: []
-        )
-        let desktop = MutableDesktopProcessIdentifier(4_242)
-        let service = LiveCodexMonitorService(
-            client: client,
-            hookEvents: repository,
-            hookRegistrar: installer,
-            desktopProcessIdentifierProvider: { desktop.value }
-        )
-        defer { Task { await service.disconnect() } }
-
-        var running = false
-        for _ in 0 ..< 100 {
-            let snapshot = await service.fetchSnapshot()
-            if snapshot.sessions.first?.status == .running {
-                running = true
-                break
-            }
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        #expect(running, "the turn Desktop is running is on the notch")
-
-        desktop.value = nil
-        let closed = await service.fetchSnapshot()
-        #expect(closed.sessions.isEmpty)
-        #expect(closed.presence == .closed)
-
-        // Relaunched under a new pid; one hook event in another thread used to bring it back.
-        desktop.value = 9_001
-        try JSONSerialization.data(withJSONObject: [
-            "received_at": Date().timeIntervalSince1970,
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "thread-after",
-            "turn_id": "turn-after"
-        ]).deliver(to: repository)
-
-        var relaunched: [MonitoredSession] = []
-        for _ in 0 ..< 100 {
-            let snapshot = await service.fetchSnapshot()
-            if !snapshot.sessions.isEmpty {
-                relaunched = snapshot.sessions
-                break
-            }
-            try await Task.sleep(nanoseconds: 10_000_000)
-        }
-        #expect(
-            relaunched.map(\.threadID) == ["thread-after"],
-            """
-            the new process answers for its own Turn and for nothing its \
-            predecessor left behind
             """
         )
     }
@@ -33645,4 +33487,427 @@ private func findField(_ view: NSView) -> AnswerFieldView? {
         if let found = findField(child) { return found }
     }
     return nil
+}
+
+/// Names every hook connection as one live Codex Desktop execution, the way
+/// ``CodexProcessSource/live()`` does through `LOCAL_PEERPID`. Quitting leaves nothing alive to
+/// own a Thread; relaunching installs a different execution, which is what a new pid means here.
+private final class CodexDesktopExecutionFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var owner: CodexExecution?
+    /// `nil` is an inventory that could not be read at all, as distinct from one that found nothing.
+    private var terminals: [CodexExecution]? = []
+
+    init(pid: pid_t = 4_242, startedAt: Date = Date(timeIntervalSince1970: 1_800_000_000)) {
+        owner = CodexExecution(pid: pid, startedAt: startedAt, surface: .desktop, terminal: nil)
+    }
+
+    func quit() {
+        lock.lock()
+        owner = nil
+        lock.unlock()
+    }
+
+    func relaunch(pid: pid_t, startedAt: Date) {
+        lock.lock()
+        owner = CodexExecution(pid: pid, startedAt: startedAt, surface: .desktop, terminal: nil)
+        lock.unlock()
+    }
+
+    func loseTheProcessInventory() {
+        lock.lock()
+        terminals = nil
+        lock.unlock()
+    }
+
+    private func execution() -> CodexExecution? {
+        lock.lock()
+        defer { lock.unlock() }
+        return owner
+    }
+
+    private func inventory() -> [CodexExecution]? {
+        lock.lock()
+        defer { lock.unlock() }
+        return terminals
+    }
+
+    var source: CodexProcessSource {
+        CodexProcessSource(
+            resolvePeer: { _ in self.execution() },
+            isAlive: { self.execution() == $0 },
+            localProcesses: { self.inventory() }
+        )
+    }
+}
+
+extension Data {
+    /// Hands this payload over the way the transport does when a ledger is installed: provenance
+    /// first, then the reducer. Delivering straight to the repository books no ownership, which is
+    /// a shape production cannot produce — every event reaches the store through ``receive``.
+    @discardableResult
+    func deliver(
+        to repository: HookEventRepository,
+        owning surfaces: CodexSurfaceLedger
+    ) -> AgentHookListener.Disposition {
+        let object = (try? JSONSerialization.jsonObject(with: self)) as? [String: Any]
+        let stamp = (object?["received_at"] as? Double)
+            .map(Date.init(timeIntervalSince1970:)) ?? Date()
+        return surfaces.receive(self, at: stamp, descriptor: -1, repository: repository)
+    }
+}
+
+/// The Desktop lifecycle as `ProductRegistry.builtIn` actually assembles it: a
+/// ``CodexSurfaceLedger`` whose peer is a Codex Desktop execution. Every Codex test written before
+/// the ledger builds the service without one and so exercises a branch production cannot reach —
+/// these are the counterparts that hold retirement, presence and live-Hook observation in the
+/// shape that ships.
+extension NotchlineTests {
+    private func codexDesktopPayload(
+        _ event: String,
+        thread: String,
+        turn: String? = nil,
+        extra: [String: Any] = [:]
+    ) throws -> Data {
+        var value: [String: Any] = extra
+        value["received_at"] = Date().timeIntervalSince1970
+        value["hook_event_name"] = event
+        value["session_id"] = thread
+        if let turn { value["turn_id"] = turn }
+        return try JSONSerialization.data(withJSONObject: value)
+    }
+
+    private func codexListedThread(_ id: String, _ name: String) -> JSONValue {
+        .object([
+            "id": .string(id),
+            "ephemeral": .bool(false),
+            "threadSource": .string("user"),
+            "updatedAt": .number(Date().timeIntervalSince1970),
+            "name": .string(name)
+        ])
+    }
+
+    /// The counterpart of ``aCrashedDesktopTakesItsRunningTurnWithIt``. With a ledger it is the
+    /// owning execution exiting that retires the Turn, not the Desktop pid changing: the relaunched
+    /// process is a different execution, so nothing it sends can re-float what its predecessor left
+    /// running (CR-Fable-007). Both threads stay listed and unarchived throughout.
+    @Test @MainActor
+    func anOwnedDesktopTurnDiesWithItsExecutionAndTheRelaunchAnswersOnlyForItsOwn() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+        let executions = CodexDesktopExecutionFixture()
+        let surfaces = CodexSurfaceLedger(source: executions.source)
+        try codexDesktopPayload("UserPromptSubmit", thread: "thread-crashed", turn: "turn-crashed")
+            .deliver(to: repository, owning: surfaces)
+
+        let client = CodexAppServerStub(
+            listedThreads: [
+                codexListedThread("thread-crashed", "Interrupted"),
+                codexListedThread("thread-after", "Afterwards")
+            ],
+            loadedListResults: []
+        )
+        let desktop = MutableDesktopProcessIdentifier(4_242)
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            surfaces: surfaces,
+            desktopProcessIdentifierProvider: { desktop.value }
+        )
+        defer { Task { await service.disconnect() } }
+
+        let running = await snapshotWithSessions(from: service)
+        #expect(running.sessions.map(\.threadID) == ["thread-crashed"])
+        #expect(running.sessions.first?.status == .running)
+        #expect(running.presence == .open)
+
+        // Desktop quits. What stops being true is that its execution is alive; the pid going with
+        // it is a consequence, and on this branch not the evidence anything acts on.
+        executions.quit()
+        desktop.value = nil
+        let closed = await service.fetchSnapshot()
+        #expect(closed.sessions.isEmpty)
+        #expect(closed.presence == .closed)
+        #expect(surfaces.refresh(at: Date()).threadIDs.isEmpty)
+
+        // Relaunched under a new pid: one hook event in another thread used to bring the old one back.
+        executions.relaunch(pid: 9_001, startedAt: Date())
+        desktop.value = 9_001
+        try codexDesktopPayload("UserPromptSubmit", thread: "thread-after", turn: "turn-after")
+            .deliver(to: repository, owning: surfaces)
+
+        let relaunched = await snapshotWithSessions(from: service)
+        #expect(
+            relaunched.sessions.map(\.threadID) == ["thread-after"],
+            """
+            the new execution answers for its own Turn and for nothing its \
+            predecessor left behind
+            """
+        )
+        #expect(relaunched.presence == .open)
+
+        // And again onto the pid it just vacated, which is the case a pid comparison cannot see:
+        // `desktop.value` never changes here, so only the execution says anything happened.
+        executions.quit()
+        executions.relaunch(pid: 9_001, startedAt: Date().addingTimeInterval(1))
+        let reused = await service.fetchSnapshot()
+        #expect(
+            reused.sessions.isEmpty,
+            "a reused pid is not the execution that left a Turn running under it"
+        )
+        try codexDesktopPayload("UserPromptSubmit", thread: "thread-after", turn: "turn-again")
+            .deliver(to: repository, owning: surfaces)
+        let reowned = await snapshotWithSessions(from: service)
+        #expect(reowned.sessions.map(\.threadID) == ["thread-after"])
+        #expect(reowned.sessions.first?.status == .running)
+    }
+
+    /// The other half of retirement, and the live-Hook observation the pid match used to gate: a
+    /// Turn whose owner is alive survives every refresh, including refreshes that consume no events
+    /// and refreshes taken after the Desktop pid the first event arrived under has been forgotten.
+    /// `retainOwnedThreads` runs on every refresh, so a Desktop execution that failed to book
+    /// ownership would empty the notch on the second look rather than the first.
+    @Test @MainActor
+    func aDesktopOwnedTurnSurvivesEveryRefreshItsExecutionOutlives() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+        let executions = CodexDesktopExecutionFixture()
+        let surfaces = CodexSurfaceLedger(source: executions.source)
+        try codexDesktopPayload("UserPromptSubmit", thread: "thread-owned", turn: "turn-owned")
+            .deliver(to: repository, owning: surfaces)
+
+        let client = CodexAppServerStub(
+            listedThreads: [codexListedThread("thread-owned", "Owned")],
+            loadedListResults: []
+        )
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            surfaces: surfaces,
+            unreadState: DesktopUnreadStateStub(unreadThreadIDs: ["thread-owned"]),
+            desktopProcessIdentifierProvider: { 4_242 }
+        )
+        defer { Task { await service.disconnect() } }
+
+        let running = await snapshotWithSessions(from: service)
+        #expect(running.sessions.first?.status == .running)
+
+        for _ in 0 ..< 3 {
+            let again = await service.fetchSnapshot()
+            #expect(again.sessions.map(\.threadID) == ["thread-owned"])
+            #expect(again.sessions.first?.status == .running)
+        }
+
+        try codexDesktopPayload(
+            "Stop",
+            thread: "thread-owned",
+            turn: "turn-owned",
+            extra: ["last_assistant_message": "Finished"]
+        ).deliver(to: repository, owning: surfaces)
+
+        var finished: AgentSnapshot = await service.fetchSnapshot()
+        let settled = await holds {
+            finished = await service.fetchSnapshot()
+            return finished.sessions.first?.status == .completed
+        }
+        #expect(settled, "the owner is alive, so its finished Turn is still its own")
+        #expect(await service.fetchSnapshot().sessions.map(\.threadID) == ["thread-owned"])
+        #expect(surfaces.refresh(at: Date()).threadIDs == ["thread-owned"])
+    }
+
+    /// Live-Hook observation belongs to the execution that produced the events, not to whatever
+    /// `NSWorkspace` last said the Desktop pid was. That reading is a separate question asked of a
+    /// separate system and it can come back empty for a refresh with the process very much alive;
+    /// on the retired pid gate one such refresh retired every Turn and emptied the notch, because
+    /// `hasCurrentHookObservation` required the pid to still match the one that consumed them.
+    @Test @MainActor
+    func aDesktopRowOutlivesARefreshThatCannotReadTheRunningApplication() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+        let executions = CodexDesktopExecutionFixture()
+        let surfaces = CodexSurfaceLedger(source: executions.source)
+        try codexDesktopPayload("UserPromptSubmit", thread: "thread-owned", turn: "turn-owned")
+            .deliver(to: repository, owning: surfaces)
+
+        let client = CodexAppServerStub(
+            listedThreads: [codexListedThread("thread-owned", "Owned")],
+            loadedListResults: []
+        )
+        let desktop = MutableDesktopProcessIdentifier(4_242)
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            surfaces: surfaces,
+            desktopProcessIdentifierProvider: { desktop.value }
+        )
+        defer { Task { await service.disconnect() } }
+
+        let running = await snapshotWithSessions(from: service)
+        #expect(running.sessions.first?.status == .running)
+
+        // The execution is untouched; only the running-application reading went blind.
+        desktop.value = nil
+        let blind = await service.fetchSnapshot()
+        #expect(
+            blind.sessions.map(\.threadID) == ["thread-owned"],
+            "an unreadable process listing is not evidence that the Turn's owner exited"
+        )
+        #expect(blind.sessions.first?.status == .running)
+        // And presence has to agree with the row, or the collapsed surface draws the resting mark
+        // over a running Turn — `isConnected` drops the product out of `presenceMarks`, and
+        // `isRestingOnly` then grows the pill sideways instead of opening the panel that holds it.
+        #expect(
+            blind.presence == .open,
+            "an execution alive enough to own a Thread is a product that is open"
+        )
+
+        desktop.value = 4_242
+        let seenAgain = await service.fetchSnapshot()
+        #expect(seenAgain.sessions.map(\.threadID) == ["thread-owned"])
+        #expect(seenAgain.sessions.first?.status == .running)
+        #expect(seenAgain.presence == .open)
+
+        // Owning a Thread is a positive reading and not a latch: the execution is still alive here,
+        // but with its Thread ended it owns nothing, so presence falls back to what can be read.
+        desktop.value = nil
+        try codexDesktopPayload("SessionEnd", thread: "thread-owned")
+            .deliver(to: repository, owning: surfaces)
+        let ended = await service.fetchSnapshot()
+        #expect(ended.sessions.isEmpty)
+        #expect(ended.presence == .closed)
+    }
+
+    /// Presence, through the ledger, separates two readings the pid alone cannot tell apart: an
+    /// inventory that was read and found no terminal Codex is `.closed`, and one that could not be
+    /// read at all is `.unknown`. The nil-ledger branch has no third answer, so it reports a failed
+    /// read as "nothing is running" (PRD §6.3).
+    @Test @MainActor
+    func presenceSeparatesAnInventoryThatFoundNothingFromOneItCouldNotRead() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        try await installer.install()
+        let executions = CodexDesktopExecutionFixture()
+        // No Desktop execution at all: nothing owns a Thread and nothing answers for a surface.
+        executions.quit()
+        let surfaces = CodexSurfaceLedger(source: executions.source)
+        let clock = TestClock()
+        let client = CodexAppServerStub(listedThreads: [], loadedListResults: [])
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: HookEventRepository(paths: paths, clock: clock),
+            hookRegistrar: installer,
+            surfaces: surfaces,
+            clock: clock,
+            desktopProcessIdentifierProvider: { nil }
+        )
+        defer { Task { await service.disconnect() } }
+
+        let counted = await service.fetchSnapshot()
+        #expect(counted.presence == .closed)
+        #expect(counted.sessions.isEmpty)
+        #expect(counted.availability == .ready, "the transport still answers")
+
+        executions.loseTheProcessInventory()
+        // Past the ledger's process-inventory cache, so the next refresh asks again.
+        await clock.advance(by: 60)
+        let unreadable = await service.fetchSnapshot()
+        #expect(
+            unreadable.presence == .unknown,
+            "an inventory that could not be read is not evidence that nothing is running"
+        )
+        #expect(unreadable.availability == .ready)
+    }
+
+    /// The counterpart of ``losingHookObservationPrunesTheCodexUnreadGate``. On this branch the
+    /// service does not leave the live-Hook branch when Desktop goes: `hasObservedLiveEvent` stays
+    /// true for the life of the connection, so the gate has to be pruned by the row being retired
+    /// out of it, not by the branch changing under it. Nothing on screen must book no re-check
+    /// (CR-Fable-050).
+    @Test @MainActor
+    func losingTheOwningExecutionPrunesTheCodexUnreadGate() async throws {
+        let paths = makeTemporaryHookPaths()
+        defer {
+            try? FileManager.default.removeItem(
+                at: paths.supportDirectory.deletingLastPathComponent()
+            )
+        }
+        let installer = CodexHookRegistrar(paths: paths)
+        let repository = HookEventRepository(paths: paths)
+        try await installer.install()
+        let executions = CodexDesktopExecutionFixture()
+        let surfaces = CodexSurfaceLedger(source: executions.source)
+        for event in ["UserPromptSubmit", "Stop"] {
+            try codexDesktopPayload(event, thread: "thread-frozen", turn: "turn-frozen")
+                .deliver(to: repository, owning: surfaces)
+        }
+
+        let client = CodexAppServerStub(
+            listedThreads: [codexListedThread("thread-frozen", "Frozen")],
+            loadedListResults: []
+        )
+        let desktop = MutableDesktopProcessIdentifier(4_242)
+        let service = LiveCodexMonitorService(
+            client: client,
+            hookEvents: repository,
+            hookRegistrar: installer,
+            surfaces: surfaces,
+            unreadState: DesktopUnreadStateStub(unreadThreadIDs: ["thread-frozen"]),
+            desktopProcessIdentifierProvider: { desktop.value }
+        )
+        defer { Task { await service.disconnect() } }
+
+        var listed = false
+        _ = await holds {
+            listed = await service.fetchSnapshot().sessions.first?.status == .completed
+            return listed
+        }
+        #expect(listed, "an unread finished row is listed")
+        let asking = await service.nextRefreshDeadline()
+        #expect(
+            (asking?.timeIntervalSinceNow ?? .infinity) <= 1.1,
+            "while it is on screen, the row asks to be looked at again"
+        )
+
+        executions.quit()
+        desktop.value = nil
+        let quiet = await service.fetchSnapshot()
+        #expect(quiet.sessions.isEmpty, "nothing is on screen any more")
+        let deadline = await service.nextRefreshDeadline()
+        #expect(
+            (deadline?.timeIntervalSinceNow ?? .infinity) > 1.5,
+            """
+            a row nobody can see must not book a snapshot a second to ask \
+            whether it has been read
+            """
+        )
+    }
 }

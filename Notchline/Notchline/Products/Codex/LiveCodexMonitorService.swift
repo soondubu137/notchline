@@ -35,6 +35,13 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     private let client: any CodexAppServerCommunicating
     /// Codex's hook transport; reducer and registrar are also kept by name.
     private let hooks: HookLifecycleSource
+    /// Native execution provenance. `ProductRegistry.builtIn` always installs one, so `nil` is a
+    /// construction seam and never a shape that ships: it is how a test that is not about
+    /// provenance says "assume every Thread's owner is alive", and it takes nothing else with it —
+    /// retirement, presence and live-Hook observation have one implementation each, which is the
+    /// one running here. There used to be a second, driven by the Desktop pid: it could not see a
+    /// relaunch onto the vacated pid, could not tell an exited Desktop from one `NSWorkspace`
+    /// merely failed to list, and had no way to say `.unknown`.
     private let surfaces: CodexSurfaceLedger?
     private let hookEvents: HookEventRepository
     private let hookActivation: CodexHookActivation
@@ -106,7 +113,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// answers `-32601` for `historyMode` `legacy` threads while `paginated` ones work (measured
     /// 2026-08-25, CLI `0.149.0-alpha.4.3`).
     private var threadsWithoutItemsRead: Set<String> = []
-    private var observedDesktopProcessIdentifier: pid_t?
     /// Cool-off after a failed connect; guards a subprocess. See ``connectToAppServer()``.
     private var connectRetryAfter: Date?
     /// Replayed for refreshes the cool-off turns away.
@@ -243,37 +249,33 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             }
         }
         let desktopProcessIdentifier = await self.presence.processIdentifier()
-        // A pid change retires the Turns the old process vouched for. Desktop dying mid-turn sends
-        // no `Stop` and writes no `turn_aborted`, and its Running Turn returned on the relaunched
-        // process's first event with nothing to clear it (CR-Fable-007; no activity-status read as
-        // ADR 0011 gives Claude Code). Retired before the drain so new events cannot mix in.
-        if surfaces == nil, let vouchingProcessIdentifier = observedDesktopProcessIdentifier,
-           vouchingProcessIdentifier != desktopProcessIdentifier {
-            await retireHookTurns()
-        }
         var hookState = await hookEvents.drainDeliveredEvents()
         let hookDiagnostic = hookState.diagnostic
+        // A Turn dies with the execution that vouched for it. Desktop dying mid-turn sends no
+        // `Stop` and writes no `turn_aborted`, and its Running Turn returned on the relaunched
+        // process's first event with nothing to clear it (CR-Fable-007; no activity-status read as
+        // ADR 0011 gives Claude Code). Retired after the drain, so a dying helper's last events go
+        // with it. A pid comparison used to stand in for this and could not see a relaunch onto the
+        // vacated pid, nor tell an exited Desktop from one `NSWorkspace` merely failed to list.
         let ownership = surfaces?.refresh(at: clock.now())
         if let ownership {
             hookState = await hookEvents.retainOwnedThreads(
                 ownership.threadIDs, didConsumeEvents: hookState.didConsumeEvents
             )
-        } else if desktopProcessIdentifier == nil {
-            // And after the drain while nothing runs: a dying process's helper can still deliver.
-            hookState = await retireHookTurns(
-                didConsumeEvents: hookState.didConsumeEvents
-            )
-        } else if hookState.didConsumeEvents {
-            observedDesktopProcessIdentifier = desktopProcessIdentifier
         }
-        // Positive presence comes from a running application or verified TUI; a failed inventory stays unknown.
-        let presence: AgentPresence = desktopProcessIdentifier != nil || ownership?.cliIsOpen == true
+        // Positive presence comes from a running application, a verified TUI, or a live execution
+        // that owns a Thread; a failed inventory stays unknown. The third of those keeps presence
+        // and rows from contradicting each other: retirement asks the ledger, so presence has to ask
+        // it too, or a Desktop this app cannot list draws a resting mark over its own running row —
+        // and `isRestingOnly` then refuses to open the panel that would show it. The bundle
+        // identifier is undocumented and may change; an owner is a kernel fact and cannot.
+        let isOpen = desktopProcessIdentifier != nil
+            || ownership?.cliIsOpen == true
+            || ownership?.desktopIsOpen == true
+        let presence: AgentPresence = isOpen
             ? .open : (ownership != nil && ownership?.cliIsOpen == nil ? .unknown : .closed)
 
-        let hasLiveHookObservation = surfaces != nil ? hookState.hasObservedLiveEvent : hasCurrentHookObservation(
-            hookState: hookState,
-            desktopProcessIdentifier: desktopProcessIdentifier
-        )
+        let hasLiveHookObservation = hookState.hasObservedLiveEvent
         var setupStatus = IntegrationSetupStatus.card(
             registration: await hookRegistrar.registration(),
             hasObservedEvent: hookState.hasObservedEvent
@@ -323,8 +325,17 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 scheduleThreadMetadataRefreshIfNeeded(for: hookState.turns)
                 let fullListMustSupplyMetadata = !supportsThreadMetadataRead
                     && hookState.didConsumeEvents
+                // Membership reconciles the Turns held against the threads listed, so re-reading the
+                // whole history while none are held corrects nothing (CR-Fable-023).
+                // `nextRefreshDeadline` already declines to book that re-read for an empty set;
+                // issuing it anyway was the same asymmetry seen from the other side, and until every
+                // owner exited, leaving the live-Hook branch was what stopped it — observation now
+                // outlives the owner, so it never leaves. The first read still happens whatever is
+                // held: it is also what establishes ``threadAdmission``.
+                let membershipIsDue = threadListReadAt == nil
+                    || (threadListRefreshIsDue && !hookThreadIDs.isEmpty)
                 if containsUnlistedHookThread
-                    || threadListRefreshIsDue
+                    || membershipIsDue
                     || fullListMustSupplyMetadata {
                     scheduleThreadListRefreshIfNeeded()
                 }
@@ -566,7 +577,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         surfaces?.reset()
         await hookEvents.resetIntegrationObservation(clearTurns: true, preserveBoundaryObservation: true)
         hookTrackedThreadIDs = []
-        observedDesktopProcessIdentifier = nil
         lastTrustedSnapshot = nil
         stopThreadReadsWithNoConsumer()
         await rolloutEvidence.stopMonitoring()
@@ -1405,29 +1415,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         return threads
     }
 
-    /// Drops the Hook evidence held for a Desktop process that is no longer running, with its
-    /// reads. The next process binds with its own first event; `hookTrackedThreadIDs` goes too so
-    /// retired threads stop asking to be re-read.
-    @discardableResult
-    private func retireHookTurns(
-        didConsumeEvents: Bool = false
-    ) async -> HookStateSnapshot {
-        observedDesktopProcessIdentifier = nil
-        hookTrackedThreadIDs = []
-        return await hookEvents.discardTurns(didConsumeEvents: didConsumeEvents)
-    }
-
-    private func hasCurrentHookObservation(
-        hookState: HookStateSnapshot,
-        desktopProcessIdentifier: pid_t?
-    ) -> Bool {
-        guard hookState.hasObservedLiveEvent,
-              let desktopProcessIdentifier,
-              observedDesktopProcessIdentifier == desktopProcessIdentifier else {
-            return false
-        }
-        return true
-    }
 }
 
 enum CodexSnapshotParser {

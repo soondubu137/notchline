@@ -84,6 +84,11 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
     struct Reading: Sendable {
         let threadIDs: Set<String>
         let cliIsOpen: Bool?
+        /// A live Desktop execution owns at least one Thread. **Positive only**: false means this
+        /// ledger has nothing to say, never that Desktop is closed — a Desktop sitting idle with
+        /// every Thread ended owns nothing, and is still open. Desktop has no inventory to read,
+        /// so there is no third answer here; `false` defers to the running-application reading.
+        let desktopIsOpen: Bool
     }
 
     /// The inventory is read opportunistically, as `AntigravityConversationScanner` reads its locks:
@@ -107,8 +112,16 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
         turnOwners = turnOwners.filter { owners[$0.key] != nil }
         ended = ended.filter { source.isAlive($0.owner) }
         discovered = discovered.filter(source.isAlive)
+        // Both read `owners`, which the line above has already cut to executions still alive: an
+        // owner is a kernel fact (pid *and* start time), so it is stronger evidence that a surface
+        // is open than any application listing, and it cannot outlive the process it names.
         let anyCLI = !discovered.isEmpty || owners.values.contains { $0.contains { $0.surface == .cli } }
-        return Reading(threadIDs: Set(owners.keys), cliIsOpen: anyCLI ? true : (scanKnown ? false : nil))
+        let anyDesktop = owners.values.contains { $0.contains { $0.surface == .desktop } }
+        return Reading(
+            threadIDs: Set(owners.keys),
+            cliIsOpen: anyCLI ? true : (scanKnown ? false : nil),
+            desktopIsOpen: anyDesktop
+        )
     }
 
     func isCLI(_ thread: String) -> Bool {
