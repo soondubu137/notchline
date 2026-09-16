@@ -158,6 +158,48 @@ struct CodexCLIIntegrationTests {
         #expect(tabs.calls == 0 && activator.calls == 2)
     }
 
+    /// A drop nobody counts is indistinguishable from "the hooks never fired", which is the one
+    /// reading a user cannot act on. Provenance failure is the shape an unsupported home or mode
+    /// arrives in, so it is the drop that has to be said out loud.
+    @Test func anUnattributableEventIsDroppedOutLoudAndAContractRefusalStaysSilent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-drop-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("support")
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        let repository = HookEventRepository(paths: HookIntegrationPaths(supportDirectory: support,
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json")))
+        let process = cli()
+        let owned = CodexSurfaceLedger(source: CodexProcessSource(resolvePeer: { _ in process },
+            isAlive: { _ in true }, localProcesses: { [process] }))
+        let unnameable = CodexSurfaceLedger(source: CodexProcessSource(resolvePeer: { _ in nil },
+            isAlive: { _ in false }, localProcesses: { [] }))
+        func body(_ value: [String: String]) throws -> Data { try JSONSerialization.data(withJSONObject: value) }
+        let submit = try body(["hook_event_name": "UserPromptSubmit", "session_id": "thread",
+            "turn_id": "t", "prompt": "Live prompt"])
+
+        #expect(unnameable.receive(submit, at: now, descriptor: -1, repository: repository) == .close)
+        var reading = await repository.drainDeliveredEvents()
+        #expect(reading.turns.isEmpty)
+        #expect(reading.diagnostic?.contains("Ignored 1 hook payload Notchline could not attribute to a "
+            + "supported Codex process") == true)
+
+        // Neither of these can book ownership, and both belong to counts the boundary already keeps.
+        #expect(owned.receive(Data("{".utf8), at: now, descriptor: -1, repository: repository) == .close)
+        #expect(owned.receive(try body(["hook_event_name": "Invented", "session_id": "thread"]),
+            at: now, descriptor: -1, repository: repository) == .close)
+        reading = await repository.drainDeliveredEvents()
+        #expect(reading.turns.isEmpty)
+        #expect(reading.diagnostic?.contains("Ignored 1 hook payload that could not be read.") == true)
+        #expect(reading.diagnostic?.contains("of an unsupported kind") == true)
+
+        // The ownership contract's own refusals are expected traffic: no sentence, and no count.
+        owned.record(owner: process, thread: "thread", event: "SessionEnd")
+        #expect(owned.receive(submit, at: now, descriptor: -1, repository: repository) == .close)
+        let settled = await repository.drainDeliveredEvents()
+        #expect(settled.turns.isEmpty)
+        #expect(settled.diagnostic == reading.diagnostic)
+    }
+
     @Test func providerKeepsCLIWithoutDesktopAndRetiresOnlyExitedOwner() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-cli-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: root) }

@@ -17,11 +17,25 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
     init(source: CodexProcessSource = .live()) { self.source = source }
 
     func receive(_ body: Data, at date: Date, descriptor: Int32, repository: MonitoringRepository) -> AgentHookListener.Disposition {
-        guard let owner = source.resolvePeer(descriptor), source.isAlive(owner),
-              let event = HookPayload.distilled(from: body, admittingRequestWhere: { _, _ in false }),
+        // Nothing unattributable may own a Thread, so this drop happens before the reducer — but
+        // never in silence. A custom `CODEX_HOME`, an excluded mode, an unreadable sender and a
+        // process that died mid-handshake all arrive in this shape, and unreported they read as
+        // "hooks are not firing" with nothing on screen to say otherwise.
+        guard let owner = source.resolvePeer(descriptor), source.isAlive(owner) else {
+            (repository.boundary as? HookEvidenceBoundary)?.recordUnattributedPayload()
+            return .close
+        }
+        // No identity or no supported kind: this ledger can book no ownership from it, but the
+        // repository's boundary already counts an unreadable payload and an unsupported kind under
+        // sentences of their own. Short-circuiting here is what lost them.
+        guard let event = HookPayload.distilled(from: body, admittingRequestWhere: { _, _ in false }),
               let thread = event.sessionID, !thread.isEmpty,
               let name = event.hookEventName,
-              CodexHookVocabulary().signal(forEvent: name, toolName: event.toolName) != nil else { return .close }
+              CodexHookVocabulary().signal(forEvent: name, toolName: event.toolName) != nil
+        else { return repository.deliver(body, at: date, on: descriptor) }
+        // Refused by the ownership contract, and silent by design: a late event under an ended
+        // binding and a second executor's handle for a live Turn are both expected here, so
+        // reporting them would cry wolf on the one diagnostic that means monitoring is broken.
         guard record(owner: owner, thread: thread, event: name, isSubagent: event.agentID != nil),
               event.agentID != nil || admit(owner: owner, thread: thread, turn: event.turnID, event: name)
         else { return .close }
