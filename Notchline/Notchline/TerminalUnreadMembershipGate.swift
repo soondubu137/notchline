@@ -197,12 +197,13 @@ struct TerminalUnreadMembershipGate: Sendable {
             .min()
     }
 
-    nonisolated mutating func retain(sessionIDs: Set<String>) {
-        entries = entries.filter { sessionIDs.contains($0.key) }
-    }
-
-    nonisolated mutating func reset() {
-        entries.removeAll()
+    /// - Parameter heldSessionIDs: Turns the reducer still holds. Their hidden entries stay too, since
+    ///   hiding is final for a Turn, not for a row: a read Trae row absent for one refresh while its
+    ///   companion reconnected came back unread (2026-09-16). A hidden entry books no re-check.
+    nonisolated mutating func retain(sessionIDs: Set<String>, keepingReadAmong heldSessionIDs: Set<String> = []) {
+        entries = entries.filter {
+            sessionIDs.contains($0.key) || ($0.value.isHidden && heldSessionIDs.contains($0.key))
+        }
     }
 
     /// Whether this gate has anything to say about a row in this status. Internal so a caller can

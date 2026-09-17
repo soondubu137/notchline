@@ -44,7 +44,8 @@ protocol ReadEvidenceSource: Sendable {
 /// - Nothing is judged unless a finished row is listed (CR-Fable-041).
 /// - The gate gets the thread's status, so a finished Turn with a subagent in flight is not
 ///   erased after its end was read.
-/// - The gate is retained to what was judged, so no stale entry reports an unclearable deadline.
+/// - The gate is retained to what was judged, so no stale entry reports an unclearable deadline,
+///   plus the read verdict of every Turn still held, so a row missing for a refresh returns read.
 nonisolated struct TerminalUnreadRowFilter: Sendable {
     private var gate: TerminalUnreadMembershipGate
 
@@ -69,16 +70,22 @@ nonisolated struct TerminalUnreadRowFilter: Sendable {
 
     /// The rows to list, in row order.
     ///
-    /// - Parameter verdict: Asked only for undismissed rows and only when
-    ///   ``needsReadEvidence(_:dismissedRowIDs:)`` holds, so verdicts may be precomputed.
+    /// - Parameters:
+    ///   - heldRowIDs: Every Turn the reducer holds, as a row ``MonitoredSession/id``, whether or not
+    ///     it drew a candidate this refresh.
+    ///   - verdict: Asked only for undismissed rows and only when
+    ///     ``needsReadEvidence(_:dismissedRowIDs:)`` holds, so verdicts may be precomputed.
     mutating func rows(
         _ candidates: [ReadGateCandidate],
         dismissedRowIDs: Set<String>,
         now: Date,
+        heldRowIDs: Set<String> = [],
         verdict: (ReadGateCandidate) -> ReadGateVerdict
     ) -> [MonitoredSession] {
+        // A listed row keeps its entry only by being judged, as before.
+        let unlisted = heldRowIDs.subtracting(candidates.map(\.row.id))
         guard Self.needsReadEvidence(candidates.map(\.row), dismissedRowIDs: dismissedRowIDs) else {
-            gate.reset()
+            gate.retain(sessionIDs: [], keepingReadAmong: unlisted)
             return candidates.map(\.row).sorted(by: MonitorAggregation.rowOrder)
         }
 
@@ -108,13 +115,14 @@ nonisolated struct TerminalUnreadRowFilter: Sendable {
                 }
             }
         }
-        gate.retain(sessionIDs: judgedRowIDs)
+        gate.retain(sessionIDs: judgedRowIDs, keepingReadAmong: unlisted)
         return shown.sorted(by: MonitorAggregation.rowOrder)
     }
 
-    /// Forgets every row, for a refresh that lists nothing, so no entry keeps booking a re-check.
-    mutating func reset() {
-        gate.reset()
+    /// Forgets every row but the read ones still held, for a refresh that lists nothing, so no
+    /// entry keeps booking a re-check.
+    mutating func reset(keepingReadAmong heldRowIDs: Set<String> = []) {
+        gate.retain(sessionIDs: [], keepingReadAmong: heldRowIDs)
     }
 
     /// See ``TerminalUnreadMembershipGate/nextDeadline(now:screenIsAvailable:)``.

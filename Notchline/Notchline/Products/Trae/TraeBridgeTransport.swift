@@ -69,9 +69,13 @@ nonisolated final class TraeBridgeTransport: TraeReadReporting, @unchecked Senda
         } }
     }
     func content() async -> [String: TraeDisplayedTurn] {
-        await withCheckedContinuation { c in queue.async { [self] in c.resume(returning: boundary.current.filter { entry in
+        await withCheckedContinuation { c in queue.async { [self] in c.resume(returning: boundary.admittedRows.filter { entry in
             boundary.peer(for: entry.key).map { peers[$0]?.healthy == true } ?? false
         }) } }
+    }
+    /// See ``TraeEvidenceBoundary/release(_:)``.
+    func release(_ turnIDsByThread: [String: String]) async {
+        await withCheckedContinuation { c in queue.async { [self] in boundary.release(turnIDsByThread); c.resume() } }
     }
     func route(for threadID: String) async -> String? {
         await withCheckedContinuation { c in queue.async { [self] in

@@ -2794,10 +2794,12 @@ final class MonitorStore: ObservableObject {
     private func forgetNoticesTheProductHasOvertaken() {
         var previews: [String: String?] = [:]
         for session in sessions { previews[session.id] = session.preview }
-        answerNotices = answerNotices.filter { id, notice in
+        let notices = answerNotices.filter { id, notice in
             guard let preview = previews[id] else { return false }
             return preview == notice.previewWhenWritten
         }
+        // Every refresh runs this, and an equal assignment still publishes (`AGENTS.md` §7).
+        if notices.count != answerNotices.count { answerNotices = notices }
         answerProgress = answerProgress.filter { id, progress in
             sessions.first(where: { $0.id == id })?.requests.contains(where: { $0.asked == progress.request }) == true
         }
