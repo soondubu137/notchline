@@ -14520,6 +14520,34 @@ struct NotchlineTests {
         #expect(publishes > 0, "a width change must reach the panel")
     }
 
+    /// A finished unread row re-checks every second, so an unchanged answer must not publish either.
+    /// Pruning the answer notices assigned to their `@Published` on every refresh; with a read Trae
+    /// row stuck unread (2026-09-16) that re-rendered the overlay several times a second.
+    @Test @MainActor
+    func anUnchangedRefreshDoesNotRepublishTheStore() async throws {
+        let clock = TestClock()
+        let store = makeIdleStore(clock: clock)
+        // Each product's answer lands on its own, so one refresh applies once per product.
+        let finished = AgentSnapshot(
+            agent: .trae, availability: .ready,
+            sessions: [makeSession(agent: .trae, status: .completed, startedAt: clock.now().addingTimeInterval(-60))],
+            quota: .noneReported, diagnostic: nil, presence: .open
+        )
+        let answers = [makeSessionSnapshot([]), finished]
+        for answer in answers { store.applyForTesting(answer, observedAt: clock.now()) }
+        await clock.settle()
+
+        var publishes = 0
+        let subscription = store.objectWillChange.sink { _ in publishes += 1 }
+        defer { subscription.cancel() }
+        for _ in 0..<3 {
+            await clock.advance(by: 1)
+            for answer in answers { store.applyForTesting(answer, observedAt: clock.now()) }
+        }
+        #expect(store.sessions.map(\.agent) == [.trae])
+        #expect(publishes == 0, "an unchanged refresh republished the store \(publishes) time(s)")
+    }
+
     @Test @MainActor
     func refreshLoopNeverSpinsOnAnOverdueDeadline() async throws {
         // Without a floor an overdue deadline sleeps zero and runs full snapshots continuously

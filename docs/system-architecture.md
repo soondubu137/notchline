@@ -564,6 +564,8 @@ The readout now subscribes to a tick SwiftUI does not observe (`MonitorStore.ela
 
 The full form of the rule is therefore: **overlay re-render count should be driven by whether the layout changed, not by whether the content changed.** Content changes go to a layer, and only layout changes are worth disturbing SwiftUI. Continuous motion is merely the most extreme violation of it.
 
+**Nothing changing at all must publish nothing either, and `@Published` does not check.** Assigning an equal value still sends `objectWillChange`. From 2026-09-05 until 2026-09-16, the store pruned its answer notices on every applied product answer with a plain assignment. A refresh therefore re-rendered the overlay once per product even when every value was unchanged. With four products and a finished row waiting to be read, that is four full re-renders on every one-second re-check. Two read Trae rows came back unread after a sleep (§3) and stayed there. The panel was visibly laggy until the user removed them by hand (reported 2026-09-16). The refresh path's other writes to published state already compared first; `anUnchangedRefreshDoesNotRepublishTheStore` applies two products' unchanged answers three times and requires zero publishes. The lag itself was reported from another machine and not re-measured here.
+
 ### What that rule costs: the window's list of publishes
 
 Keeping the measurement off the path of every state is why the window cannot simply follow `objectWillChange`. `OverlayPanelController.frameChangingPublishers(of:)` enumerates the publishes that can move `MonitorStore.currentPanelSize`; everything else on the store re-renders the view without the window being asked for a frame at all.
