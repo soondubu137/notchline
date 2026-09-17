@@ -47,8 +47,8 @@ The persisted acceptance fixture keeps only the companion’s bounded wire proje
 
 | Layer | Retained evidence |
 | --- | --- |
-| Native projection | [projection.test.cjs](../tests/trae/projection.test.cjs): scope, ownership, automatic confirmation, consumed requests, rich forms, question details and malformed input |
-| Renderer ordering | [renderer.test.cjs](../tests/trae/renderer.test.cjs): content coalescing preserves boundaries, retired async callbacks cannot publish, queue overflow stops only the observer |
+| Native projection | `tests/trae/projection.test.cjs` (not tracked): scope, ownership, automatic confirmation, consumed requests, rich forms, question details and malformed input |
+| Renderer ordering | `tests/trae/renderer.test.cjs` (not tracked): content coalescing preserves boundaries, retired async callbacks cannot publish, queue overflow stops only the observer |
 | Shared reducer and UI | [TraeConformanceTests.swift](../Notchline/NotchlineTests/TraeConformanceTests.swift): baselines, native replay, lifecycle/request identity, independent Threads/producers, reconnect, scope exclusion, stale-window correction, manifest-read registration states, idempotent removal and real opened-row sizing |
 | Socket boundary | [TraeTransportTests.swift](../Notchline/NotchlineTests/TraeTransportTests.swift): real isolated Unix peer, fragmented frames, handshake/route ownership and corruption without false resolution |
 | Native fixture | [displayed-3.5.91.jsonl](../Notchline/NotchlineTests/Fixtures/Trae/displayed-3.5.91.jsonl) |

@@ -23,13 +23,14 @@ Language: every user-readable string — accessibility labels, diagnostics, Info
 ```bash
 xcodebuild build -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS'
 xcodebuild test  -project Notchline/Notchline.xcodeproj -scheme Notchline -destination 'platform=macOS' -only-testing:NotchlineTests
+scripts/check-doc-links.py
 ```
 
 A version is cut and published by `scripts/release/cut-release.sh <version>`: write its `CHANGELOG.md` section first, and read the script's header for the rest. The script builds and signs through `scripts/release/build-release.sh` on the tagged cut commit. It needs the `Notchline Release` certificate and Sparkle's EdDSA key in the login keychain, which `scripts/release/create-release-identity.sh` created once. Never create either a second time ([ADR 0022](docs/adr/0022-update-through-sparkle-signed-with-our-own-certificate.md)). The feed, `appcast.xml`, is read by every shipped copy from `master` and must not move.
 
 The unit suite takes a few seconds on a warm build. Anything performance-related must be measured under **Release** (`-configuration Release`); Debug numbers mean nothing here.
 
-**There is no CI and no lint configuration.** Running the tests locally before committing is the only gate.
+**The unit suite has no CI, and there is no lint configuration.** Running the tests locally before committing is the only gate for code. The one GitHub Actions workflow, `.github/workflows/doc-links.yml`, runs `scripts/check-doc-links.py` on every push to `master` and every pull request. It fails when a relative link in tracked Markdown does not resolve, and it counts only tracked files, so a link to something `.gitignore` keeps local (such as `tests/`) fails too. Run it locally after moving, renaming or deleting a file that a document links to.
 
 The scheme is not shared (`xcuserdata/` is ignored), so Xcode regenerates it on open. If a clean checkout reports "scheme not found", share the scheme into `xcshareddata/xcschemes/` rather than re-tracking user state.
 
@@ -146,7 +147,7 @@ Any production feature depending on **Codex implementation details not covered b
 
 Each entry states what the feature is, why the public interfaces cannot deliver it, and how it is actually implemented, plus the dependency level, the signal that a Desktop update has broken it, the conservative degradation, and navigable code and test paths. Vague wording that conceals the real private dependency is not acceptable.
 
-Procedure: confirm the capability gap still exists before implementing; keep public interfaces and private sources clearly separated in the design; for private schema or file dependencies add tests for success, absence, corruption and version incompatibility, and fail closed; before finishing, check that code, tests, PRD, tech design and registry agree and that the registry's relative links resolve. When an equivalent public capability appears, migrate and remove the old row, implementation and tests together. Say in the delivery notes whether this change added, modified, migrated or removed such an integration — and if it did none of those, say so explicitly after checking.
+Procedure: confirm the capability gap still exists before implementing; keep public interfaces and private sources clearly separated in the design; for private schema or file dependencies add tests for success, absence, corruption and version incompatibility, and fail closed; before finishing, check that code, tests, PRD, tech design and registry agree and that the registry's relative links resolve (`scripts/check-doc-links.py`). When an equivalent public capability appears, migrate and remove the old row, implementation and tests together. Say in the delivery notes whether this change added, modified, migrated or removed such an integration — and if it did none of those, say so explicitly after checking.
 
 **A missing registry update means the change is not finished.**
 
