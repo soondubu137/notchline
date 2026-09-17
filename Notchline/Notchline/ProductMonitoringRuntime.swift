@@ -276,7 +276,7 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
             if availability == .setupRequired {
                 await lifecycle.repository.resetIntegrationObservation(clearTurns: true)
             }
-            await stopEverything()
+            await stopEverything(keepingReadAmong: heldRowIDs(in: await lifecycle.repository.observedState()))
             return snapshot(
                 availability: availability,
                 sessions: [],
@@ -325,22 +325,28 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
 
         var rows: [MonitoredSession] = []
         var readDiagnostic: String?
+        // A Turn with no content this refresh is still the Turn that was read.
+        let held = heldRowIDs(in: state)
         if presence == .closed {
-            readGate.reset()
+            readGate.reset(keepingReadAmong: held)
             await readEvidence?.forget()
         } else {
             // Judged even while presence is `unknown`, then withheld: an unreadable list is not evidence a
             // session ended, and a row hidden for being read must not return (CC-024).
             (rows, readDiagnostic) = await rowsStillWorthShowing(
                 candidates,
-                dismissedRowIDs: dismissedRowIDs
+                dismissedRowIDs: dismissedRowIDs,
+                heldRowIDs: held
             )
         }
         // Live text is kept for Threads the product lists (row or not) and for rows built rather than
         // shown, so a withheld row keeps its words; the kept set also lets a later message wake the
         // panel (``TurnPreviewStore/fold``).
         guard revision == lifecycleRevision else {
-            if !isObserving { readGate.reset(); await readEvidence?.forget() }
+            if !isObserving {
+                readGate.reset(keepingReadAmong: heldRowIDs(in: await lifecycle.repository.observedState()))
+                await readEvidence?.forget()
+            }
             return stoppedSnapshot()
         }
         var retainedThreadIDs = Set(candidates.map(\.row.threadID))
@@ -376,11 +382,12 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
         )
     }
 
-    private func stopEverything() async {
+    /// - Parameter heldRowIDs: Turns the reducer keeps through the stop; their read verdicts stay.
+    private func stopEverything(keepingReadAmong heldRowIDs: Set<String> = []) async {
         lifecycleRevision += 1
         isObserving = false
         await composition.stop()
-        readGate.reset()
+        readGate.reset(keepingReadAmong: heldRowIDs)
         await readEvidence?.forget()
         await sessions.stopWatching()
         for source in turnEvidence {
@@ -393,7 +400,8 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
     /// is listed (CR-Fable-041, CR-Fable-003).
     private func rowsStillWorthShowing(
         _ candidates: [ReadGateCandidate],
-        dismissedRowIDs: Set<String>
+        dismissedRowIDs: Set<String>,
+        heldRowIDs: Set<String>
     ) async -> (rows: [MonitoredSession], diagnostic: String?) {
         guard let readEvidence else {
             return (candidates.map(\.row).sorted(by: MonitorAggregation.rowOrder), nil)
@@ -404,7 +412,8 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
             dismissedRowIDs: dismissedRowIDs
         ) else {
             await readEvidence.forget()
-            let rows = readGate.rows(candidates, dismissedRowIDs: dismissedRowIDs, now: now) { _ in
+            let rows = readGate.rows(candidates, dismissedRowIDs: dismissedRowIDs, now: now,
+                                     heldRowIDs: heldRowIDs) { _ in
                 .cannotBeAsked
             }
             return (rows, nil)
@@ -413,7 +422,8 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
             for: candidates.filter { !dismissedRowIDs.contains($0.row.id) },
             now: now
         )
-        let rows = readGate.rows(candidates, dismissedRowIDs: dismissedRowIDs, now: now) {
+        let rows = readGate.rows(candidates, dismissedRowIDs: dismissedRowIDs, now: now,
+                                 heldRowIDs: heldRowIDs) {
             judgement.verdicts[$0.row.id] ?? .cannotBeAsked
         }
         // A list with nothing to judge says nothing about readings it did not take.
@@ -459,6 +469,10 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
     private func stoppedSnapshot() -> AgentSnapshot {
         snapshot(availability: .disconnected, sessions: [], setupStatus: lastSetupStatus,
                  diagnostic: nil, quota: usage == nil ? .noneReported : .unavailable, presence: .unknown)
+    }
+
+    private func heldRowIDs(in state: MonitoringStateSnapshot) -> Set<String> {
+        Set(state.turns.map { MonitoredSession.id(agent: agent, threadID: $0.threadID, turnID: $0.turnID) })
     }
 
     private func row(for turn: MonitoredTurnState, content: RowContent) -> MonitoredSession {
