@@ -4,6 +4,23 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## 0.5.4 Beta — 2026-09-16
+
+**Trae rows you have already read stay gone when your Mac wakes up, and the panel no longer stutters while a finished row waits to be read.** (`docs/trae-integration.md`.)
+
+### Fixed
+
+- **Trae rows you had read came back after sleep.** Closing the lid drops the connection to Trae's companion. On waking, rows read the day before returned as finished and unread, and reading them again did not clear them. Notchline now remembers that a row was read for as long as it is tracking that Turn, and no longer asks Trae to send back Threads whose rows are over.
+- **The panel stuttered while a finished row waited to be read.** Every refresh redrew the whole overlay once per product, even when nothing had changed — once a second, for as long as a row waited. Expanding on hover and collapsing both stuttered. The overlay is now redrawn only when something it draws has actually changed.
+- **Trae monitoring could stop for good after a long run.** Each reconnect asked Trae's companion for every Thread seen since Trae started. Past 128 the companion refused the request and Notchline retried it unchanged, so waking left Trae unobserved until Trae or Notchline restarted. A reconnect now asks only for the Threads a row still needs.
+
+### Known limitations
+
+- **Not reproduced on a sleeping Mac.** All three were found and fixed from a report and from the code, and are covered by tests that drive the real companion socket. Nobody has watched a lid close and open. Why reading a returned row inside Trae did not clear it is still unexplained.
+- **A reconnect keeps at most 96 Trae Threads.** Beyond that, the oldest rows still waiting to be read lose their text after a reconnect, rather than Trae monitoring going dark.
+
+Everything listed under `0.5.3` and earlier still stands, unchanged.
+
 ## 0.5.3 Beta — 2026-09-15
 
 **A long answer typed on the notch now stays inside its field.** The field grows a line at a time up to four lines, then scrolls. (`docs/answer-in-notch.md` §7.1.)
