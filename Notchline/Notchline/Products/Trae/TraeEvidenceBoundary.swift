@@ -227,8 +227,31 @@ nonisolated struct TraeEvidenceBoundary {
         }
     }
 
+    /// A baseline carries at most 128 rows, including running Threads nobody asked for, and the
+    /// companion retries a refused one with the same list, so a reconnect asks for fewer.
+    static let retainedLimit = 96
+
+    /// Rows a held Turn draws from: admitted and not released.
+    var admittedRows: [String: TraeDisplayedTurn] {
+        current.filter { admitted.contains($0.key + ":" + $0.value.turnID) }
+    }
+
+    /// What a reconnect asks the companion to send back: open Turns first, then the newest.
     var observedThreadIDs: [String] {
-        current.values.filter { admitted.contains($0.threadID + ":" + $0.turnID) }.map(\.threadID).sorted()
+        admittedRows.values
+            .sorted { ($0.status == "in_progress" ? 0 : 1, -($0.startedAt ?? 0)) < ($1.status == "in_progress" ? 0 : 1, -($1.startedAt ?? 0)) }
+            .prefix(Self.retainedLimit).map(\.threadID).sorted()
+    }
+
+    /// Finished Turns whose rows are over (read or removed), Thread to Turn. Every Thread ever
+    /// observed was asked for again on each reconnect, and a companion refuses a baseline past
+    /// 128 rows, so once that many had run, waking left Trae unobserved. A released Turn is never
+    /// admitted again; a newer Turn in its Thread still is. Ownership stays with the window.
+    mutating func release(_ turnIDsByThread: [String: String]) {
+        for (threadID, turnID) in turnIDsByThread {
+            guard admitted.remove(threadID + ":" + turnID) != nil, current[threadID]?.turnID == turnID else { continue }
+            current[threadID] = nil
+        }
     }
     mutating func lost(peer: String) {
         sequences[peer] = nil; baselines[peer] = nil

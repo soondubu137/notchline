@@ -150,6 +150,13 @@ protocol RowContentSource: Sendable {
         for turns: [MonitoredTurnState],
         messages: TurnMessageReading
     ) async -> [String: RowContent]
+    /// Finished Turns whose rows are over, Thread to Turn: read, or removed by the user. Nothing
+    /// draws them again, so content kept for a later refresh can go.
+    func releaseEndedRows(_ turnIDsByThread: [String: String]) async
+}
+
+extension RowContentSource {
+    func releaseEndedRows(_ turnIDsByThread: [String: String]) async {}
 }
 
 /// The L2 context fallback: directory name for project, prompt for title, closing words or newest
@@ -338,6 +345,17 @@ actor ProductMonitoringRuntime: AgentMonitoring, DiskFootprintReporting {
                 dismissedRowIDs: dismissedRowIDs,
                 heldRowIDs: held
             )
+            // A candidate the gate did not return was hidden as read; a removed one is returned.
+            let returned = Set(rows.map(\.id))
+            let ended = candidates.map(\.row).filter {
+                MonitorAggregation.effectiveStatus(of: $0) == .completed
+                    && (dismissedRowIDs.contains($0.id) || !returned.contains($0.id))
+            }
+            if !ended.isEmpty {
+                await rowContent.releaseEndedRows(
+                    Dictionary(ended.map { ($0.threadID, $0.turnID) }, uniquingKeysWith: { first, _ in first })
+                )
+            }
         }
         // Live text is kept for Threads the product lists (row or not) and for rows built rather than
         // shown, so a withheld row keeps its words; the kept set also lets a later message wake the

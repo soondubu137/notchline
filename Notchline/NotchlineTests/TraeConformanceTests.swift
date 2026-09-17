@@ -218,6 +218,41 @@ struct TraeConformanceTests {
         #expect(await repository.drainDeliveredEvents().turns.first?.requestsAwaitingAnAnswer.isEmpty == true)
     }
 
+    @Test func aReleasedTurnIsNotAskedForOrDrawnAgainButItsThreadCanRunAgain() async throws {
+        var boundary = TraeEvidenceBoundary(); let repository = MonitoringRepository(policy: .explicit)
+        try consume(frame(1, [], baseline: true), &boundary, repository)
+        try consume(frame(2, [row(), row(thread: 3, turn: 4)]), &boundary, repository)
+        try consume(frame(3, [row(status: "completed"), row(thread: 3, turn: 4, status: "completed")]), &boundary, repository)
+        #expect(boundary.observedThreadIDs == [id(1), id(3)])
+        // The second names a Turn its Thread is not on, so it releases nothing.
+        boundary.release([id(1): id(2), id(3): id(9)])
+        #expect(boundary.observedThreadIDs == [id(3)])
+        #expect(boundary.admittedRows[id(1)] == nil)
+        // Sent again, as a window with a stale view would.
+        try consume(frame(4, [row(status: "completed")]), &boundary, repository)
+        #expect(boundary.admittedRows[id(1)] == nil)
+        #expect(boundary.observedThreadIDs == [id(3)])
+        try consume(frame(5, [row(turn: 7, at: t0 + 20)], at: t0 + 20), &boundary, repository)
+        #expect(boundary.observedThreadIDs == [id(1), id(3)])
+        #expect(await repository.drainDeliveredEvents().turns.first { $0.threadID == id(1) }?.turnID == id(7))
+    }
+
+    @Test func aReconnectAsksForOpenTurnsFirstThenTheNewestWithinItsLimit() throws {
+        var boundary = TraeEvidenceBoundary(); let repository = MonitoringRepository(policy: .explicit)
+        try consume(frame(1, [], baseline: true), &boundary, repository)
+        let open = row(thread: 9_999, turn: 19_999, at: t0 + 1)
+        let finished = (0..<100).map { row(thread: 10_000 + $0, turn: 20_000 + $0, at: t0 + 2 + Double($0)) }
+        try consume(frame(2, [open] + finished), &boundary, repository)
+        try consume(frame(3, finished.map {
+            row(thread: Int($0.threadID, radix: 16)!, turn: Int($0.turnID, radix: 16)!, status: "completed", at: $0.startedAt)
+        }), &boundary, repository)
+        let asked = Set(boundary.observedThreadIDs)
+        #expect(asked.count == TraeEvidenceBoundary.retainedLimit)
+        #expect(asked.contains(open.threadID))
+        #expect(asked.isSuperset(of: finished.suffix(95).map(\.threadID)))
+        #expect(asked.isDisjoint(with: finished.prefix(5).map(\.threadID)))
+    }
+
     @Test func scopeExclusionHidesNavigationWithoutInventingAnEnd() async throws {
         var boundary = TraeEvidenceBoundary(); let repository = MonitoringRepository(policy: .explicit)
         try consume(frame(1, [], baseline: true), &boundary, repository)
