@@ -6,6 +6,28 @@
     <description>Notchline's update feed, read by every copy through SUFeedURL. Items are added by scripts/release/build-release.sh, newest first; do not rename or move this file.</description>
     <language>en</language>
     <item>
+      <title>Notchline 0.5.5 Beta</title>
+      <pubDate>Sun, 20 Sep 2026 06:18:15 GMT</pubDate>
+      <sparkle:version>22</sparkle:version>
+      <sparkle:shortVersionString>0.5.5</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/soondubu137/notchline/releases/tag/v0.5.5</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown"><![CDATA[**A finished Claude Code row in Claude Desktop retires when you read it again, instead of waiting for you to switch to another session and back.** (`docs/tech-design.md` §1.5.2.)
+
+### Fixed
+
+- **A row that was on screen when its Turn finished never retired.** Claude Desktop `2.2553.1` replaced its own log directory while still writing to the file it had open, so that log stopped existing by path — no rotation Notchline could see. Notchline kept the log's last word on which session was on screen for ever, and it then spoke against every other session. A statement now expires after 30 seconds without a readable log.
+
+### Known limitations
+
+- **A row can still retire while you type in a new session's composer.** With the log gone, which session is on screen comes from Claude Desktop's records alone, and they note a session being put on screen but never taken off. That is the behaviour from before Notchline read the log, and it lasts only as long as the log is missing: restarting Claude Desktop brings the full reading back.
+- **Not watched on the notch.** The missing log was measured on one Mac and the fix is covered by unit tests. Nobody has watched a row retire on screen since it landed.
+
+Everything listed under `0.5.4` and earlier still stands, unchanged.
+]]></description>
+      <enclosure url="https://github.com/soondubu137/notchline/releases/download/v0.5.5/Notchline-0.5.5.zip" type="application/octet-stream" sparkle:edSignature="q4QK9CfVWlT2qPlZgUTv1vJJ3PuqwVOKR+Lle12aT/Qzc6S0nz9jX3/lU0wMJCp1uglse6p89wOYCMyPFfjVBw==" length="4001914"/>
+    </item>
+    <item>
       <title>Notchline 0.5.4 Beta</title>
       <pubDate>Thu, 17 Sep 2026 04:40:38 GMT</pubDate>
       <sparkle:version>21</sparkle:version>
