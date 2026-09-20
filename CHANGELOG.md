@@ -4,6 +4,21 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## 0.5.5 Beta — 2026-09-19
+
+**A finished Claude Code row in Claude Desktop retires when you read it again, instead of waiting for you to switch to another session and back.** (`docs/tech-design.md` §1.5.2.)
+
+### Fixed
+
+- **A row that was on screen when its Turn finished never retired.** Claude Desktop `2.2553.1` replaced its own log directory while still writing to the file it had open, so that log stopped existing by path — no rotation Notchline could see. Notchline kept the log's last word on which session was on screen for ever, and it then spoke against every other session. A statement now expires after 30 seconds without a readable log.
+
+### Known limitations
+
+- **A row can still retire while you type in a new session's composer.** With the log gone, which session is on screen comes from Claude Desktop's records alone, and they note a session being put on screen but never taken off. That is the behaviour from before Notchline read the log, and it lasts only as long as the log is missing: restarting Claude Desktop brings the full reading back.
+- **Not watched on the notch.** The missing log was measured on one Mac and the fix is covered by unit tests. Nobody has watched a row retire on screen since it landed.
+
+Everything listed under `0.5.4` and earlier still stands, unchanged.
+
 ## 0.5.4 Beta — 2026-09-16
 
 **Trae rows you have already read stay gone when your Mac wakes up, and the panel no longer stutters while a finished row waits to be read.** (`docs/trae-integration.md`.)
