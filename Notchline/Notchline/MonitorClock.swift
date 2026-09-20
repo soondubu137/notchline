@@ -69,6 +69,12 @@ nonisolated struct MonitorTiming: Sendable {
     var terminalUnreadRecheckInterval: TimeInterval = 1
     /// Trailing debounce on the Desktop state directory, sized to an atomic replace's 3-14ms burst.
     var unreadStateDebounceInterval: TimeInterval = 0.05
+    /// How long Claude Desktop's last statement about what is on its screen stands once its log
+    /// has become unreadable (``ClaudeDesktopFocusLogReader``). A rotation's gap is one rename
+    /// wide, so this keeps the statement across every ordinary interruption; past it the log is
+    /// gone rather than quiet, and a statement nothing can refresh would veto every Desktop read
+    /// route for as long as this app runs (measured 2026-09-19, Claude Desktop `2.2553.1`).
+    var displayedSessionStatementLifetime: TimeInterval = 30
     /// How long `disconnected` must persist before it replaces a trusted state.
     var disconnectGracePeriod: TimeInterval = 3
     var hoverExpandDelay: TimeInterval = 0.15

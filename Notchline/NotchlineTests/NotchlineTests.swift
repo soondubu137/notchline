@@ -20984,8 +20984,8 @@ for line in sys.stdin:
         #expect(await reader.displayedSession() == .nothing)
     }
 
-    /// A log that goes away keeps its last statement: reverting to `unknown` would hand the verdict
-    /// back to the records, which cannot see a composer.
+    /// A log that goes away keeps its last statement for a while: reverting to `unknown` at the
+    /// first miss would hand the verdict back to the records, which cannot see a composer.
     @Test
     func theDesktopFocusLogKeepsItsLastStatementWhenTheFileGoesAway() async throws {
         let root = URL(fileURLWithPath: "/tmp")
@@ -20994,13 +20994,105 @@ for line in sys.stdin:
         defer { try? FileManager.default.removeItem(at: root) }
         let url = root.appendingPathComponent("main.log")
         try Data("2026-08-19 21:00:00 [info] Starting app\n".utf8).write(to: url)
-        let reader = ClaudeDesktopFocusLogReader(logURL: url)
+        let clock = TestClock()
+        let reader = ClaudeDesktopFocusLogReader(
+            logURL: url,
+            clock: clock,
+            statementLifetime: 30
+        )
         _ = await reader.displayedSession()
         try append(focusStatement(for: "null"), to: url)
         #expect(await reader.displayedSession() == .nothing)
 
         try FileManager.default.removeItem(at: url)
         #expect(await reader.displayedSession() == .nothing)
+        await clock.advance(by: 29)
+        #expect(await reader.displayedSession() == .nothing)
+    }
+
+    /// A statement outlives an interrupted log, never a log that is gone.
+    ///
+    /// Claude Desktop `2.2553.1` replaced its own `Logs/Claude` directory on 2026-09-19 while
+    /// still writing to the file it had open, so `main.log` stopped existing by path with no
+    /// rotation this reader could see. A statement kept for ever names whichever session was on
+    /// screen that minute and vetoes ``ClaudeCodeReadEvidence``'s three Desktop routes for every
+    /// other one, leaving a finished row that retires only when the user leaves the session and
+    /// comes back to re-stamp `lastFocusedAt`.
+    @Test
+    func theDesktopFocusLogStatementExpiresOnceTheLogIsGoneForGood() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-log-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("main.log")
+        try Data("2026-08-19 21:00:00 [info] Starting app\n".utf8).write(to: url)
+        let clock = TestClock()
+        let reader = ClaudeDesktopFocusLogReader(
+            logURL: url,
+            clock: clock,
+            statementLifetime: 30
+        )
+        _ = await reader.displayedSession()
+        try append(focusStatement(for: "local_d-1"), to: url)
+        #expect(
+            await reader.displayedSession() == .session(desktopSessionID: "local_d-1")
+        )
+
+        // The first miss only starts the run; the statement has to outlast the lifetime.
+        try FileManager.default.removeItem(at: url)
+        #expect(
+            await reader.displayedSession() == .session(desktopSessionID: "local_d-1")
+        )
+        await clock.advance(by: 30)
+        #expect(await reader.displayedSession() == .unknown)
+    }
+
+    /// The lifetime measures an unbroken run of failures, so a log that keeps coming back — a
+    /// rotation, a moment's unreadability — never ages its statement out.
+    @Test
+    func theDesktopFocusLogStatementSurvivesRepeatedInterruptions() async throws {
+        let root = URL(fileURLWithPath: "/tmp")
+            .appendingPathComponent("cin-log-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("main.log")
+        try Data("2026-08-19 21:00:00 [info] Starting app\n".utf8).write(to: url)
+        let clock = TestClock()
+        let reader = ClaudeDesktopFocusLogReader(
+            logURL: url,
+            clock: clock,
+            statementLifetime: 30
+        )
+        _ = await reader.displayedSession()
+        try append(focusStatement(for: "local_d-1"), to: url)
+        #expect(
+            await reader.displayedSession() == .session(desktopSessionID: "local_d-1")
+        )
+
+        // Five gaps of 20s each: well past the lifetime in total, never in one run.
+        for _ in 0 ..< 5 {
+            try FileManager.default.removeItem(at: url)
+            #expect(
+                await reader.displayedSession() == .session(desktopSessionID: "local_d-1")
+            )
+            await clock.advance(by: 20)
+            #expect(
+                await reader.displayedSession() == .session(desktopSessionID: "local_d-1")
+            )
+            // The log comes back: a rotated file is history, so it says the same thing again only
+            // once Desktop appends to it. Either way the reading succeeded, ending the run.
+            try Data("2026-08-19 21:00:00 [info] Starting app\n".utf8).write(to: url)
+            _ = await reader.displayedSession()
+            try append(focusStatement(for: "local_d-1"), to: url)
+            #expect(
+                await reader.displayedSession() == .session(desktopSessionID: "local_d-1")
+            )
+        }
+
+        try FileManager.default.removeItem(at: url)
+        _ = await reader.displayedSession()
+        await clock.advance(by: 30)
+        #expect(await reader.displayedSession() == .unknown)
     }
 
     /// The live screen reading answers on this machine without a permission prompt (which answer
