@@ -6,6 +6,30 @@
     <description>Notchline's update feed, read by every copy through SUFeedURL. Items are added by scripts/release/build-release.sh, newest first; do not rename or move this file.</description>
     <language>en</language>
     <item>
+      <title>Notchline 0.6.0 Beta</title>
+      <pubDate>Wed, 23 Sep 2026 05:52:40 GMT</pubDate>
+      <sparkle:version>23</sparkle:version>
+      <sparkle:shortVersionString>0.6.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/soondubu137/notchline/releases/tag/v0.6.0</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown"><![CDATA[**Notchline now watches Codex in a local terminal as well as in Codex Desktop, at L5.** The same `Codex` switch covers both. A CLI row shows each Turn with its folder, title and progress, and reads an approval or a question in full, to be answered in the terminal. To pick it up, press Repair for Codex in Settings, then trust the three new definitions in Codex's `/hooks`. (`docs/product-support.md` §5.1.)
+
+### Added
+
+- **Codex CLI, at L5.** Ordinary interactive `codex`, `resume` and `fork` sessions in the default `~/.codex` home appear beside Desktop's rows. Setup adds `SessionStart`, `SessionEnd` and `Interrupt` to the seven existing definitions and changes none of them. Final-answer previews, quota and today's tokens come from the same account reading as Desktop.
+- **A finished CLI row clears once you come back to its terminal.** A keystroke or a paste after the Turn ended retires it, with that terminal in front. Ghostty's focus reports count too, so returning to the window is enough there; Apple Terminal sends none and waits for a keystroke. Clicking a row raises the terminal that runs it.
+
+### Known limitations
+
+- **Every CLI request is answered in the terminal.** Codex waits for the hook instead of prompting beside it, so holding the connection took the question away from the terminal. Notchline now reads the request and lets go at once.
+- **No exact window, tab or Thread selection, and no Turns from before launch.** Remote, daemon, `exec`, SDK and piped runs, SSH, tmux and screen, custom homes and unrecognised options are excluded.
+- **Verified on Codex CLI 0.154.0 only.** Asynchronous questions, `request_permissions`, automatic review, subagents and quota under a signed-in CLI have no CLI acceptance of their own. [Full scope](docs/product-support.md#51-local-codex-cli).
+
+Everything listed under `0.5.5` and earlier still stands, unchanged.
+]]></description>
+      <enclosure url="https://github.com/soondubu137/notchline/releases/download/v0.6.0/Notchline-0.6.0.zip" type="application/octet-stream" sparkle:edSignature="6+bXU3bVghwCBEVjywcZV6ziGzhuU9eX3w/2Pom7AARQ+8j05sdndLPn6ejbL1AJg+lQZMBxBc9SoSoR+TDUDA==" length="4063366"/>
+    </item>
+    <item>
       <title>Notchline 0.5.5 Beta</title>
       <pubDate>Sun, 20 Sep 2026 06:18:15 GMT</pubDate>
       <sparkle:version>22</sparkle:version>
