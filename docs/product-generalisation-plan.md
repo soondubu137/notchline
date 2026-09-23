@@ -80,7 +80,7 @@ The required outcome is a typed live-evidence entry point and a reusable monitor
 
 ### Implementation sequence
 
-1. Read the complete reduction path and tests before moving it, including `reduceSubagentToolEvent`, `mutateExactTurn`, `adoptTurnsOnRecord`, `discardTurns`, previews and diagnostic counters. Record which branches are policy and which decode a native schema.
+1. Read the complete reduction path and tests before moving it, including `reduceSubagentToolEvent`, `mutateExactTurn`, `adoptTurnsOnRecord`, `retainOwnedThreads`, previews and diagnostic counters. Record which branches are policy and which decode a native schema.
 2. Introduce a `Sendable` evidence value with semantic signal, Thread/Turn/producer identity, observation time, optional qualified text, call correlation, projected request and relevant terminal facts. Keep native JSON and descriptor types out of this entry point. Optional data must remain optional; do not invent missing starts or text.
 3. Represent the existing measured reduction policies independently of `AgentHookVocabulary`. The adapter chooses a policy; the reducer does not switch on product identity. This is not permission to expose arbitrary closures that mutate Turn state.
 4. Move payload decoding, message-field aliases, request projection and installation/trust bookkeeping to the hook boundary. Preserve the fast preview path: bounded text folding, no per-delta actor task, no unbounded retained payload.

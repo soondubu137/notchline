@@ -42,7 +42,8 @@
 
 | 产品 | 等级 | 额外能力（独立于等级） | 边界 |
 | --- | --- | --- | --- |
-| **Codex Desktop** | **L6**：普通审批 | 精确 Thread 导航、Desktop Project／已读移除、最终答案预览、子智能体、配额和每日 token 用量 | 不包含独立 CLI；同步问题与 `request_permissions` 只读；异步问题仅预览 |
+| **Codex Desktop** | **L6**：普通审批 | 精确 Thread 导航、Desktop Project／已读移除、最终答案预览、子智能体、配额和每日 token 用量 | 本地 CLI 的范围在下方单独列出；同步问题与 `request_permissions` 只读；异步问题仅预览 |
+| **Codex CLI（本地交互式）** | **L5**：普通审批和同步问题，只读 | 最终答案预览、有条件的终端已读移除、返回宿主、共用账户读数 | 仅默认 home；所有请求都在终端回答；无精确窗口／标签页／Thread 选择，不恢复启动前状态，不支持 remote/daemon/exec（[范围与验证](docs/product-support-zh.md#51-本地-codex-cli)） |
 | **Claude Code（Desktop + CLI）** | **L6**：工具／计划审批与问题集 | 以文件夹为 Project、有条件的 Desktop／终端已读移除、宿主／标签页导航、子智能体、配额和每日 token 用量 | 无最终答案预览；精确导航取决于宿主，无法到达全屏宿主 |
 | **Antigravity（Desktop + CLI）** | **L3** | Desktop Project、有条件的 Desktop／终端已读移除、宿主导航和最终答案预览 | 无等待检测、请求、配额、token 用量或子智能体；进度可能等待工具返回；Desktop 停止后条目可能仍显示工作中；CLI 已读移除需要输入／粘贴，仅切换标签页无效 |
 | **Trae Desktop（本地 IDE/V2）** | **L5**：普通命令与结构化问题 | 精确导航至已观察的 Thread、基于可见完成内容的条件式已读移除、保留主对话文字 | 仅限已验证的 3.5.91 构建；需在 Trae 中回答；无配额、token 用量或子智能体；IDE 内 SOLO 不属于 L5，排除独立 SoloLite、远程、Plan/Spec 和复杂权限形式（[范围](docs/trae-integration.md)） |
@@ -54,6 +55,8 @@
 | **Ghostty 1.3.1** | 唤起应用；不精确选择标签页／窗格 | Claude Code：输入／粘贴、焦点或指针手势；Antigravity：仅输入／粘贴 |
 | **kitty、WezTerm、Alacritty、VS Code 终端** | 能识别宿主时唤起应用；不精确选择标签页／窗格 | 共用终端证据路径；各宿主组合未经独立验证 |
 | **tmux、screen、SSH、管道** | 无专用返回目标 | 不支持 |
+
+Codex CLI 始终只返回宿主，包括 Terminal.app 和 iTerm2。已完成条目可在输入／粘贴后移除；若终端报告焦点，返回窗口也可以：已验证 Ghostty，Apple Terminal 不提供此报告。移动指针不会移除条目。具体条件和 CLI 0.154.0 验收基线见[支持契约](docs/product-support-zh.md#51-本地-codex-cli)。
 
 ## 整体限制
 
@@ -67,7 +70,7 @@
 
 需要 **macOS 26.5+**。将 `Notchline.app` 移至“应用程序”并打开。目前未经公证；若被阻止，请使用 **系统设置 → 隐私与安全 → 仍要打开**（[操作说明](https://support.apple.com/en-ie/102445)）。这一步只需一次：Notchline 每天检查更新，也可在 **关于 → Check for Updates** 中手动检查，更新会原地安装，无需再次确认。
 
-在首次引导或设置中启用产品。Codex 需通过 `/hooks` 信任 Hooks。启用 Trae 会安装配套扩展，随后请重新打开 Trae 窗口。
+在首次引导或设置中启用产品。Codex Desktop 与本地 CLI 共用一个开关和 Hook 配置；在需要信任的各客户端中通过 `/hooks` 审查并信任受管定义。启用 Trae 会安装配套扩展，随后请重新打开 Trae 窗口。
 
 使用 **Xcode 26.6+** 打开 `Notchline/Notchline.xcodeproj`，选择 **Notchline** scheme：
 

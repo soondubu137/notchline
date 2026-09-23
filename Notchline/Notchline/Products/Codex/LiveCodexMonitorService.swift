@@ -35,6 +35,14 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     private let client: any CodexAppServerCommunicating
     /// Codex's hook transport; reducer and registrar are also kept by name.
     private let hooks: HookLifecycleSource
+    /// Native execution provenance. `ProductRegistry.builtIn` always installs one, so `nil` is a
+    /// construction seam and never a shape that ships: it is how a test that is not about
+    /// provenance says "assume every Thread's owner is alive", and it takes nothing else with it —
+    /// retirement, presence and live-Hook observation have one implementation each, which is the
+    /// one running here. There used to be a second, driven by the Desktop pid: it could not see a
+    /// relaunch onto the vacated pid, could not tell an exited Desktop from one `NSWorkspace`
+    /// merely failed to list, and had no way to say `.unknown`.
+    private let surfaces: CodexSurfaceLedger?
     private let hookEvents: HookEventRepository
     private let hookActivation: CodexHookActivation
     private var hookActivationRetryAllowed = false
@@ -105,16 +113,19 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     /// answers `-32601` for `historyMode` `legacy` threads while `paginated` ones work (measured
     /// 2026-08-25, CLI `0.149.0-alpha.4.3`).
     private var threadsWithoutItemsRead: Set<String> = []
-    private var observedDesktopProcessIdentifier: pid_t?
     /// Cool-off after a failed connect; guards a subprocess. See ``connectToAppServer()``.
     private var connectRetryAfter: Date?
     /// Replayed for refreshes the cool-off turns away.
     private var lastConnectFailure: (any Error)?
     private var lastTrustedSnapshot: AgentSnapshot?
     private var observationStopped = false
-    /// Keeps a finished row listed until Desktop no longer reports it unread
-    /// (``TerminalUnreadRowFilter``).
+    /// Keeps a finished row listed until the surface that ran it says it was read — Desktop's
+    /// unread set, or a CLI Thread's own terminal (``TerminalUnreadRowFilter``).
     private var terminalUnreadMembershipGate: TerminalUnreadRowFilter
+    /// The terminal half of read state, for a Thread only a local TUI owns. Desktop keeps its own
+    /// unread record; a terminal has none, so its controlling device answers instead
+    /// (``TerminalReadEvidence``). Nil without a surface ledger: nothing could name the process.
+    private let terminalRead: TerminalReadEvidence?
     /// The routing each live Turn started under; Desktop's current value stops describing a row
     /// once the reviewer changes mid-turn (``TurnApprovalRoutingPin``).
     private var approvalRoutingPin = TurnApprovalRoutingPin()
@@ -125,6 +136,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         hookEvents: HookEventRepository = HookEventRepository(),
         hookRegistrar: CodexHookRegistrar = CodexHookRegistrar(),
         hookListener: AgentHookListener? = nil,
+        surfaces: CodexSurfaceLedger? = nil,
         projectMetadata: any DesktopProjectMetadataProviding =
             CodexDesktopProjectMetadataRepository(),
         unreadState: any DesktopUnreadStateProviding =
@@ -136,6 +148,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             CodexRolloutTurnAbortReader(),
         screenAvailability: any ScreenAvailabilityReporting =
             ScreenAvailabilityWatcher(),
+        /// Built only alongside a surface ledger, so a service with no CLI ownership registers no
+        /// workspace observer.
+        terminalGestures: (any ControllingTerminalGestureReporting)? = nil,
         clock: any MonitorClock = SystemMonitorClock(),
         timing: MonitorTiming = .standard,
         desktopProcessIdentifierProvider: @escaping @MainActor @Sendable () -> pid_t? = {
@@ -150,6 +165,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         self.client = client
         self.hookEvents = hookEvents
         self.hookRegistrar = hookRegistrar
+        self.surfaces = surfaces
         let hookActivation = CodexHookActivation(paths: hookRegistrar.integrationPaths, clock: clock)
         self.hookActivation = hookActivation
         // The transport belongs to this service, so the store stays a reducer with an inbox.
@@ -157,7 +173,11 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         self.hooks = HookLifecycleSource(
             setup: hookRegistrar,
             repository: hookEvents,
-            listener: hookListener,
+            listener: hookListener ?? surfaces.map { surfaces in
+                AgentHookListener(clock: clock) { body, date, descriptor in
+                    surfaces.receive(body, at: date, descriptor: descriptor, repository: hookEvents)
+                }
+            },
             clock: clock
         )
         self.projectMetadata = projectMetadata
@@ -195,8 +215,16 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             // what matters (``rolloutWatcher``).
             rolloutEvidence.rolloutWatcher.events(),
             invalidations
-        ] + (connectionMonitor.map { [$0.changes.events()] } ?? []))
+        ] + (connectionMonitor.map { [$0.changes.events()] } ?? [])
+            + (surfaces.map { [$0.changes.events()] } ?? []))
         self.terminalUnreadMembershipGate = TerminalUnreadRowFilter(timing: timing)
+        self.terminalRead = surfaces.map { ledger in
+            TerminalReadEvidence(
+                sessions: ledger,
+                gestures: terminalGestures ?? ControllingTerminalGestureReader(),
+                screen: screenAvailability
+            )
+        }
         self.presence = RunningApplicationPresence(
             processIdentifier: desktopProcessIdentifierProvider
         )
@@ -235,31 +263,33 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             }
         }
         let desktopProcessIdentifier = await self.presence.processIdentifier()
-        // A pid change retires the Turns the old process vouched for. Desktop dying mid-turn sends
-        // no `Stop` and writes no `turn_aborted`, and its Running Turn returned on the relaunched
-        // process's first event with nothing to clear it (CR-Fable-007; no activity-status read as
-        // ADR 0011 gives Claude Code). Retired before the drain so new events cannot mix in.
-        if let vouchingProcessIdentifier = observedDesktopProcessIdentifier,
-           vouchingProcessIdentifier != desktopProcessIdentifier {
-            await retireHookTurns()
-        }
         var hookState = await hookEvents.drainDeliveredEvents()
         let hookDiagnostic = hookState.diagnostic
-        if desktopProcessIdentifier == nil {
-            // And after the drain while nothing runs: a dying process's helper can still deliver.
-            hookState = await retireHookTurns(
-                didConsumeEvents: hookState.didConsumeEvents
+        // A Turn dies with the execution that vouched for it. Desktop dying mid-turn sends no
+        // `Stop` and writes no `turn_aborted`, and its Running Turn returned on the relaunched
+        // process's first event with nothing to clear it (CR-Fable-007; no activity-status read as
+        // ADR 0011 gives Claude Code). Retired after the drain, so a dying helper's last events go
+        // with it. A pid comparison used to stand in for this and could not see a relaunch onto the
+        // vacated pid, nor tell an exited Desktop from one `NSWorkspace` merely failed to list.
+        let ownership = surfaces?.refresh(at: clock.now())
+        if let ownership {
+            hookState = await hookEvents.retainOwnedThreads(
+                ownership.threadIDs, didConsumeEvents: hookState.didConsumeEvents
             )
-        } else if hookState.didConsumeEvents {
-            observedDesktopProcessIdentifier = desktopProcessIdentifier
         }
-        // Presence is kernel truth, never `unknown`, and known before anything about turns.
-        let presence = RunningApplicationPresence.presence(of: desktopProcessIdentifier)
+        // Positive presence comes from a running application, a verified TUI, or a live execution
+        // that owns a Thread; a failed inventory stays unknown. The third of those keeps presence
+        // and rows from contradicting each other: retirement asks the ledger, so presence has to ask
+        // it too, or a Desktop this app cannot list draws a resting mark over its own running row —
+        // and `isRestingOnly` then refuses to open the panel that would show it. The bundle
+        // identifier is undocumented and may change; an owner is a kernel fact and cannot.
+        let isOpen = desktopProcessIdentifier != nil
+            || ownership?.cliIsOpen == true
+            || ownership?.desktopIsOpen == true
+        let presence: AgentPresence = isOpen
+            ? .open : (ownership != nil && ownership?.cliIsOpen == nil ? .unknown : .closed)
 
-        let hasLiveHookObservation = hasCurrentHookObservation(
-            hookState: hookState,
-            desktopProcessIdentifier: desktopProcessIdentifier
-        )
+        let hasLiveHookObservation = hookState.hasObservedLiveEvent
         var setupStatus = IntegrationSetupStatus.card(
             registration: await hookRegistrar.registration(),
             hasObservedEvent: hookState.hasObservedEvent
@@ -309,8 +339,17 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
                 scheduleThreadMetadataRefreshIfNeeded(for: hookState.turns)
                 let fullListMustSupplyMetadata = !supportsThreadMetadataRead
                     && hookState.didConsumeEvents
+                // Membership reconciles the Turns held against the threads listed, so re-reading the
+                // whole history while none are held corrects nothing (CR-Fable-023).
+                // `nextRefreshDeadline` already declines to book that re-read for an empty set;
+                // issuing it anyway was the same asymmetry seen from the other side, and until every
+                // owner exited, leaving the live-Hook branch was what stopped it — observation now
+                // outlives the owner, so it never leaves. The first read still happens whatever is
+                // held: it is also what establishes ``threadAdmission``.
+                let membershipIsDue = threadListReadAt == nil
+                    || (threadListRefreshIsDue && !hookThreadIDs.isEmpty)
                 if containsUnlistedHookThread
-                    || threadListRefreshIsDue
+                    || membershipIsDue
                     || fullListMustSupplyMetadata {
                     scheduleThreadListRefreshIfNeeded()
                 }
@@ -466,6 +505,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
     func nextRefreshDeadline() async -> Date? {
         guard !observationStopped else { return nil }
         var deadlines: [Date] = []
+        // No entry for the CLI process inventory: it answers only presence, and the arrival of a TUI
+        // that has never sent a Hook is not a condition a refresh can clear. `CodexSurfaceLedger`
+        // scans opportunistically instead, inside the refresh it is already paying for.
         if let deadline = await connectionMonitor?.nextDeadline() { deadlines.append(deadline) }
         if hookActivationRetryAllowed, let deadline = await hookActivation.nextDeadline() {
             deadlines.append(deadline)
@@ -546,9 +588,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         observationStopped = true
         hookActivationRetryAllowed = false
         hooks.disconnect()
+        surfaces?.reset()
         await hookEvents.resetIntegrationObservation(clearTurns: true, preserveBoundaryObservation: true)
         hookTrackedThreadIDs = []
-        observedDesktopProcessIdentifier = nil
         lastTrustedSnapshot = nil
         stopThreadReadsWithNoConsumer()
         await rolloutEvidence.stopMonitoring()
@@ -740,7 +782,7 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             let approvalsReachTheUser = approvalRoutingPin.approvalsReachTheUser(
                 forTurn: turn,
                 startedAt: state.startedAt,
-                in: approvalRouting
+                in: surfaces?.hasCLI(state.threadID) == true ? .unknown : approvalRouting
             )
             // Pinned to the turn it was read for: a previous turn's record describes finished work.
             let liveProgress = turnProgressByThreadID[state.threadID]
@@ -752,9 +794,9 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
             guard let session = CodexSnapshotParser.session(
                 from: state,
                 thread: threadRecords[state.threadID].flatMap(\.thread),
-                projectName: projectMetadata.resolution(
-                    for: state.threadID
-                ).displayName,
+                projectName: surfaces?.isCLI(state.threadID) == true
+                    ? ProductMonitoringRuntime.projectName(forWorkingDirectory: state.workingDirectory)
+                    : projectMetadata.resolution(for: state.threadID).displayName,
                 approvalsReachTheUser: approvalsReachTheUser,
                 liveProgress: liveProgress
             ) else {
@@ -771,12 +813,68 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         }
 
         approvalRoutingPin.retain(turns: observedTurns)
-        // Every row is judged against Desktop's own unread set.
+        // One instant for the readings, the verdicts and the gate entries they write.
+        let now = clock.now()
         return terminalUnreadMembershipGate.rows(
             candidates,
             dismissedRowIDs: dismissedRowIDs,
-            now: clock.now()
-        ) { _ in .judged(by: unreadState) }
+            now: now,
+            verdict: await terminalVerdicts(
+                for: candidates,
+                dismissedRowIDs: dismissedRowIDs,
+                unreadState: unreadState,
+                now: now
+            )
+        )
+    }
+
+    /// Which reading may retire each finished row.
+    ///
+    /// Desktop's persisted unread set has no authority over a terminal, and a terminal's access
+    /// time has none over a Desktop window; a Thread live on both surfaces has no unique authority
+    /// at all and stays out of the gate. A CLI-only Thread is answered by its own controlling
+    /// device, which is fit for the job on measured native behaviour: the TUI stamps it on a
+    /// keystroke, a paste and a focus report (`ESC[?1004h`, `ESC[?2004h` on `0.154.0`) and on
+    /// nothing else — an idle TUI, a Turn's own output and a Turn ending all left it untouched
+    /// (30 s of a spinning Turn, no movement, 2026-09-15). Codex enables no mouse tracking, so
+    /// unlike Claude Code a pointer crossing the window is never a gesture; typing in that terminal
+    /// is, and so is coming back to it where the terminal reports focus — measured on real windows,
+    /// Ghostty stamps the focused TUI's device on the way in and out and leaves a TUI in another of
+    /// its windows alone, while Apple Terminal reports no focus at all and the row waits for a
+    /// keystroke there. Both are safe: the second only keeps a row longer.
+    ///
+    /// Execution ownership is still not a current-view signal, and this does not pretend it is:
+    /// `/new` leaves the previous Thread owned by the same TUI, so a gesture retires every ended
+    /// Turn that TUI owns. It says the user was at that terminal after the Turn finished, which is
+    /// the same thing every other terminal row is retired on; naming *which* Thread was on screen
+    /// is only needed for navigation, which stays host-only.
+    private func terminalVerdicts(
+        for candidates: [ReadGateCandidate],
+        dismissedRowIDs: Set<String>,
+        unreadState: DesktopUnreadStateSnapshot,
+        now: Date
+    ) async -> (ReadGateCandidate) -> ReadGateVerdict {
+        let terminalCandidates = candidates.filter {
+            surfaces?.isCLI($0.row.threadID) == true && !dismissedRowIDs.contains($0.row.id)
+        }
+        // Every verdict is a fresh kernel reading, so none is taken unless a finished, unremoved
+        // CLI row is listed (CR-Fable-041, CR-Fable-003).
+        var verdicts: [String: ReadGateVerdict] = [:]
+        if let terminalRead, TerminalUnreadRowFilter.needsReadEvidence(
+            terminalCandidates.map(\.row),
+            dismissedRowIDs: dismissedRowIDs
+        ) {
+            verdicts = await terminalRead.verdicts(for: terminalCandidates, now: now).verdicts
+        }
+        return { [surfaces] candidate in
+            guard surfaces?.hasCLI(candidate.row.threadID) == true else {
+                return .judged(by: unreadState)
+            }
+            // No askable device (`tmux`, `ssh`, a reused pid) and a Thread Desktop holds too: kept
+            // out of the gate, so it books no re-check and leaves on the next submission, when its
+            // owner goes, or by removal.
+            return verdicts[candidate.row.id] ?? .cannotBeAsked
+        }
     }
 
     /// Threads Codex vouches for (ADR 0017): the membership sweep's set as of that sweep's start.
@@ -1381,29 +1479,6 @@ actor LiveCodexMonitorService: AgentMonitoring, IntegrationConfiguring, AnswerDe
         return threads
     }
 
-    /// Drops the Hook evidence held for a Desktop process that is no longer running, with its
-    /// reads. The next process binds with its own first event; `hookTrackedThreadIDs` goes too so
-    /// retired threads stop asking to be re-read.
-    @discardableResult
-    private func retireHookTurns(
-        didConsumeEvents: Bool = false
-    ) async -> HookStateSnapshot {
-        observedDesktopProcessIdentifier = nil
-        hookTrackedThreadIDs = []
-        return await hookEvents.discardTurns(didConsumeEvents: didConsumeEvents)
-    }
-
-    private func hasCurrentHookObservation(
-        hookState: HookStateSnapshot,
-        desktopProcessIdentifier: pid_t?
-    ) -> Bool {
-        guard hookState.hasObservedLiveEvent,
-              let desktopProcessIdentifier,
-              observedDesktopProcessIdentifier == desktopProcessIdentifier else {
-            return false
-        }
-        return true
-    }
 }
 
 enum CodexSnapshotParser {

@@ -331,7 +331,13 @@ nonisolated enum ProductInstallationDiscovery {
         return ProductConnectionMonitor(wakeups: wakeups) {
             switch agent {
             case .codex:
-                return await application(bundleID: CodexDesktopNavigator.desktopBundleIdentifier, name: "Codex")
+                let desktop = await application(bundleID: CodexDesktopNavigator.desktopBundleIdentifier, name: "Codex")
+                let command = await Task.detached { Self.command(named: "codex") }.value
+                var instances: [ProductInstallationInstance] = []
+                if case let .found(found) = desktop { instances = found }
+                if let command { instances.append(.init(url: command, version: nil, surface: "CLI")) }
+                if !instances.isEmpty { return .found(instances) }
+                return desktop
             case .trae:
                 return await application(bundleID: "com.trae.app", name: "Trae")
             case .claudeCode:
@@ -349,11 +355,47 @@ nonisolated enum ProductInstallationDiscovery {
             }
         }
     }
+
+    /// Every directory a CLI this app monitors can be installed into, in the order a tie is
+    /// broken. The one list: ``CodexExecutableLocator`` searches it too, so the binary the App
+    /// Server runs and the install Settings names cannot come from different searches.
+    ///
+    /// The first three are where the products' own installers put things. The rest exist because
+    /// a CLI shipped on npm lands wherever the user's package or version manager keeps binaries,
+    /// and **`PATH` cannot be relied on to find them**: this app is launched by the window server,
+    /// not by a login shell, so its `PATH` is the system default and holds none of them. It stays
+    /// last as a fallback for the case where it does carry something, and for a debug run from a
+    /// terminal.
+    ///
+    /// The list is necessarily incomplete — nvm- and fnm-style layouts put the binary under a
+    /// version directory that changes with every upgrade, and nothing can enumerate those. That is
+    /// survivable because **no row depends on it**: a running CLI is identified by what the process
+    /// is, not by matching it against this list (``CodexNativeProcesses/localTUI(_:)``).
+    static func commandDirectories(
+        home: URL = FileManager.default.homeDirectoryForCurrentUser,
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> [URL] {
+        var directories = [
+            home.appendingPathComponent(".local/bin"),
+            URL(fileURLWithPath: "/opt/homebrew/bin"),
+            URL(fileURLWithPath: "/usr/local/bin"),
+            // MacPorts.
+            URL(fileURLWithPath: "/opt/local/bin"),
+            // Version managers, which shim every tool they manage into one directory.
+            home.appendingPathComponent(".local/share/mise/shims"),
+            home.appendingPathComponent(".asdf/shims"),
+            home.appendingPathComponent(".volta/bin"),
+            home.appendingPathComponent(".bun/bin")
+        ]
+        let known = Set(directories.map(\.path))
+        directories += (environment["PATH"] ?? "").split(separator: ":")
+            .map { URL(fileURLWithPath: String($0)) }
+            .filter { !known.contains($0.path) }
+        return directories
+    }
+
     static func command(named name: String) -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let paths = ["\(home)/.local/bin", "/opt/homebrew/bin", "/usr/local/bin"]
-            + (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        return paths.map { URL(fileURLWithPath: $0).appendingPathComponent(name) }
+        commandDirectories().map { $0.appendingPathComponent(name) }
             .first { FileManager.default.isExecutableFile(atPath: $0.path) }
     }
 }

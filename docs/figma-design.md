@@ -495,11 +495,11 @@ This also closes the item registered in [`dual-agent-design.md`](dual-agent-desi
 
 ### 6.5 How openness is decided
 
-Both signals already existed in the code and neither was written for this — one retires the rows of dead sessions (`SessionEnd` is deliberately unregistered), and the other was already fetched every refresh:
+Presence uses existing product evidence. Claude Code deliberately leaves `SessionEnd` unregistered and uses its live session list; Codex registers `SessionStart` and `SessionEnd` for execution ownership, alongside Desktop application presence and the local CLI inventory:
 
 | Product | What "open" means | Source | Implementation |
 | --- | --- | --- | --- |
-| Codex Desktop | The app is running | `NSRunningApplication.runningApplications(withBundleIdentifier:)`, fetched once per refresh and already fetched, to bind live hooks to one Desktop process lifetime | `RunningApplicationPresence.runningProcessIdentifier(bundleIdentifiers:)`, read by `LiveCodexMonitorService` |
+| Codex (Desktop and local CLI) | Desktop or a verified local TUI is open | Desktop application presence, the opportunistic CLI inventory, and live Hook execution ownership; a five-second inventory cache schedules no wake-up | `RunningApplicationPresence`, `CodexProcessSource` and `CodexSurfaceLedger`, composed by `LiveCodexMonitorService` |
 | Claude Code | At least one active session | `claude agents --json` through `ClaudeCodeSessionListing.liveSessions()`. With no app to ask, the session list is the presence signal | `ClaudeCodeSessionRegistry.swift` |
 
 `ClaudeCodeSessionRegistry`'s own contract is exactly the line needed here: its output is byte-identical whether a session is working or idle — it answers which sessions exist, and the Turn reducer answers what they are doing. **Presence draws the matrix and the reducer lights it**, and the two must not be recombined.
@@ -508,7 +508,7 @@ Both signals already existed in the code and neither was written for this — on
 
 One asymmetry is deliberately kept: Codex's presence is knowable the instant this app launches while its Turns are not (the product deliberately shows nothing from before launch). So a just-launched app can honestly show `Connected` for Codex while knowing nothing about the work — strictly better than today's blank.
 
-Presence trustworthiness differs per product, and only the Claude Code side needs extra rules: `NSRunningApplication` is a kernel fact with no cache and no staleness, whereas `claude agents --json` is backed by `~/.claude/sessions/<pid>.json`, one file per session, with **no heartbeat field and no mtime update**, so the files cannot expire themselves. Two consequences:
+For Codex, current PID/start-time ownership supplements Desktop presence and rejects stale CLI executions; [the architecture](system-architecture.md#codex-cli-composition-2026-09-15) defines inventory caching. The original Desktop/Claude comparison below explains the remaining difference: `NSRunningApplication` is a kernel fact with no cache and no staleness, whereas `claude agents --json` is backed by `~/.claude/sessions/<pid>.json`, one file per session, with **no heartbeat field and no mtime update**, so the files cannot expire themselves. Two consequences:
 
 1. **Ghost sessions — measured, and the official command already handles them, using exactly the right test.** A `SIGKILL`ed session genuinely cannot delete its own file, so the concern was right; but `claude agents --json` does not list it. Measured on 2.1.229: copying a live session's file byte for byte and **changing only `procStart`** makes it vanish from the output, and writing a session file pointing at a live but unrelated process (`pid 1`) does the same. So the command validates `pid` + `procStart` as a pair — the test needed here, and the one a bare `kill(pid, 0)` would be fooled by through PID reuse.
 
@@ -722,7 +722,7 @@ Light and dark are **one set of nodes**: every colour binds to the two-mode `Col
 
 ### 8.1 Products
 
-`Codex Desktop` and `Claude Code` are two rows in one card, not two groups. A third product costs a row, not a new panel — and since 2026-09-11 not even that: the rows are drawn from `ProductRegistry.builtIn`, one per descriptor, with the title, tooltip and status sentence read off the descriptor.
+`Codex` (Desktop and local CLI) and `Claude Code` are two rows in one card, not two groups. A third product costs a row, not a new panel — and since 2026-09-11 not even that: the rows are drawn from `ProductRegistry.builtIn`, one per descriptor, with the title, tooltip and status sentence read off the descriptor.
 
 - Each row has the product name on the left and a caption beginning with a status dot, stating the connection conclusion and capability (`Connected · compatible version`, `Connected · hooks installed`). **Since 2026-09-13 that status is the whole caption, on one line, and the row ends in a switch and an ⓘ.** ~~A product's declared boundary — what its rows can never say — was a second caption paragraph under the status, three or four lines for Antigravity and Trae.~~ It moved into the ⓘ popover below.
 - **The ⓘ popover** (`ProductInfoPopover`, `300` wide, `14` top and `16` side and bottom padding, `10` between blocks): the product's name at `13` semibold, then small secondary headings over `12` pt primary paragraphs — `Watches` and `Not shown` (the descriptor's `watches` and `notShown`, which split the one `declaredBoundary` sentence so the popover can head them), a hairline, then what setup asks beyond the switch (Codex: `After turning it on` with its `/hooks` trust step; Trae: `Companion`, reopen Trae's windows) and `Hooks file` with the path in monospace and a `Show in Finder` capsule. Every product has one, so the column of ⓘ is straight — Trae's row, which had no file to reveal, no longer ends short. The glyph is `info.circle` at a measured `14` in a `22 × 22` target, with the folder glyph's hover ground, which also stays while its popover is open. What goes in each popover is a value (`ProductInfoContent`) a test asserts.
@@ -1021,3 +1021,7 @@ With four product rows, Settings scrolls vertically within a 580 pt-wide window,
 ## Products connection states
 
 The shared Products/onboarding rows use the [connection display matrix](product-connections.md#display-rules). One status line uses neutral, healthy or warning tone. Optional informational text has no warning triangle; only warning notices include the triangle and its accessibility label. Repair, Recheck and Retry removal are explicit row actions; the existing native switch represents monitoring intent and remains on when setup needs repair. Normal closure has no second line. This replaces the earlier registration-derived switch and blanket diagnostic-warning rules in this document.
+
+## Codex CLI support presentation (2026-09-22)
+
+Desktop and local CLI share the Codex badge, Settings row and account footer. A CLI approval or synchronous question uses the reading-only request presentation: no approval, refusal or answer submission control is offered. Its return action raises the verified host, without selecting a terminal window, tab or Thread. The Settings boundary excludes CLI answers and exact navigation; conditional terminal read removal is supported, with gestures and acceptance limits in [product support](product-support.md#51-local-codex-cli). This clarifies the implemented scope and adds no Figma nodes or visual variants.

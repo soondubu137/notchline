@@ -24,7 +24,7 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
     nonisolated let wakesOnToolCallOpened = true
     nonisolated let settlesHeldTurnsFromRecord = true
 
-    /// Seven definitions; the contract §4.2 freezes. No `SessionEnd` (it reduced to nothing).
+    /// Append lifecycle definitions to preserve the existing seven trust identities.
     /// `SubagentStart`/`SubagentStop` are the only signal of work in flight after a turn ends.
     nonisolated var managedDefinitions: [ManagedHookDefinition] {
         [
@@ -43,7 +43,10 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
             // catch-all announced, and denial inference needs activity on other calls.
             ManagedHookDefinition(event: "PreToolUse", matcher: nil),
             ManagedHookDefinition(event: "PostToolUse", matcher: nil),
-            ManagedHookDefinition(event: "Stop", matcher: nil)
+            ManagedHookDefinition(event: "Stop", matcher: nil),
+            ManagedHookDefinition(event: "SessionStart", matcher: nil),
+            ManagedHookDefinition(event: "SessionEnd", matcher: nil, timeoutSeconds: 3),
+            ManagedHookDefinition(event: "Interrupt", matcher: nil, timeoutSeconds: 3)
         ]
     }
 
@@ -83,8 +86,10 @@ nonisolated struct CodexHookVocabulary: AgentHookVocabulary {
             .subagentStarted
         case ("SubagentStop", _):
             .subagentStopped
-        case ("SessionEnd", _):
-            // Not registered; consumed so an older registration raises no diagnostic per session end.
+        case ("Interrupt", _):
+            .turnInterrupted
+        case ("SessionStart", _), ("SessionEnd", _):
+            // Ownership is recorded at the boundary; these events cannot create a Turn.
             .inert
         default:
             nil

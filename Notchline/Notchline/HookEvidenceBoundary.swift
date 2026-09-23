@@ -150,6 +150,7 @@ nonisolated final class HookEvidenceBoundary: MonitoringBoundaryObserver, @unche
     private var eventsAwaitingTrust: Set<String>
     private var didRecordEventThisLaunch = false
     private var unreadablePayloadCount = 0
+    private var unattributedPayloadCount = 0
 
     init(paths: HookIntegrationPaths, vocabulary: any AgentHookVocabulary,
          ignoredWorkingDirectory: URL?, fileManager: FileManager, clock: any MonitorClock) {
@@ -172,6 +173,15 @@ nonisolated final class HookEvidenceBoundary: MonitoringBoundaryObserver, @unche
     func recordUnreadablePayload() {
         lock.lock()
         unreadablePayloadCount += 1
+        lock.unlock()
+    }
+
+    /// A readable payload whose sender a product boundary could not tie to a supported execution.
+    /// Separate from an unreadable one: the bytes were fine and the definition fired, so the
+    /// remedy is the mode or home the product is running in, not the hook installation.
+    func recordUnattributedPayload() {
+        lock.lock()
+        unattributedPayloadCount += 1
         lock.unlock()
     }
 
@@ -218,6 +228,7 @@ nonisolated final class HookEvidenceBoundary: MonitoringBoundaryObserver, @unche
         observed = false
         didRecordEventThisLaunch = false
         unreadablePayloadCount = 0
+        unattributedPayloadCount = 0
         lock.unlock()
     }
 
@@ -237,6 +248,11 @@ nonisolated final class HookEvidenceBoundary: MonitoringBoundaryObserver, @unche
         let sentences = [
             unreadablePayloadCount > 0
                 ? "Ignored \(Self.payloadCount(unreadablePayloadCount)) that could not be read." : nil,
+            unattributedPayloadCount > 0
+                ? "Ignored \(Self.payloadCount(unattributedPayloadCount)) Notchline could not attribute to a "
+                    + "supported \(vocabulary.agent.displayName) process, such as one run under a custom home, "
+                    + "an excluded mode, a terminal multiplexer, or a command line this version of "
+                    + "Notchline does not recognise." : nil,
             statistics.unplacedEvidenceCount > 0
                 ? "Ignored \(Self.payloadCount(statistics.unplacedEvidenceCount)) with no stable identity, or of an unsupported kind." : nil,
             undelivered, untrusted

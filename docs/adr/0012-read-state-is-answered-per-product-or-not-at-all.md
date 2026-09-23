@@ -279,6 +279,12 @@ This ADR was written about two products and its title is what generalises: **rea
 
 **The pairing is kept regardless**, for a reason the ADR should be explicit about: it is not a workaround for mouse reporting but the sentence rule 5 shares with rules 1–4 — *while the answer was in front of the user, the user did something only a person does*. A product that happens not to report motion today does not get a looser test than one that does.
 
+## Local Codex CLI amendment (documented 2026-09-22)
+
+The local CLI implemented on 2026-09-15 uses rule 5 through `TerminalReadEvidence`. A gesture after completion must come from the owning TUI's controlling terminal, with that host in front and the screen available. Native CLI 0.154.0 enables focus reporting and bracketed paste but no mouse reporting. Ghostty was verified delivering focus reports only to its focused surface; Apple Terminal supplies no such report and requires input. TUI output and completion alone do not advance the reading.
+
+This does not establish which Thread the TUI displays. `/new` retains the previous execution ownership until later evidence, so a gesture may retire every ended Turn that TUI owns. That accepted scope differs from precise Thread navigation, which remains unsupported. Desktop unread absence never judges CLI rows; a Thread owned on both surfaces is judged by neither and remains until dismissal, a later submission or loss of ownership. Unsupported SSH/multiplexer modes have no terminal read claim. The original current-view proposal was rejected; this narrower gesture rule supersedes the initial no-read-removal implementation. [Support and acceptance](../product-support.md#51-local-codex-cli).
+
 ## Rejected alternatives
 
 - **~~"Claude Desktop is in the foreground right now" means read.~~** The recorded reason was "it retires the row for a user who has left their seat", and that sentence still holds. **Accepted 2026-08-19** in a qualified form — see rule 3: plus the three readings (display awake, unlocked, no saver, session on console) and "only for the one session Desktop's records place on screen". The explicitly accepted cost is that original objection. What remains rejected is the **unqualified** version, which would retire rows behind a lock screen and a dark display, and would empty every Claude Code row at a touch of Claude Desktop.

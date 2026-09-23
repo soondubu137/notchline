@@ -20,6 +20,8 @@ nonisolated enum MonitoringSignal: Sendable, Equatable {
     /// ``toolCallClosed`` instead.
     case requestResolved
     case turnEnded
+    /// An exact native cancellation; can end an observed Turn, never create one.
+    case turnInterrupted
     /// A subagent this thread spawned began working.
     ///
     /// Not a turn boundary: a subagent has its own turn id and outlives the spawning turn

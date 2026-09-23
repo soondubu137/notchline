@@ -1,0 +1,1000 @@
+import Darwin
+import Foundation
+import Testing
+@testable import Notchline
+
+@MainActor
+struct CodexCLIIntegrationTests {
+    private let now = Date(timeIntervalSince1970: 1_800_000_000)
+    private func cli(_ pid: Int32 = 100, start: Date? = nil) -> CodexExecution {
+        CodexExecution(pid: pid, startedAt: start ?? now, surface: .cli, terminal: "/dev/ttys\(pid)")
+    }
+    private func ledger(_ executions: [CodexExecution]) -> CodexSurfaceLedger {
+        CodexSurfaceLedger(source: CodexProcessSource(resolvePeer: { _ in executions.first },
+            isAlive: { executions.contains($0) }, localProcesses: { executions.filter { $0.surface == .cli } }))
+    }
+
+    @Test func aNewThreadDoesNotRetireItsPreviousExecution() async {
+        let process = cli()
+        let source = ledger([process])
+        source.record(owner: process, thread: "old", event: "SessionStart")
+        source.record(owner: process, thread: "new", event: "SessionStart")
+        source.record(owner: process, thread: "old", event: "PreToolUse", isSubagent: true)
+        #expect(source.refresh(at: now).threadIDs == ["old", "new"])
+        #expect(await source.processIdentifier(forThreadID: "old") == process.pid)
+        #expect(source.navigationProcess("old") == process.pid)
+        #expect(await source.processIdentifier(forThreadID: "new") == process.pid)
+        source.record(owner: process, thread: "old", event: "SessionEnd")
+        #expect(!source.record(owner: process, thread: "old", event: "PostToolUse"))
+        #expect(source.refresh(at: now).threadIDs == ["new"])
+        #expect(await source.processIdentifier(forThreadID: "new") == process.pid)
+    }
+
+    @Test func sameDirectoryDoesNotJoinTerminalsAndAReusedPIDCannotRead() async {
+        let first = cli(), second = cli(101)
+        let alive = CLIProcessFixture([first, second])
+        let source = CodexSurfaceLedger(source: alive.source)
+        source.record(owner: first, thread: "one", event: "UserPromptSubmit")
+        source.record(owner: second, thread: "two", event: "UserPromptSubmit")
+        #expect(await source.processIdentifier(forThreadID: "one") == first.pid)
+        #expect(await source.processIdentifier(forThreadID: "two") == second.pid)
+        alive.replace([cli(start: now.addingTimeInterval(1)), second])
+        #expect(await source.processIdentifier(forThreadID: "one") == nil)
+        #expect(source.navigationProcess("one") == nil)
+        #expect(source.refresh(at: now).threadIDs == ["two"])
+    }
+
+    @Test func sharedThreadKeepsOtherOwnerAndHasNoAmbiguousTerminalAuthority() async {
+        let local = cli()
+        let desktop = CodexExecution(pid: 200, startedAt: now, surface: .desktop, terminal: nil)
+        let source = ledger([local, desktop])
+        source.record(owner: local, thread: "shared", event: "SessionStart")
+        source.record(owner: desktop, thread: "shared", event: "SessionStart")
+        #expect(source.hasCLI("shared"))
+        #expect(!source.isCLI("shared"))
+        #expect(await source.processIdentifier(forThreadID: "shared") == nil)
+        #expect(source.admit(owner: local, thread: "shared", turn: "t", event: "UserPromptSubmit"))
+        #expect(!source.admit(owner: desktop, thread: "shared", turn: "t", event: "PermissionRequest"))
+        source.record(owner: desktop, thread: "shared", event: "SessionEnd")
+        #expect(source.refresh(at: now).threadIDs == ["shared"])
+        #expect(await source.processIdentifier(forThreadID: "shared") == local.pid)
+    }
+
+    @Test func nativeArgumentReadingIsBoundedAndDiscardsTheEnvironment() throws {
+        var count: Int32 = 3
+        var bytes = withUnsafeBytes(of: &count) { Array($0) }
+        bytes += Array("/bin/codex\0\0codex\0-m\0model\0\0\0HOME=/Users/a\0SECRET=not-retained\0CODEX_HOME=/Users/a/.codex\0\0".utf8)
+        let reading = try #require(CodexNativeProcesses.decodeArguments(bytes))
+        #expect(reading == ["codex", "-m", "model"])
+        #expect(CodexNativeProcesses.decodeArguments([0, 0, 0, 0]) == nil)
+        #expect(CodexNativeProcesses.decodeArguments(Array(bytes.prefix(14))) == nil)
+        bytes[4] = 0xff
+        #expect(CodexNativeProcesses.decodeArguments(bytes) == nil)
+    }
+
+    @Test func nativeKernelArgumentsCanBeReadWithoutAProcessListing() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        process.arguments = ["10"]
+        process.environment = ["HOME": "/tmp/notchline-cli-test", "SECRET": "not-retained"]
+        try process.run()
+        defer { if process.isRunning { process.terminate() }; process.waitUntilExit() }
+        let reading = try #require(CodexNativeProcesses.arguments(process.processIdentifier))
+        #expect(reading.last == "10")
+    }
+
+    @Test func unknownModesOptionsAndHomesAreRejected() {
+        #expect(CodexNativeProcesses.isAppServer(["codex", "-c", "key=value", "app-server", "--analytics-default-enabled"]))
+        #expect(CodexNativeProcesses.isAppServer(["codex", "app-server", "--listen", "stdio://"]))
+        #expect(!CodexNativeProcesses.isAppServer(["codex", "-c", "key=value", "exec"]))
+        #expect(!CodexNativeProcesses.isAppServer(["codex", "--remote", "app-server"]))
+        for args in [["codex"], ["codex", "--no-alt-screen"], ["codex", "resume", "--last"],
+                     ["codex", "-m", "model", "a prompt"], ["codex", "-c", "model=\"model\""]] {
+            #expect(CodexNativeProcesses.isLocalTUI(args))
+        }
+        for args in [["codex", "exec", "hello"], ["codex", "app-server"], ["codex", "--remote", "unix://x"],
+                     ["codex", "--future-mode"], ["codex", "-m"], ["codex", "mcp-server"], []] {
+            #expect(!CodexNativeProcesses.isLocalTUI(args))
+        }
+        let home = URL(fileURLWithPath: "/Users/a")
+        #expect(CodexNativeProcesses.hasHomeDatabase(in: ["/Users/a/.codex/state_5.sqlite"], home: home))
+        for paths in [[], ["/tmp/other/state_5.sqlite"], ["/Users/a/.codex/state_6.sqlite"],
+                      ["/Users/a/.codex/state_5.sqlite", "/tmp/other/state_5.sqlite"]] {
+            #expect(!CodexNativeProcesses.hasHomeDatabase(in: paths, home: home))
+        }
+    }
+
+    @Test func interruptionEndsOnlyItsObservedTurnAndClearsItsWait() async throws {
+        let repository = HookEventRepository()
+        func send(_ name: String, turn: String = "t", extra: [String: String] = [:], offset: TimeInterval) throws {
+            var value = extra
+            value["hook_event_name"] = name; value["session_id"] = "thread"; value["turn_id"] = turn
+            _ = repository.deliver(try JSONSerialization.data(withJSONObject: value), at: now.addingTimeInterval(offset))
+        }
+        try send("Interrupt", offset: 0)
+        #expect(await repository.drainDeliveredEvents().turns.isEmpty)
+        try send("UserPromptSubmit", offset: 1)
+        try send("PreToolUse", extra: ["tool_name": "request_user_input", "tool_use_id": "question"], offset: 2)
+        try send("Interrupt", turn: "wrong", offset: 3)
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .inputNeeded)
+        try send("Interrupt", offset: 4)
+        let stopped = await repository.drainDeliveredEvents()
+        #expect(stopped.turns.first?.status == .completed)
+        #expect(stopped.turns.first?.requestsAwaitingAnAnswer.isEmpty == true)
+        try send("PreToolUse", extra: ["tool_name": "Bash", "tool_use_id": "late"], offset: 2)
+        #expect(await repository.drainDeliveredEvents().turns.first?.status == .completed)
+    }
+
+    @Test func appendedHooksPreserveExistingTrustInputs() {
+        let definitions = CodexHookVocabulary().managedDefinitions
+        #expect(definitions.prefix(7).map(\.event) == ["UserPromptSubmit", "PermissionRequest", "SubagentStart",
+            "SubagentStop", "PreToolUse", "PostToolUse", "Stop"])
+        #expect(definitions.suffix(3).map(\.event) == ["SessionStart", "SessionEnd", "Interrupt"])
+        #expect(definitions[1].argument == AgentHookHelper.answeringArgument)
+        #expect(definitions[1].timeoutSeconds == 3600)
+        #expect(definitions.allSatisfy { $0.matcher == nil })
+    }
+
+    @Test func navigationRaisesOnlyTheHostBecauseTheDisplayedThreadCannotBeVerified() async throws {
+        let process = cli(), alive = CLIProcessFixture([cli()])
+        let source = CodexSurfaceLedger(source: alive.source)
+        source.record(owner: process, thread: "old", event: "SessionStart")
+        source.record(owner: process, thread: "new", event: "SessionStart")
+        let tabs = CLITabFixture(), activator = CLIActivationFixture()
+        let navigator = ProcessHostNavigator(sessions: source,
+            hosts: CLIHostFixture(), activator: activator, tabs: tabs,
+            allowsTerminalFocus: { _, _ in false },
+            controllingTerminalPath: { _ in "/dev/ttys100" })
+        func row(_ thread: String) -> MonitoredSession {
+            MonitoredSession(threadID: thread, turnID: "t", projectName: "work", title: "title",
+                preview: nil, status: .completed, startedAt: now)
+        }
+        #expect(try await navigator.open(row("old")) == .raisedApplication(host: "Terminal"))
+        #expect(tabs.calls == 0 && activator.calls == 1)
+        #expect(try await navigator.open(row("new")) == .raisedApplication(host: "Terminal"))
+        #expect(tabs.calls == 0 && activator.calls == 2)
+        alive.replace([])
+        await #expect(throws: ProcessHostNavigationError.self) { try await navigator.open(row("new")) }
+        #expect(tabs.calls == 0 && activator.calls == 2)
+    }
+
+    /// Routing asks one liveness question for both surfaces. It used to ask two that disagreed: the
+    /// CLI side read the owners the last refresh left behind while the Desktop side re-read the
+    /// kernel, so a terminal that closed in between was still routed to the terminal navigator and
+    /// failed there — safe, but under a second error type and a second sentence for a condition
+    /// identical to the Desktop one. Both now answer `sessionEnded`, from the one place that asked.
+    @Test @MainActor func anOwnerThatExitedSinceTheLastRefreshEndsTheSessionOnEitherSurface() async throws {
+        let terminal = cli(), desktopExecution = CodexExecution(pid: 200, startedAt: now,
+            surface: .desktop, terminal: nil)
+        let alive = CLIProcessFixture([terminal, desktopExecution])
+        let ledger = CodexSurfaceLedger(source: alive.source)
+        ledger.record(owner: terminal, thread: "in-terminal", event: "SessionStart")
+        ledger.record(owner: desktopExecution, thread: "in-desktop", event: "SessionStart")
+        let desktop = CLINavigatorFixture(outcome: .raisedApplication(host: "Codex"))
+        let host = CLINavigatorFixture(outcome: .raisedApplication(host: "Terminal"))
+        let navigator = CodexNavigator(surfaces: ledger, desktop: desktop, terminal: host)
+        func row(_ thread: String) -> MonitoredSession {
+            MonitoredSession(threadID: thread, turnID: "t", projectName: "work", title: "title",
+                preview: nil, status: .completed, startedAt: now)
+        }
+
+        #expect(try await navigator.open(row("in-terminal")) == .raisedApplication(host: "Terminal"))
+        #expect(try await navigator.open(row("in-desktop")) == .raisedApplication(host: "Codex"))
+        #expect(host.calls == 1 && desktop.calls == 1)
+
+        // Both owners exit. Nothing has refreshed, so the ledger still lists both Threads.
+        alive.replace([])
+        for thread in ["in-terminal", "in-desktop"] {
+            await #expect(throws: CodexNavigationError.sessionEnded) { try await navigator.open(row(thread)) }
+        }
+        #expect(host.calls == 1 && desktop.calls == 1, "neither navigator is reached for a dead owner")
+        #expect(CodexNavigationError.sessionEnded.errorDescription
+            != CodexNavigationError.targetUnavailable.errorDescription,
+            "an execution that exited is not Codex saying the Thread itself is gone")
+    }
+
+    /// Desktop answers for a Thread held on both surfaces, and a live terminal still answers when
+    /// the Desktop execution that also held it has gone.
+    @Test @MainActor func aThreadOnBothSurfacesPrefersDesktopUntilOnlyTheTerminalIsLeft() async throws {
+        let terminal = cli(), desktopExecution = CodexExecution(pid: 200, startedAt: now,
+            surface: .desktop, terminal: nil)
+        let alive = CLIProcessFixture([terminal, desktopExecution])
+        let ledger = CodexSurfaceLedger(source: alive.source)
+        for owner in [terminal, desktopExecution] {
+            ledger.record(owner: owner, thread: "shared", event: "SessionStart")
+        }
+        let desktop = CLINavigatorFixture(outcome: .raisedApplication(host: "Codex"))
+        let host = CLINavigatorFixture(outcome: .raisedApplication(host: "Terminal"))
+        let navigator = CodexNavigator(surfaces: ledger, desktop: desktop, terminal: host)
+        let row = MonitoredSession(threadID: "shared", turnID: "t", projectName: "work",
+            title: "title", preview: nil, status: .completed, startedAt: now)
+
+        #expect(try await navigator.open(row) == .raisedApplication(host: "Codex"))
+        #expect(ledger.navigableSurface(ofThread: "shared") == .desktop)
+
+        alive.replace([terminal])
+        #expect(ledger.navigableSurface(ofThread: "shared") == .cli,
+            "a dead Desktop owner no longer speaks for a Thread a live terminal still holds")
+        #expect(try await navigator.open(row) == .raisedApplication(host: "Terminal"))
+    }
+
+    /// A drop nobody counts is indistinguishable from "the hooks never fired", which is the one
+    /// reading a user cannot act on. Provenance failure is the shape an unsupported home or mode
+    /// arrives in, so it is the drop that has to be said out loud.
+    @Test func anUnattributableEventIsDroppedOutLoudAndAContractRefusalStaysSilent() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-drop-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = root.appendingPathComponent("support")
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        let repository = HookEventRepository(paths: HookIntegrationPaths(supportDirectory: support,
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json")))
+        let process = cli()
+        let owned = CodexSurfaceLedger(source: CodexProcessSource(resolvePeer: { _ in process },
+            isAlive: { _ in true }, localProcesses: { [process] }))
+        let unnameable = CodexSurfaceLedger(source: CodexProcessSource(resolvePeer: { _ in nil },
+            isAlive: { _ in false }, localProcesses: { [] }))
+        func body(_ value: [String: String]) throws -> Data { try JSONSerialization.data(withJSONObject: value) }
+        let submit = try body(["hook_event_name": "UserPromptSubmit", "session_id": "thread",
+            "turn_id": "t", "prompt": "Live prompt"])
+
+        #expect(unnameable.receive(submit, at: now, descriptor: -1, repository: repository) == .close)
+        var reading = await repository.drainDeliveredEvents()
+        #expect(reading.turns.isEmpty)
+        #expect(reading.diagnostic?.contains("Ignored 1 hook payload Notchline could not attribute to a "
+            + "supported Codex process") == true)
+
+        // Neither of these can book ownership, and both belong to counts the boundary already keeps.
+        #expect(owned.receive(Data("{".utf8), at: now, descriptor: -1, repository: repository) == .close)
+        #expect(owned.receive(try body(["hook_event_name": "Invented", "session_id": "thread"]),
+            at: now, descriptor: -1, repository: repository) == .close)
+        reading = await repository.drainDeliveredEvents()
+        #expect(reading.turns.isEmpty)
+        #expect(reading.diagnostic?.contains("Ignored 1 hook payload that could not be read.") == true)
+        #expect(reading.diagnostic?.contains("of an unsupported kind") == true)
+
+        // The ownership contract's own refusals are expected traffic: no sentence, and no count.
+        owned.record(owner: process, thread: "thread", event: "SessionEnd")
+        #expect(owned.receive(submit, at: now, descriptor: -1, repository: repository) == .close)
+        let settled = await repository.drainDeliveredEvents()
+        #expect(settled.turns.isEmpty)
+        #expect(settled.diagnostic == reading.diagnostic)
+    }
+
+    /// A terminal's approval is read here and answered there, and Desktop's is still answered here.
+    ///
+    /// Codex puts a request to the Hook and waits for it instead of racing a prompt of its own, so
+    /// holding the connection does not add the notch beside the TUI's own question — it takes its
+    /// place, and the terminal sits on `Working` for as long as this app is open (reported
+    /// 2026-09-15). This drives the production listener over a real socket because the observable
+    /// is the helper's connection: `nc` returns as soon as this end closes, which is what lets Codex
+    /// ask in the terminal. Desktop has no terminal to ask in, so its connection is still handed
+    /// over and its row keeps the decision.
+    @Test func aTerminalsApprovalFreesTheHookWhileDesktopsIsStillHeld() async throws {
+        for surface in [CodexExecution.Surface.cli, .desktop] {
+            let root = URL(fileURLWithPath: "/tmp")
+                .appendingPathComponent("nc-free-\(UUID().uuidString.prefix(8))")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let repository = HookEventRepository(paths: HookIntegrationPaths(
+                supportDirectory: root.appendingPathComponent("support"),
+                hooksConfiguration: root.appendingPathComponent(".codex/hooks.json")
+            ))
+            let owner = CodexExecution(pid: 100, startedAt: now, surface: surface,
+                terminal: surface == .cli ? "/dev/ttys100" : nil)
+            let surfaces = CodexSurfaceLedger(source: CodexProcessSource(
+                resolvePeer: { _ in owner }, isAlive: { _ in true },
+                localProcesses: { surface == .cli ? [owner] : [] }
+            ))
+            let listener = AgentHookListener(deliver: { body, date, descriptor in
+                surfaces.receive(body, at: date, descriptor: descriptor, repository: repository)
+            })
+            defer { listener.stop() }
+            let socket = root.appendingPathComponent("hook.sock")
+            try #require(listener.start(socketURL: socket))
+
+            let opening = CLIHookConnection(to: socket)
+            try #require(opening.send([
+                "hook_event_name": "UserPromptSubmit", "session_id": "s-1", "turn_id": "t-1",
+                "prompt": "Delete the temporary file"
+            ]))
+            try #require(opening.waitForClose())
+            let calling = CLIHookConnection(to: socket)
+            try #require(calling.send([
+                "hook_event_name": "PreToolUse", "session_id": "s-1", "turn_id": "t-1",
+                "tool_name": "Bash", "tool_use_id": "call-1",
+                "tool_input": ["command": "rm /tmp/x"]
+            ]))
+            try #require(calling.waitForClose())
+
+            // The one connection the helper would be sitting in `nc` on.
+            let asking = CLIHookConnection(to: socket)
+            try #require(asking.send([
+                "hook_event_name": "PermissionRequest", "session_id": "s-1", "turn_id": "t-1",
+                "tool_name": "Bash", "tool_input": ["command": "rm /tmp/x"]
+            ]))
+            #expect(asking.waitForClose() == (surface == .cli),
+                "a \(surface) approval's connection should \(surface == .cli ? "close" : "stay open")")
+
+            let reading = await eventuallyDrained(repository) { $0.requestAwaitingAnAnswer != nil }
+            let request = try #require(reading?.requestAwaitingAnAnswer)
+            #expect(request.form.name == "command")
+            #expect(request.canBeAnswered == (surface == .desktop))
+        }
+    }
+
+    @Test func providerKeepsCLIWithoutDesktopAndRetiresOnlyExitedOwner() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-cli-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HookIntegrationPaths(supportDirectory: root.appendingPathComponent("support"),
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json"))
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        let repository = HookEventRepository(paths: paths)
+        let first = cli(), second = cli(101)
+        let processes = CLIProcessFixture([first, second])
+        let surfaces = CodexSurfaceLedger(source: processes.source)
+        var timing = MonitorTiming.standard
+        timing.terminalReadSettlingInterval = 0
+        let service = LiveCodexMonitorService(client: CLIMetadataClient(), hookEvents: repository,
+            hookRegistrar: registrar, surfaces: surfaces, unreadState: CLIEmptyDesktopReading(),
+            // Nothing set: neither terminal can be asked, so only Desktop's reading is left to try.
+            terminalGestures: CLIGestureFixture(),
+            timing: timing, desktopProcessIdentifierProvider: { nil })
+        for (thread, owner) in [("one", first), ("two", second)] {
+            surfaces.record(owner: owner, thread: thread, event: "UserPromptSubmit")
+            _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "UserPromptSubmit",
+                "session_id": thread, "turn_id": "t-\(thread)", "cwd": "/work/shared", "prompt": "Live prompt"]), at: Date())
+        }
+        var reading = await service.fetchSnapshot()
+        for _ in 0..<100 where reading.sessions.count != 2 {
+            try await Task.sleep(for: .milliseconds(10))
+            reading = await service.fetchSnapshot()
+        }
+        #expect(reading.presence == .open)
+        #expect(Set(reading.sessions.map(\.threadID)) == ["one", "two"])
+        #expect(reading.sessions.allSatisfy { $0.status == .running && $0.projectName == "shared" })
+        _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "Stop",
+            "session_id": "one", "turn_id": "t-one", "last_assistant_message": "Finished"]), at: Date())
+        let completed = await service.fetchSnapshot()
+        #expect(completed.sessions.first(where: { $0.threadID == "one" })?.status == .completed,
+            "Desktop's current empty unread set must not retire a CLI row, even after settling")
+        processes.replace([second])
+        let afterExit = await service.fetchSnapshot()
+        #expect(afterExit.sessions.map(\.threadID) == ["two"])
+        #expect(afterExit.sessions.first?.status == .running)
+        await service.disconnect()
+        #expect(await service.nextRefreshDeadline() == nil)
+        #expect(surfaces.refresh(at: Date()).threadIDs.isEmpty)
+    }
+
+    /// A finished CLI row leaves when the user has been at the terminal that ran it, and only then.
+    ///
+    /// The row used to stay until the TUI exited or the user removed it, because execution
+    /// ownership is not a current-view signal — `/new` announces its Thread on the next submission,
+    /// not when it opens. That answers a different question. Retiring a terminal row has never
+    /// needed to know which Thread is on screen: it needs a move only a person makes, at that
+    /// Thread's own device, after the Turn ended, with the hosting application in front — the rule
+    /// every other terminal row is judged by (``TerminalReadEvidence``). Native readings back it:
+    /// `codex-cli 0.154.0` sets focus reporting and bracketed paste and no mouse tracking, so the
+    /// access time moves on a keystroke, a paste or coming back to that window, and not for the
+    /// TUI's own output or a Turn ending.
+    @Test func aFinishedCLIRowLeavesOnlyOnAGestureAtItsOwnTerminalAfterTheTurnEnded() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-read-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HookIntegrationPaths(supportDirectory: root.appendingPathComponent("support"),
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json"))
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        let repository = HookEventRepository(paths: paths)
+        let owner = cli()
+        let surfaces = CodexSurfaceLedger(source: CLIProcessFixture([owner]).source)
+        let gestures = CLIGestureFixture()
+        var timing = MonitorTiming.standard
+        timing.terminalReadSettlingInterval = 0
+        let service = LiveCodexMonitorService(client: CLIMetadataClient(), hookEvents: repository,
+            hookRegistrar: registrar, surfaces: surfaces, unreadState: CLIEmptyDesktopReading(),
+            terminalGestures: gestures, timing: timing, desktopProcessIdentifierProvider: { nil })
+
+        surfaces.record(owner: owner, thread: "one", event: "UserPromptSubmit")
+        _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "UserPromptSubmit",
+            "session_id": "one", "turn_id": "t-one", "cwd": "/work/shared", "prompt": "Live prompt"]),
+            at: Date().addingTimeInterval(-2))
+        var reading = await service.fetchSnapshot()
+        for _ in 0..<100 where reading.sessions.count != 1 {
+            try await Task.sleep(for: .milliseconds(10))
+            reading = await service.fetchSnapshot()
+        }
+        #expect(reading.sessions.first?.status == .running)
+
+        // Typing at the prompt is what submitted the Turn. A running row is not waiting to be read,
+        // and pays for no kernel reading (CR-Fable-041).
+        gestures.wasAtTheTerminal(of: owner.pid, at: Date().addingTimeInterval(-2))
+        #expect(await service.fetchSnapshot().sessions.first?.status == .running)
+        #expect(gestures.timesAsked == 0, "a list with no finished row must not buy a reading")
+
+        let ended = Date()
+        _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "Stop",
+            "session_id": "one", "turn_id": "t-one", "last_assistant_message": "Finished"]), at: ended)
+        #expect(await service.fetchSnapshot().sessions.first?.status == .completed,
+            "the gesture that submitted the Turn cannot be the one that read its answer")
+        #expect(gestures.timesAsked > 0)
+
+        // Back at that terminal, but its window is not the one in front: a pointer crossing an
+        // unfocused terminal, or a focus-out as another application takes over, says nothing.
+        gestures.wasAtTheTerminal(of: owner.pid, at: ended.addingTimeInterval(1), hostIsInFront: false)
+        #expect(await service.fetchSnapshot().sessions.first?.status == .completed)
+
+        // Another terminal's gesture is not this one's: the access time is per device.
+        gestures.set(owner.pid + 1, ControllingTerminalReading(lastGesture: ended.addingTimeInterval(2),
+            hostIsInFrontOfTheUser: true, hostCanEverBeInFrontOfTheUser: true))
+        #expect(await service.fetchSnapshot().sessions.first?.status == .completed)
+
+        gestures.wasAtTheTerminal(of: owner.pid, at: ended.addingTimeInterval(3))
+        #expect(await service.fetchSnapshot().sessions.isEmpty, "read at its own terminal, so it retires")
+        await service.disconnect()
+    }
+
+    /// A Thread two surfaces are running has no unique terminal authority, and a TUI with no
+    /// application ancestor — `tmux`, `screen`, `ssh` — has none at all. Both stay out of the gate,
+    /// so neither books a re-check nor is retired by a reading that cannot speak for it.
+    @Test func aSharedOrUnreachableSurfaceIsNeverRetiredByATerminalReading() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-shared-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HookIntegrationPaths(supportDirectory: root.appendingPathComponent("support"),
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json"))
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        let repository = HookEventRepository(paths: paths)
+        let terminal = cli(), multiplexed = cli(101)
+        let desktop = CodexExecution(pid: 200, startedAt: now, surface: .desktop, terminal: nil)
+        let surfaces = CodexSurfaceLedger(source: CLIProcessFixture([terminal, multiplexed, desktop]).source)
+        let gestures = CLIGestureFixture()
+        gestures.wasAtTheTerminal(of: terminal.pid, at: .distantFuture)
+        gestures.set(multiplexed.pid, ControllingTerminalReading(lastGesture: .distantFuture,
+            hostIsInFrontOfTheUser: false, hostCanEverBeInFrontOfTheUser: false))
+        var timing = MonitorTiming.standard
+        timing.terminalReadSettlingInterval = 0
+        let service = LiveCodexMonitorService(client: CLIMetadataClient(), hookEvents: repository,
+            hookRegistrar: registrar, surfaces: surfaces, unreadState: CLIEmptyDesktopReading(),
+            terminalGestures: gestures, timing: timing, desktopProcessIdentifierProvider: { nil })
+        surfaces.record(owner: terminal, thread: "one", event: "SessionStart")
+        surfaces.record(owner: desktop, thread: "one", event: "SessionStart")
+        surfaces.record(owner: multiplexed, thread: "two", event: "SessionStart")
+        for thread in ["one", "two"] {
+            _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "UserPromptSubmit",
+                "session_id": thread, "turn_id": "t-\(thread)", "cwd": "/work/shared", "prompt": "Live prompt"]),
+                at: Date().addingTimeInterval(-2))
+            _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "Stop",
+                "session_id": thread, "turn_id": "t-\(thread)", "last_assistant_message": "Finished"]),
+                at: Date().addingTimeInterval(-1))
+        }
+        var reading = await service.fetchSnapshot()
+        for _ in 0..<100 where reading.sessions.count != 2 {
+            try await Task.sleep(for: .milliseconds(10))
+            reading = await service.fetchSnapshot()
+        }
+        #expect(reading.sessions.allSatisfy { $0.status == .completed })
+        #expect(Set(reading.sessions.map(\.threadID)) == ["one", "two"],
+            "a gesture at either device speaks for neither of these rows")
+        await service.disconnect()
+    }
+
+    /// A scan nothing can schedule. The process inventory answers the presence dot and nothing else,
+    /// and "a TUI that has never sent a Hook may have started" is not a condition any refresh
+    /// clears: published as a deadline it woke every product every five seconds for the life of the
+    /// app, an asleep screen included, because the refresh it woke only booked the next one. So it
+    /// is read inside a refresh that is already happening, exactly as `AntigravityConversationScanner`
+    /// reads its presence locks, and costs nothing while nothing else wakes the provider. The
+    /// accepted degradation: a TUI started before this app, or with Hooks untrusted, moves the dot
+    /// at the next refresh from any cause instead of within five seconds. One started normally sends
+    /// `SessionStart`, which books an owner and wakes the store itself.
+    @Test func theCLIInventoryIsScannedOpportunisticallyAndAsksForNoWakeUp() async throws {
+        let process = cli()
+        let scans = ScanCounter()
+        let ledger = CodexSurfaceLedger(source: CodexProcessSource(resolvePeer: { _ in process },
+            isAlive: { _ in true }, localProcesses: { scans.record(); return [process] }))
+
+        // Presence with no Hook at all, and one reading answers the burst of refreshes around it.
+        #expect(ledger.refresh(at: now).cliIsOpen == true)
+        #expect(ledger.refresh(at: now.addingTimeInterval(CodexSurfaceLedger.scanLifetime - 0.5))
+            .cliIsOpen == true)
+        #expect(scans.count == 1)
+        #expect(ledger.refresh(at: now.addingTimeInterval(CodexSurfaceLedger.scanLifetime)).cliIsOpen == true)
+        #expect(scans.count == 2, "the lifetime caps repeat cost within a burst; it never asks to be woken")
+
+        // The idle provider: no Desktop, no TUI, no Hook and no screen leaves nothing to wake for.
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-idle-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HookIntegrationPaths(supportDirectory: root.appendingPathComponent("support"),
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json"))
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        let empty = CodexSurfaceLedger(source: CodexProcessSource(resolvePeer: { _ in nil },
+            isAlive: { _ in false }, localProcesses: { [] }))
+        let service = LiveCodexMonitorService(client: CLIMetadataClient(),
+            hookEvents: HookEventRepository(paths: paths), hookRegistrar: registrar, surfaces: empty,
+            unreadState: CLIEmptyDesktopReading(), screenAvailability: CLINoScreen(),
+            desktopProcessIdentifierProvider: { nil })
+        #expect(await service.fetchSnapshot().presence == .closed)
+        #expect(await service.nextRefreshDeadline() == nil,
+            "an inventory that found nothing must not book the store's next wake")
+        await service.disconnect()
+    }
+
+    /// One list, so the two readings cannot answer different questions about the same machine.
+    /// `CodexExecutableLocator` picks the binary that runs `app-server`; `command(named:)` names
+    /// the CLI install Settings shows. They are allowed to name different binaries — Desktop ships
+    /// its own `codex` and it is preferred for the App Server — but they must not search different
+    /// *places*, or a CLI in a directory only one of them knows is half-seen: present in Settings
+    /// and unusable for metadata, or the reverse.
+    @Test func theAppServerAndTheCLIReadingSearchTheSameInstallDirectories() {
+        let home = URL(fileURLWithPath: "/Users/someone")
+        let environment = ["PATH": "/usr/bin:/opt/custom/bin"]
+        let directories = ProductInstallationDiscovery.commandDirectories(home: home, environment: environment)
+        let candidates = CodexExecutableLocator.candidates(home: home, environment: environment)
+
+        let desktop = candidates.prefix(2).map(\.path)
+        #expect(desktop == ["/Applications/ChatGPT.app/Contents/Resources/codex",
+                            "/Applications/Codex.app/Contents/Resources/codex"],
+            "Desktop's own build answers for Desktop's App Server, and stays first")
+        #expect(Array(candidates.dropFirst(2)) == directories.map { $0.appendingPathComponent("codex") },
+            "everything after it is the shared list, in the shared order")
+        #expect(!directories.contains { $0.path.hasPrefix("/Applications/") },
+            "a Desktop bundle is not a CLI install and is never offered as one")
+    }
+
+    /// A CLI shipped on npm lands wherever the user's package or version manager keeps binaries,
+    /// and `PATH` cannot be relied on to find it: the window server launches this app, so its
+    /// `PATH` is the system default. The directories are therefore named outright, and `PATH` is
+    /// appended after them without repeating one.
+    @Test func macPortsAndVersionManagerShimsAreSearchedWithoutTrustingPATH() {
+        let home = URL(fileURLWithPath: "/Users/someone")
+        let directories = ProductInstallationDiscovery.commandDirectories(
+            home: home, environment: ["PATH": "/opt/homebrew/bin:/opt/custom/bin"]
+        ).map(\.path)
+
+        for expected in ["/Users/someone/.local/bin", "/opt/homebrew/bin", "/usr/local/bin",
+                         "/opt/local/bin", "/Users/someone/.local/share/mise/shims",
+                         "/Users/someone/.asdf/shims", "/Users/someone/.volta/bin",
+                         "/Users/someone/.bun/bin"] {
+            #expect(directories.contains(expected), "\(expected) is searched without help from PATH")
+        }
+        #expect(directories.firstIndex(of: "/Users/someone/.local/bin") == 0,
+            "the products' own installer location still breaks a tie first")
+        #expect(directories.filter { $0 == "/opt/homebrew/bin" }.count == 1,
+            "a PATH that repeats a named directory does not search it twice")
+        #expect(directories.last == "/opt/custom/bin", "PATH is the fallback, after every named directory")
+    }
+
+    /// Identity is not an install location. Everything `localTUI` still reads describes the running
+    /// process — its name, its argv, its terminal, its open home database — so a TUI started from a
+    /// shim, a second Homebrew prefix or a version directory is the same evidence as one started
+    /// from the path a search happens to find first. Nothing here consults a list of paths.
+    @Test func aTUIIsIdentifiedByTheProcessAndNotByWhereItWasInstalled() {
+        #expect(CodexNativeProcesses.isLocalTUI(["/opt/local/bin/codex"]))
+        #expect(CodexNativeProcesses.isLocalTUI(["/Users/someone/.local/share/mise/installs/npm-openai-codex/0.154.0/bin/codex", "--search"]))
+        #expect(!CodexNativeProcesses.isLocalTUI(["/opt/local/bin/codex", "app-server"]),
+            "a subcommand is still what separates the surfaces, wherever the binary lives")
+        #expect(!CodexNativeProcesses.isLocalTUI(["/opt/local/bin/codex", "exec", "do the thing"]))
+
+        let home = URL(fileURLWithPath: "/Users/someone")
+        #expect(CodexNativeProcesses.hasHomeDatabase(
+            in: ["/Users/someone/.codex/state_5.sqlite"], home: home
+        ), "the home database is read from the process, not from where the binary sits")
+        #expect(!CodexNativeProcesses.hasHomeDatabase(
+            in: ["/Users/elsewhere/.codex/state_5.sqlite"], home: home
+        ))
+    }
+
+    /// The same claim against the kernel rather than against pure functions, because this is the
+    /// defect's actual shape: a real process, running a binary in a directory **no list contains**,
+    /// holding this home's database open on a real terminal. Matching the running executable
+    /// against the one discovered install path failed exactly here, and the Turn got no row.
+    ///
+    /// The pty is allocated here and the staged process makes it its own controlling terminal —
+    /// `script(1)` cannot do it, since it needs a terminal on its own stdin and a window server
+    /// launch has none. The staged binary is a copy of `perl` named `codex`: it takes a script as
+    /// its one positional argument, which is the argv shape of a TUI started with a prompt.
+    @Test func aTUIInstalledWhereNoListLooksIsStillIdentifiedFromTheKernel() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nc-tui-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let database = home.appendingPathComponent(".codex/state_5.sqlite")
+        let installed = root.appendingPathComponent("no/list/knows/this/bin")
+        try FileManager.default.createDirectory(at: database.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: installed, withIntermediateDirectories: true)
+        try Data().write(to: database)
+        let executable = installed.appendingPathComponent(CodexNativeProcesses.executableName)
+        try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/perl"), to: executable)
+
+        let master = posix_openpt(O_RDWR | O_NOCTTY)
+        try #require(master >= 0, "no pty available")
+        defer { close(master) }
+        try #require(grantpt(master) == 0 && unlockpt(master) == 0)
+        let terminal = String(cString: ptsname(master))
+
+        // A session leader with no controlling terminal takes the first one it opens, which is how
+        // a TUI in Terminal.app gets its own. The session has to come from the spawn:
+        // `Foundation.Process` makes the child a process-group leader, and a group leader's
+        // `setsid()` fails, so the staged process would never acquire the terminal.
+        let script = root.appendingPathComponent("hold.pl")
+        try """
+            open(TTY, "+<", "\(terminal)") or exit 3;
+            open(DB, "<", "\(database.path)") or exit 4;
+            sleep 120;
+            """.write(to: script, atomically: true, encoding: .utf8)
+
+        let pid = try #require(Self.spawnInItsOwnSession(executable.path, script.path))
+        defer { kill(pid, SIGKILL) }
+
+        let reader = CodexNativeProcesses(home: home)
+        var execution: CodexExecution?
+        // The terminal and the database are opened a moment after exec, so the poll races the
+        // staging rather than the code under test.
+        for _ in 0 ..< 200 where execution == nil {
+            execution = reader.localTUI(pid)
+            if execution == nil { try await Task.sleep(for: .milliseconds(25)) }
+        }
+        let tui = try #require(execution, """
+            a process named codex, with TUI-shaped argv, a controlling terminal and this home's \
+            database open is a local TUI wherever it was installed from
+            """)
+        #expect(tui.surface == .cli)
+        #expect(tui.pid == pid)
+        #expect(tui.terminal == terminal, "the controlling terminal is the row's read authority")
+        #expect(reader.usesDefaultHome(pid), "and it is this home, not another")
+        #expect(
+            LibprocProcessTable().processes(named: CodexNativeProcesses.executableName)?
+                .contains { $0.processIdentifier == pid } == true,
+            "and the inventory that answers the presence dot lists it too"
+        )
+
+        // The same process read against another home is not this user's TUI: still fails closed.
+        let elsewhere = CodexNativeProcesses(home: root.appendingPathComponent("someone-else"))
+        #expect(elsewhere.localTUI(pid) == nil)
+    }
+
+    /// A future `codex <newsubcommand>` used to be admitted as an interactive session, because an
+    /// unknown bare word was taken for the prompt. It is refused now, and a prompt that cannot be
+    /// a subcommand still is not.
+    @Test func anUnknownBareWordIsRefusedRatherThanTakenForAPrompt() {
+        for argv in [["codex", "newsubcommand"], ["codex", "serve"], ["codex", "tui2"],
+                     ["codex", "-m", "gpt-5", "brand-new-verb"]] {
+            #expect(!CodexNativeProcesses.isLocalTUI(argv),
+                "a bare word clap could route to a subcommand is not assumed to be a prompt")
+        }
+        for argv in [["codex", "fix the login bug"], ["codex", "Fix it."], ["codex", "why?"],
+                     ["codex", "read src/main.swift"], ["codex", "--search", "explain this repo"]] {
+            #expect(CodexNativeProcesses.isLocalTUI(argv),
+                "a prompt outside clap's subcommand alphabet cannot be a subcommand, so it is one")
+        }
+        // The interactive subcommands stay in, with their own options and positionals.
+        #expect(CodexNativeProcesses.isLocalTUI(["codex", "resume", "--last"]))
+        #expect(CodexNativeProcesses.isLocalTUI(["codex", "fork", "0198f3a1-0000-7000-8000-000000000000"]))
+        #expect(CodexNativeProcesses.isLocalTUI(["codex", "resume", "--include-non-interactive"]))
+        // Options measured on 0.154.0 that this app used to reject, losing the rows of a TUI that
+        // merely passed one of them.
+        for argv in [["codex", "--oss"], ["codex", "--approve-for-me"],
+                     ["codex", "--local-provider", "ollama"]] {
+            #expect(CodexNativeProcesses.isLocalTUI(argv))
+        }
+        // A remote TUI is not a local execution, and --help/--version print and exit.
+        for argv in [["codex", "--remote", "ws://host:1"], ["codex", "--help"], ["codex", "-V"]] {
+            #expect(!CodexNativeProcesses.isLocalTUI(argv))
+        }
+    }
+
+    /// The drift signal for this dependency. The three argument sets describe a CLI that ships
+    /// often, and nothing in the app can notice when it grows: an unknown option or subcommand
+    /// just means a TUI stops being monitored, reported only as an unattributable payload count on
+    /// the Codex row. So the check happens here, against the CLI actually installed on this
+    /// machine — `--help` only, no session and no state touched.
+    ///
+    /// When this fails, Codex has added something. Classify it: an interactive subcommand goes in
+    /// `interactiveCommands`, anything else in `nonInteractiveCommands`; an option the interactive
+    /// form accepts goes in `valueOptions` or `booleanOptions`, one that names a mode this app does
+    /// not watch in `unmonitoredOptions`. Nothing is skipped in silence.
+    @Test func theInstalledCLIOffersNothingThisVersionHasNotClassified() throws {
+        guard let codex = ProductInstallationDiscovery.command(named: "codex"),
+              let top = Self.help(codex, []) else { return }
+
+        // A parse that reads nothing would pass every check below without looking at anything, so
+        // it is pinned first: these have been in `codex --help` for as long as this app has read it.
+        let parsedCommands = Set(Self.subcommands(in: top))
+        let parsedOptions = Self.options(in: top)
+        #expect(parsedCommands.isSuperset(of: ["exec", "e", "resume", "app-server", "help"]),
+            "the Commands block is no longer parsed as this check assumes; fix the parse first")
+        #expect(parsedOptions.contains { $0 == ("--model", true) }
+            && parsedOptions.contains { $0 == ("--search", false) },
+            "the Options block is no longer parsed as this check assumes; fix the parse first")
+
+        var unclassifiedCommands: [String] = []
+        let known = CodexNativeProcesses.interactiveCommands
+            .union(CodexNativeProcesses.nonInteractiveCommands)
+        for name in parsedCommands where !known.contains(name) {
+            unclassifiedCommands.append(name)
+        }
+        #expect(unclassifiedCommands.isEmpty, """
+            codex offers subcommand(s) this version has not classified: \
+            \(unclassifiedCommands.sorted().joined(separator: ", ")). Interactive ones belong in \
+            `interactiveCommands`; every other one in `nonInteractiveCommands`.
+            """)
+
+        var unclassifiedOptions: [String] = []
+        let classified = CodexNativeProcesses.valueOptions
+            .union(CodexNativeProcesses.booleanOptions)
+            .union(CodexNativeProcesses.unmonitoredOptions)
+        // The interactive form is the top level plus the subcommands that open the TUI.
+        for arguments in [[]] + CodexNativeProcesses.interactiveCommands.sorted().map({ [$0] }) {
+            guard let help = Self.help(codex, arguments) else { continue }
+            for (name, takesValue) in Self.options(in: help) where !classified.contains(name) {
+                unclassifiedOptions.append("\(name)\(takesValue ? " <value>" : "")")
+            }
+        }
+        #expect(unclassifiedOptions.isEmpty, """
+            codex's interactive form accepts option(s) this version has not classified: \
+            \(Set(unclassifiedOptions).sorted().joined(separator: ", ")). One the TUI accepts \
+            belongs in `valueOptions` or `booleanOptions`; one naming a mode this app does not \
+            watch in `unmonitoredOptions`.
+            """)
+
+        // An option's arity is what decides whether the next argv element is its value.
+        for (name, takesValue) in parsedOptions {
+            if CodexNativeProcesses.valueOptions.contains(name) {
+                #expect(takesValue, "\(name) no longer takes a value; move it to `booleanOptions`")
+            } else if CodexNativeProcesses.booleanOptions.contains(name) {
+                #expect(!takesValue, "\(name) now takes a value; move it to `valueOptions`")
+            }
+        }
+    }
+
+    /// `--help` written to a pipe, with a bound on both the wait and the output.
+    private static func help(_ executable: URL, _ arguments: [String]) -> String? {
+        let process = Process()
+        process.executableURL = executable
+        process.arguments = arguments + ["--help"]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let data = (try? output.fileHandleForReading.readToEnd()) ?? Data()
+        process.waitUntilExit()
+        return String(data: data, encoding: .utf8)
+    }
+
+    /// The names under `Commands:`, plus any `[aliases: …]` they declare. A name sits at exactly
+    /// two spaces of indent; a wrapped description sits far deeper, so it cannot be mistaken for one.
+    private static func subcommands(in help: String) -> [String] {
+        var names: [String] = []
+        var inCommands = false
+        for line in help.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = String(line)
+            if text.hasSuffix(":") && !text.hasPrefix(" ") {
+                inCommands = text == "Commands:"
+                continue
+            }
+            guard inCommands, text.hasPrefix("  "), !text.hasPrefix("   ") else { continue }
+            let fields = text.split(separator: " ", omittingEmptySubsequences: true)
+            guard let name = fields.first, !name.hasPrefix("-") else { continue }
+            names.append(String(name))
+            if let marker = text.range(of: "[aliases: "), let close = text[marker.upperBound...].firstIndex(of: "]") {
+                names += text[marker.upperBound ..< close].split(separator: ",")
+                    .map { $0.trimmingCharacters(in: .whitespaces) }
+            }
+        }
+        return names
+    }
+
+    /// Every option name in a help page, with whether it takes a value — `<…>` after the names.
+    private static func options(in help: String) -> [(name: String, takesValue: Bool)] {
+        var found: [(String, Bool)] = []
+        for line in help.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = String(line)
+            let indent = text.prefix { $0 == " " }.count
+            guard indent >= 2, indent <= 6 else { continue }
+            let fields = text.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+            guard let first = fields.first, first.hasPrefix("-") else { continue }
+            let names = fields.prefix { $0.hasPrefix("-") || $0.hasSuffix(",") }
+                .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ",")) }
+                .filter { $0.hasPrefix("-") }
+            let takesValue = fields.dropFirst(names.count).first?.hasPrefix("<") == true
+            found += names.map { ($0, takesValue) }
+        }
+        return found
+    }
+
+    private static func spawnInItsOwnSession(_ executable: String, _ argument: String) -> pid_t? {
+        var attributes: posix_spawnattr_t?
+        posix_spawnattr_init(&attributes)
+        defer { posix_spawnattr_destroy(&attributes) }
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
+        var actions: posix_spawn_file_actions_t?
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        for descriptor in Int32(0) ... 2 {
+            posix_spawn_file_actions_addopen(&actions, descriptor, "/dev/null", O_RDWR, 0)
+        }
+        let argv = [strdup(executable), strdup(argument), nil]
+        defer { argv.forEach { free($0) } }
+        var pid: pid_t = 0
+        guard posix_spawn(&pid, executable, &actions, &attributes, argv, environ) == 0 else { return nil }
+        return pid
+    }
+}
+
+private nonisolated final class ScanCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var scans = 0
+    func record() { lock.lock(); scans += 1; lock.unlock() }
+    var count: Int { lock.lock(); defer { lock.unlock() }; return scans }
+}
+
+/// No screen, so the quota and terminal-recheck deadlines park and the inventory is the only
+/// candidate left for `nextRefreshDeadline()` to report.
+private nonisolated struct CLINoScreen: ScreenAvailabilityReporting {
+    func isAvailable() -> Bool { false }
+    func changeEvents() -> AsyncStream<Void> { AsyncStream { $0.finish() } }
+}
+
+/// What a TUI's controlling device says. Measured native behaviour on `codex-cli 0.154.0`
+/// (2026-09-15): the TUI sets `ESC[?1004h` and `ESC[?2004h` and no mouse-tracking mode, so a
+/// keystroke, a paste and a focus report move the access time; an idle TUI, a Turn's output and a
+/// Turn ending do not (30 s of a spinning Turn, no movement).
+private nonisolated final class CLIGestureFixture: ControllingTerminalGestureReporting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var readings: [Int32: ControllingTerminalReading] = [:]
+    private var asks = 0
+
+    func set(_ pid: Int32, _ reading: ControllingTerminalReading?) {
+        lock.lock(); readings[pid] = reading; lock.unlock()
+    }
+
+    func wasAtTheTerminal(of pid: Int32, at date: Date, hostIsInFront: Bool = true) {
+        set(pid, ControllingTerminalReading(lastGesture: date,
+            hostIsInFrontOfTheUser: hostIsInFront, hostCanEverBeInFrontOfTheUser: true))
+    }
+
+    var timesAsked: Int { lock.lock(); defer { lock.unlock() }; return asks }
+
+    func reading(forProcessIdentifier pid: Int32) async -> ControllingTerminalReading? {
+        lock.lock(); asks += 1; let answer = readings[pid]; lock.unlock()
+        return answer
+    }
+}
+
+private nonisolated struct CLIEmptyDesktopReading: DesktopUnreadStateProviding {
+    func snapshot() async -> DesktopUnreadStateSnapshot {
+        .init(unreadThreadIDs: [], source: .current, currentAsOf: .distantFuture)
+    }
+    func changeEvents() -> AsyncStream<Void> { AsyncStream { $0.finish() } }
+}
+
+@MainActor private final class CLINavigatorFixture: AgentNavigating {
+    private let outcome: NavigationOutcome
+    var calls = 0
+    init(outcome: NavigationOutcome) { self.outcome = outcome }
+    func open(_ session: MonitoredSession) async throws -> NavigationOutcome { calls += 1; return outcome }
+}
+
+private nonisolated final class CLIProcessFixture: @unchecked Sendable {
+    private let lock = NSLock()
+    private var executions: [CodexExecution]
+    init(_ executions: [CodexExecution]) { self.executions = executions }
+    func replace(_ executions: [CodexExecution]) { lock.lock(); defer { lock.unlock() }; self.executions = executions }
+    func reading() -> [CodexExecution] { lock.lock(); defer { lock.unlock() }; return executions }
+    var source: CodexProcessSource {
+        CodexProcessSource(resolvePeer: { _ in self.reading().first },
+            isAlive: { self.reading().contains($0) }, localProcesses: { self.reading().filter { $0.surface == .cli } })
+    }
+}
+
+private actor CLIMetadataClient: CodexAppServerCommunicating {
+    func connect() async throws {}
+    func disconnect() async {}
+    func request(method: String, params: JSONValue?, timeoutNanoseconds: UInt64?) async throws -> JSONValue {
+        func thread(_ id: String) -> JSONValue {
+            .object(["id": .string(id), "threadSource": .string("user"), "source": .string("cli"),
+                "name": .string(id), "status": .object(["type": .string("notLoaded")])])
+        }
+        switch method {
+        case "thread/read": return .object(["thread": thread(params?["threadId"]?.stringValue ?? "")])
+        case "thread/list": return .object(["data": .array([thread("one"), thread("two")]), "nextCursor": .null])
+        default: return .object([:])
+        }
+    }
+}
+
+private struct CLIHostFixture: SessionHostResolving {
+    func host(ofProcess pid: Int32) async -> ClaudeCodeHost? {
+        .terminal(HostApplication(bundleIdentifier: "com.apple.Terminal", displayName: "Terminal", processIdentifier: 300))
+    }
+}
+
+@MainActor private final class CLITabFixture: TerminalTabFocusing {
+    var calls = 0
+    func focusTab(withTerminalDevice device: String, in application: HostApplication) async -> TerminalTabFocus {
+        calls += 1; return .focused
+    }
+}
+
+@MainActor private final class CLIActivationFixture: HostApplicationActivating {
+    var calls = 0
+    func activate(_ application: HostApplication) async -> Bool { calls += 1; return true }
+}
+
+/// One hook connection in the shape the helper makes it: connect, write the payload, half-close,
+/// then wait to see whether this app closes its end. `nc -U` does exactly this and returns 22 ms
+/// after the close (measured 2026-09-15), so the close is what frees the product.
+private nonisolated final class CLIHookConnection {
+    private let descriptor: Int32
+
+    init(to socketURL: URL) {
+        descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard descriptor >= 0 else { return }
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let pathBytes = Array(socketURL.path.utf8)
+        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else { return }
+        withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
+        address.sun_len = UInt8(
+            MemoryLayout<sockaddr_un>.size - MemoryLayout.size(ofValue: address.sun_path)
+                + pathBytes.count
+        )
+        _ = withUnsafePointer(to: &address) { pointer in
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(descriptor, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+            }
+        }
+        var noSignal: Int32 = 1
+        setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &noSignal,
+                   socklen_t(MemoryLayout<Int32>.size))
+    }
+
+    deinit { close(descriptor) }
+
+    func send(_ body: [String: Any]) -> Bool {
+        guard descriptor >= 0, let bytes = try? JSONSerialization.data(withJSONObject: body) else {
+            return false
+        }
+        let written = bytes.withUnsafeBytes { raw -> Int in
+            var sent = 0
+            while sent < raw.count {
+                let count = write(descriptor, raw.baseAddress! + sent, raw.count - sent)
+                guard count > 0 else { break }
+                sent += count
+            }
+            return sent
+        }
+        shutdown(descriptor, SHUT_WR)
+        return written == bytes.count
+    }
+
+    /// Whether this app closed its end, which is where the helper exits and Codex carries on.
+    /// `false` after the window means the connection is being held for a person.
+    func waitForClose(within seconds: TimeInterval = 2) -> Bool {
+        var timeout = timeval(tv_sec: Int(seconds), tv_usec: 0)
+        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                   socklen_t(MemoryLayout<timeval>.size))
+        var byte: UInt8 = 0
+        return recv(descriptor, &byte, 1, 0) == 0
+    }
+}
+
+/// The listener hands over on its own queue, so the row arrives after the send returns.
+@MainActor
+private func eventuallyDrained(
+    _ repository: HookEventRepository,
+    within seconds: TimeInterval = 5,
+    matching isWanted: (MonitoredTurnState) -> Bool
+) async -> MonitoredTurnState? {
+    let deadline = Date().addingTimeInterval(seconds)
+    while true {
+        if let found = await repository.drainDeliveredEvents().turns.first(where: isWanted) {
+            return found
+        }
+        if Date() >= deadline { return nil }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+    }
+}

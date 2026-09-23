@@ -322,18 +322,15 @@ actor MonitoringRepository {
         return snapshot()
     }
 
-    /// Ends every Turn this reducer is holding, and keeps everything else.
-    ///
-    /// For a caller that knows the producing process is gone: nothing else would ever end such a
-    /// Turn (CR-Fable-007). Observation flags stay.
-    ///
-    /// - Parameter didConsumeEvents: Carried through from the drain this call follows.
-    @discardableResult
-    func discardTurns(didConsumeEvents: Bool = false) -> MonitoringStateSnapshot {
-        guard !turnsByThreadID.isEmpty else {
-            return snapshot(didConsumeEvents: didConsumeEvents)
-        }
-        turnsByThreadID.removeAll()
+    /// Ends every Turn no live execution owns, and keeps everything else. Native execution
+    /// ownership, unlike a metadata listing, needs no new-Turn grace: a Turn is an assertion about
+    /// what a process is doing right now, so once its owner has exited the assertion cannot still
+    /// be true and can never be disproven — the event that would end it was the dead process's to
+    /// send (CR-Fable-007). Observation flags stay. Called after draining the inbox and reading all
+    /// currently live owners, so a dying helper's last events are retired with it.
+    func retainOwnedThreads(_ threadIDs: Set<String>, didConsumeEvents: Bool) -> MonitoringStateSnapshot {
+        turnsByThreadID = turnsByThreadID.filter { threadIDs.contains($0.key) }
+        reconcileAnswerHandles()
         signalIfProjectionChanged()
         return snapshot(didConsumeEvents: didConsumeEvents)
     }
@@ -630,6 +627,8 @@ actor MonitoringRepository {
                 $0.waits.resolve(requestID: requestID, revision: event.requestRevision)
                 $0.deriveStatus()
             }
+        case .turnInterrupted:
+            endOpenTurn(ofThread: threadID, named: turnID, at: receivedAt)
         case .turnEnded:
             let assistantPreview = TurnPreviewStore.normalized(event.finalText)
             mutateExactTurn(
@@ -786,7 +785,7 @@ actor MonitoringRepository {
         case .requestResolved:
             guard let requestID = stableIdentifier(event.requestID ?? event.toolUseID) else { break }
             slots.resolve(requestID: requestID, revision: event.requestRevision)
-        case .turnStarted, .turnEnded, .subagentStarted, .subagentStopped, .inert:
+        case .turnStarted, .turnEnded, .turnInterrupted, .subagentStarted, .subagentStopped, .inert:
             return
         }
 
