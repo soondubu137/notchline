@@ -1,5 +1,7 @@
 # Notchline and Open Island: feature comparison
 
+> **Historical comparison.** The snapshots below were reviewed on 13 September 2026. A documentation check on 22 September found that its standalone Codex CLI gap is now superseded on `feature/codex_cli_integration`: Notchline supports ordinary local CLI at L5, with reading-only requests, conditional terminal read removal and host return. See [current support](../product-support.md#51-local-codex-cli). The pinned Open Island snapshot and other comparison findings have not been re-reviewed.
+
 Reviewed on **13 September 2026**. The repository named `open-vibe-island` now calls its application **Open Island**.
 
 Notchline concentrates on identifying the Turns that still need attention across Codex Desktop, Claude Code, Antigravity and Trae Desktop, with explicit per-product coverage. Open Island covers more coding products and terminal workflows, with more controls for notifications, presentation and continuing work. Neither is a strict superset of the other.

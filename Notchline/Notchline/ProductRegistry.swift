@@ -149,7 +149,7 @@ enum ProductRegistry {
                 connectedDetail: "compatible version"
             )),
             watches: "Codex Desktop and local interactive Codex CLI terminals.",
-            notShown: "CLI read removal and exact terminal navigation. Remote and daemon connections, exec, "
+            notShown: "Answers from the notch for CLI requests and exact terminal navigation. Remote and daemon connections, exec, "
                 + "custom CODEX_HOME, SSH and terminal multiplexers.",
             make: {
                 let surfaces = CodexSurfaceLedger()

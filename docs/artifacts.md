@@ -87,3 +87,5 @@ The repository carries two related files the app never writes: `appcast.xml`, th
 ## Codex CLI extension (2026-09-15)
 
 No additional persistent artefact is created. Desktop and local CLI share the existing Codex helper, socket, registration and `~/.codex/hooks.json`; three lifecycle definitions are appended. Process identities and Thread owners are memory-only and cleared on disconnect. The adapter reads open-file paths to identify `.codex/state_5.sqlite` but never opens, parses or writes that database. No launcher, wrapper, daemon or terminal profile is installed.
+
+CLI read removal queries the controlling device's access time and process ancestry through read-only OS calls; it creates no read marker or terminal profile. Requests are read without retaining a CLI answer connection. Shared account readings create no CLI-specific quota store or usage ledger. Exact artifact reuse does not imply Desktop's L6 coverage; see [CLI scope](product-support.md#51-local-codex-cli).

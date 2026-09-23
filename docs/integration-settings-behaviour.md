@@ -69,3 +69,5 @@ Onboarding uses the same four product rows and explains companion installation s
 ## Codex Desktop and CLI share setup
 
 The `Codex` switch now covers Desktop and ordinary local CLI terminals using the default home. The CLI extension appends `SessionStart`, `SessionEnd` and `Interrupt` without changing the previous seven definitions or helper command. Review the three new definitions through normal `/hooks` trust; Notchline never bypasses trust. The short lifecycle definitions use three-second timeouts, including the native maximum for SessionEnd and Interrupt. Discovery checks the standalone executable as well as Desktop, and the information popover states excluded modes.
+
+The shared `PermissionRequest` definition keeps its long timeout for Desktop. For a verified CLI peer, `CodexSurfaceLedger` reads the request and closes the connection immediately, so the TUI presents its own prompt; no separate CLI Hook file or answer setting is installed. The support boundary is L5, conditional terminal read removal and host return only. Turning on or repairing setup does not establish acceptance for other request forms.

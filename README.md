@@ -42,7 +42,7 @@ My screens are already full of editors, browsers and communication tools. Notchl
 | Product | Level | Extra capabilities (independent of level) | Boundaries |
 | --- | --- | --- | --- |
 | **Codex Desktop** | **L6**: ordinary approvals | Exact Thread navigation, Desktop Projects/read removal, final-answer previews, subagents, quota and daily tokens | Local CLI has separate scope below; synchronous questions and `request_permissions` reading-only; asynchronous questions preview-only |
-| **Codex CLI (local interactive)** | **L6**: ordinary command approvals | Native folder/title, current-Turn progress, final-answer preview and shared account readings | Default home only; host return without exact Thread selection; read removal needs a keystroke, paste or — in a terminal that reports focus, such as Ghostty but not Apple Terminal — a return to that window, never a pointer; synchronous questions reading-only; remote/daemon/exec excluded ([scope](docs/product-support.md#51-local-codex-cli)) |
+| **Codex CLI (local interactive)** | **L5**: ordinary approvals and synchronous questions, reading-only | Final-answer preview, conditional terminal read removal, host return and shared account readings | Default home only; every request is answered in the terminal; no exact window/tab/Thread selection, cold-start recovery or remote/daemon/exec support ([scope and verification](docs/product-support.md#51-local-codex-cli)) |
 | **Claude Code (Desktop + CLI)** | **L6**: tool/plan approvals and question sets | Folder-based Projects, conditional Desktop/terminal read removal, host/tab navigation, subagents, quota and daily tokens | No final-answer preview; exact navigation depends on host, full-screen hosts unreachable |
 | **Antigravity (Desktop + CLI)** | **L3** | Desktop Projects, conditional Desktop/terminal read removal, host navigation and final-answer previews | No waits, requests, quota, tokens or subagents; progress can wait for tools; Desktop Stop may leave a working row; CLI read removal needs typing/pasting, not tab focus |
 | **Trae Desktop (local IDE/V2)** | **L5**: ordinary commands and structured questions | Exact observed Thread navigation, conditional visible-completion read removal, retained root text | Verified 3.5.91 build only; answer in Trae; no quota, tokens or subagents; IDE-hosted SOLO outside L5, standalone SoloLite, remote, Plan/Spec and rich permissions excluded ([scope](docs/trae-integration.md)) |
@@ -54,6 +54,8 @@ My screens are already full of editors, browsers and communication tools. Notchl
 | **Ghostty 1.3.1** | Raise app; no exact tab/pane selection | Claude Code: typing/paste, focus or pointer gestures; Antigravity: typing/paste only |
 | **kitty, WezTerm, Alacritty, VS Code terminal** | Raise host if identifiable; no exact tab/pane selection | Shared terminal-evidence path; individual host combinations unverified |
 | **tmux, screen, SSH, pipes** | No dedicated return target | Unsupported |
+
+Codex CLI always returns to the host only, including Terminal.app and iTerm2. Its completed rows can clear after typing/pasting or, where the terminal reports focus, returning to the window: verified with Ghostty, but not Apple Terminal. Pointer movement does not clear them. These conditions and the CLI 0.154.0 acceptance baseline are in the [support contract](docs/product-support.md#51-local-codex-cli).
 
 ## General Limitations
 
@@ -67,7 +69,7 @@ My screens are already full of editors, browsers and communication tools. Notchl
 
 Requires **macOS 26.5+**. Move `Notchline.app` to Applications and open it. It is not notarised; if blocked, use **System Settings → Privacy & Security → Open Anyway** ([instructions](https://support.apple.com/en-ie/102445)). That is needed once: Notchline checks for updates daily, or from **About → Check for Updates**, and installs them in place without asking again.
 
-Enable products in onboarding or Settings. Trust Codex hooks using `/hooks`. Enabling Trae installs its companion; reopen Trae’s windows afterwards.
+Enable products in onboarding or Settings. Codex Desktop and local CLI share one switch and Hook configuration; review and trust the managed definitions using `/hooks` in each client that needs them. Enabling Trae installs its companion; reopen Trae’s windows afterwards.
 
 With **Xcode 26.6+**, open `Notchline/Notchline.xcodeproj` and select the **Notchline** scheme:
 

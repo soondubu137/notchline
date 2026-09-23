@@ -4,6 +4,19 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## Unreleased
+
+### Added
+
+- Ordinary local Codex CLI monitoring alongside Desktop, using the default home and shared Hook setup. L5 covers lifecycle, folder/title, current-Turn progress, ordinary approval waits and synchronous-question reading. Final-answer previews and default-account readings are shared.
+- Conditional removal of completed CLI rows after a gesture at their own terminal. Ghostty focus reports were verified; Apple Terminal requires input. Navigation raises only the verified host.
+
+### Known limitations
+
+- Every CLI request is answered in the terminal. Holding its Hook connection suppressed the TUI prompt, so the earlier approval-answer experiment is not offered.
+- No exact terminal window/tab/Thread selection or cold-start recovery. Remote/daemon/agents, exec/SDK/piped runs, SSH/tmux/screen, custom homes and unrecognised invocations are excluded.
+- Native CLI acceptance remains based on 0.154.0. Asynchronous questions, additional permission forms, automatic-review mode, subagent variants and authenticated CLI quota behaviour have no independent acceptance claim. [Complete scope](docs/product-support.md#51-local-codex-cli).
+
 ## 0.5.3 Beta — 2026-09-15
 
 **A long answer typed on the notch now stays inside its field.** The field grows a line at a time up to four lines, then scrolls. (`docs/answer-in-notch.md` §7.1.)

@@ -168,3 +168,7 @@ Two costs:
 
 - **It contradicts `PRD.md` §173's stated preference**, which weighs a stuck subagent count against a premature Completed and takes the stuck count, on the grounds that "the collapsed state saying `Completed` while work continues is wrong every single time". That reasoning holds where it was written — a **lost** `SubagentStop`, an accident, on a Turn that ended normally and whose answer the user is still waiting for. It does not survive a stop: the user has said they are not waiting. §173 now carries the carve-out.
 - **A subagent orphaned this way can no longer raise a wait on this row.** `subagentsAwaitingApprovalCount` is capped by `runningSubagentIDs`, so a `PermissionRequest` arriving from the orphan afterwards is not drawn. That is the same judgement in the same direction — a dialogue belonging to a Turn the user stopped is not a question anyone is going to answer here — and it is the reason the open ones are cleared in the same breath rather than left to linger.
+
+## Local Codex CLI interruption (documented 2026-09-22)
+
+Local CLI 0.154.0 supplies public `Interrupt` evidence carrying the exact Thread and Turn identity. The shared reducer ends only that observed Turn and clears its waits; process exit instead retires execution ownership and does not assert completion. The older Desktop rollout fallback described above remains in place: CLI acceptance is not evidence that every Desktop version supplies the same Hook. See [CLI scope](../product-support.md#51-local-codex-cli).
