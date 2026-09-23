@@ -4,18 +4,22 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
-## Unreleased
+## 0.6.0 Beta — 2026-09-22
+
+**Notchline now watches Codex in a local terminal as well as in Codex Desktop, at L5.** The same `Codex` switch covers both. A CLI row shows each Turn with its folder, title and progress, and reads an approval or a question in full, to be answered in the terminal. To pick it up, press Repair for Codex in Settings, then trust the three new definitions in Codex's `/hooks`. (`docs/product-support.md` §5.1.)
 
 ### Added
 
-- Ordinary local Codex CLI monitoring alongside Desktop, using the default home and shared Hook setup. L5 covers lifecycle, folder/title, current-Turn progress, ordinary approval waits and synchronous-question reading. Final-answer previews and default-account readings are shared.
-- Conditional removal of completed CLI rows after a gesture at their own terminal. Ghostty focus reports were verified; Apple Terminal requires input. Navigation raises only the verified host.
+- **Codex CLI, at L5.** Ordinary interactive `codex`, `resume` and `fork` sessions in the default `~/.codex` home appear beside Desktop's rows. Setup adds `SessionStart`, `SessionEnd` and `Interrupt` to the seven existing definitions and changes none of them. Final-answer previews, quota and today's tokens come from the same account reading as Desktop.
+- **A finished CLI row clears once you come back to its terminal.** A keystroke or a paste after the Turn ended retires it, with that terminal in front. Ghostty's focus reports count too, so returning to the window is enough there; Apple Terminal sends none and waits for a keystroke. Clicking a row raises the terminal that runs it.
 
 ### Known limitations
 
-- Every CLI request is answered in the terminal. Holding its Hook connection suppressed the TUI prompt, so the earlier approval-answer experiment is not offered.
-- No exact terminal window/tab/Thread selection or cold-start recovery. Remote/daemon/agents, exec/SDK/piped runs, SSH/tmux/screen, custom homes and unrecognised invocations are excluded.
-- Native CLI acceptance remains based on 0.154.0. Asynchronous questions, additional permission forms, automatic-review mode, subagent variants and authenticated CLI quota behaviour have no independent acceptance claim. [Complete scope](docs/product-support.md#51-local-codex-cli).
+- **Every CLI request is answered in the terminal.** Codex waits for the hook instead of prompting beside it, so holding the connection took the question away from the terminal. Notchline now reads the request and lets go at once.
+- **No exact window, tab or Thread selection, and no Turns from before launch.** Remote, daemon, `exec`, SDK and piped runs, SSH, tmux and screen, custom homes and unrecognised options are excluded.
+- **Verified on Codex CLI 0.154.0 only.** Asynchronous questions, `request_permissions`, automatic review, subagents and quota under a signed-in CLI have no CLI acceptance of their own. [Full scope](docs/product-support.md#51-local-codex-cli).
+
+Everything listed under `0.5.5` and earlier still stands, unchanged.
 
 ## 0.5.5 Beta — 2026-09-19
 
