@@ -120,7 +120,10 @@ nonisolated struct ClaudeCodeMonitorService: AgentMonitoring, IntegrationConfigu
             ),
             // No change stream: the transition only this reader sees (leaving for a composer) can only
             // keep a row, and a listed row re-checks every second.
-            displayed: displayed ?? ClaudeDesktopFocusLogReader(),
+            displayed: displayed ?? ClaudeDesktopFocusLogReader(
+                clock: clock,
+                statementLifetime: timing.displayedSessionStatementLifetime
+            ),
             // No change stream: a device's access time moves in the kernel with nothing to watch.
             // Sampled at the re-check: one `sysctl` and one `stat` per listed terminal row per second.
             terminalGestures: terminalGestures ?? ControllingTerminalGestureReader(),

@@ -87,6 +87,54 @@ struct TerminalUnreadRowFilterTests {
         #expect(filter.nextDeadline(now: now, screenIsAvailable: true) == nil)
     }
 
+    /// Hiding is final for the Turn, not the row: Trae's rows draw nothing while its companion
+    /// reconnects, and a read row came back unread afterwards (2026-09-16).
+    @Test
+    func aReadTurnThatDrawsNoRowForARefreshIsStillReadWhenItReturns() {
+        var filter = TerminalUnreadRowFilter(timing: .standard)
+        let read = candidate("t1", status: .completed, endedAt: t0)
+        let other = candidate("t2", status: .completed, endedAt: t0)
+        let held: Set = [read.row.id, other.row.id]
+        let now = t0.addingTimeInterval(60)
+        let judgedRead: (ReadGateCandidate) -> ReadGateVerdict = { _ in .judged(by: self.unread([], at: now)) }
+        #expect(filter.rows([read], dismissedRowIDs: [], now: now, heldRowIDs: held, verdict: judgedRead).isEmpty)
+
+        // Nothing listed at all, then another finished row listed alone: the read Turn is in neither.
+        _ = filter.rows([], dismissedRowIDs: [], now: now, heldRowIDs: held, verdict: judgedRead)
+        let stillUnread: (ReadGateCandidate) -> ReadGateVerdict = { _ in .judged(by: self.unread(["t1", "t2"], at: now)) }
+        #expect(filter.rows([other], dismissedRowIDs: [], now: now, heldRowIDs: held, verdict: stillUnread).map(\.threadID) == ["t2"])
+        filter.reset(keepingReadAmong: held)
+
+        // Back, with a reading that knows nothing of the earlier one.
+        #expect(filter.rows([read, other], dismissedRowIDs: [], now: now, heldRowIDs: held, verdict: stillUnread)
+            .map(\.threadID) == ["t2"])
+    }
+
+    /// Only a read verdict outlives its row, so an absent unread row books no re-check; and only
+    /// while the reducer holds the Turn.
+    @Test
+    func onlyAHeldReadTurnKeepsItsEntryWhileUnlisted() {
+        var filter = TerminalUnreadRowFilter(timing: .standard)
+        let read = candidate("t1", status: .completed, endedAt: t0)
+        let unreadRow = candidate("t2", status: .completed, endedAt: t0)
+        let now = t0.addingTimeInterval(60)
+        _ = filter.rows([read, unreadRow], dismissedRowIDs: [], now: now) {
+            .judged(by: self.unread($0.row.threadID == "t2" ? ["t2"] : [], at: now))
+        }
+        #expect(filter.nextDeadline(now: now, screenIsAvailable: true) != nil)
+
+        _ = filter.rows([], dismissedRowIDs: [], now: now, heldRowIDs: [read.row.id, unreadRow.row.id]) { _ in
+            .cannotBeAsked
+        }
+        #expect(filter.nextDeadline(now: now, screenIsAvailable: true) == nil)
+
+        // The reducer let the read Turn go; it is a stranger if it is ever listed again.
+        _ = filter.rows([], dismissedRowIDs: [], now: now, heldRowIDs: []) { _ in .cannotBeAsked }
+        #expect(filter.rows([read], dismissedRowIDs: [], now: now) { _ in
+            .judged(by: self.unread(["t1"], at: now))
+        }.count == 1)
+    }
+
     /// A finished Turn with a subagent still working stays listed however read.
     @Test
     func theGateJudgesTheThreadsStatusNotTheRows() {

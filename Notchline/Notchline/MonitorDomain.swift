@@ -414,6 +414,11 @@ struct MonitoredSession: Identifiable, Equatable, Sendable {
     /// The row's identity (dismissed set, terminal membership gate, SwiftUI). Namespaced by product:
     /// thread and turn ids from two products can collide.
     nonisolated var id: String {
+        Self.id(agent: agent, threadID: threadID, turnID: turnID)
+    }
+
+    /// ``id`` for a Turn that may draw no row.
+    nonisolated static func id(agent: AgentKind, threadID: String, turnID: String) -> String {
         "\(agent.rawValue):\(threadID):\(turnID)"
     }
 }

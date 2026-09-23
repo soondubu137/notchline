@@ -200,6 +200,9 @@ nonisolated final class TraeSource: MonitoringLifecycleSource, ProductSessionRea
         }
         return content
     }
+    func releaseEndedRows(_ turnIDsByThread: [String: String]) async {
+        await transport.release(turnIDsByThread)
+    }
 }
 
 @MainActor

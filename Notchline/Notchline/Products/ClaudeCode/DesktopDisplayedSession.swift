@@ -33,6 +33,10 @@ nonisolated enum DesktopDisplayedSession: Equatable, Sendable {
 ///   only say ``DesktopDisplayedSession/nothing``.
 /// - No change stream: the composer transition only keeps a row, which
 ///   ``MonitorTiming/terminalUnreadRecheckInterval`` picks up; other transitions have edges.
+/// - A statement stands while the log is merely interrupted, and expires after
+///   ``MonitorTiming/displayedSessionStatementLifetime`` of unbroken unreadability: a log that is
+///   gone for good cannot be refreshed, and this veto would otherwise outlive every session it
+///   was ever about.
 actor ClaudeDesktopFocusLogReader: DesktopDisplayedSessionReporting {
     private static let log = Logger(
         subsystem: "com.yinfenglu.Notchline",
@@ -60,12 +64,18 @@ actor ClaudeDesktopFocusLogReader: DesktopDisplayedSessionReporting {
 
     private let url: URL
     private let fileManager: FileManager
+    private let clock: any MonitorClock
+    /// How long a statement outlives the log that made it (``statementExpired(at:)``).
+    private let statementLifetime: TimeInterval
     /// Next reading's offset and its file; `nil` before the first look (``seed(upTo:)``).
     private var offset: UInt64?
     private var fileNumber: UInt64?
     /// The last statement this app is willing to believe. A statement stands
     /// until Desktop makes another one: losing the file does not unsay it.
     private var current: DesktopDisplayedSession = .unknown
+    /// When the log first failed to be read, cleared by the next reading that succeeds. Only an
+    /// unbroken run of failures ages a statement out, so a rotation's gap costs nothing.
+    private var unreadableSince: Date?
 
     nonisolated static func liveLogURL(
         environment: [String: String] = ProcessInfo.processInfo.environment,
@@ -80,10 +90,15 @@ actor ClaudeDesktopFocusLogReader: DesktopDisplayedSessionReporting {
 
     init(
         logURL: URL = ClaudeDesktopFocusLogReader.liveLogURL(),
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        clock: any MonitorClock = SystemMonitorClock(),
+        statementLifetime: TimeInterval =
+            MonitorTiming.standard.displayedSessionStatementLifetime
     ) {
         self.url = logURL
         self.fileManager = fileManager
+        self.clock = clock
+        self.statementLifetime = statementLifetime
     }
 
     func displayedSession() async -> DesktopDisplayedSession {
@@ -92,8 +107,10 @@ actor ClaudeDesktopFocusLogReader: DesktopDisplayedSessionReporting {
             // back is read from its current end rather than replayed.
             offset = nil
             fileNumber = nil
+            if statementExpired(at: clock.now()) { current = .unknown }
             return current
         }
+        unreadableSince = nil
 
         if let offset, fileNumber == revision.fileNumber, offset <= revision.size {
             let start = max(offset, Self.floor(under: revision.size))
@@ -110,6 +127,29 @@ actor ClaudeDesktopFocusLogReader: DesktopDisplayedSessionReporting {
         }
         fileNumber = revision.fileNumber
         return current
+    }
+
+    /// Whether the log has now been unreadable for longer than a statement may outlive it.
+    ///
+    /// Desktop going quiet is not Desktop retracting what it said, so the first failures change
+    /// nothing. But a log that is never coming back — deleted, or replaced under a process still
+    /// holding the old file, as Claude Desktop `2.2553.1` did on 2026-09-19 — leaves a statement
+    /// naming whichever session was on screen that minute, and that statement vetoes
+    /// ``ClaudeCodeReadEvidence``'s three Desktop routes for every session but itself. The row
+    /// then retires only on a fresh `lastFocusedAt`, which is the user leaving the session and
+    /// coming back. Expiring to ``DesktopDisplayedSession/unknown`` hands the question back to
+    /// the records, which is this reader's documented worst case.
+    private func statementExpired(at now: Date) -> Bool {
+        guard let unreadableSince else {
+            self.unreadableSince = now
+            return false
+        }
+        // A clock that has gone backwards restarts the run rather than expiring early.
+        guard now >= unreadableSince else {
+            self.unreadableSince = now
+            return false
+        }
+        return now.timeIntervalSince(unreadableSince) >= statementLifetime
     }
 
     /// The one thing the tail written before this app looked is allowed to say.

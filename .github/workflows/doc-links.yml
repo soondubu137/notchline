@@ -1,0 +1,25 @@
+# Every relative link in the tracked Markdown must resolve on GitHub. Same check as
+# `scripts/check-doc-links.py` run locally; external links are not fetched.
+name: Doc links
+
+# No paths filter: renaming a Swift file breaks the docs that link to it.
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Pinned to a commit: a tag can be moved to other code.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check relative links
+        run: python3 scripts/check-doc-links.py

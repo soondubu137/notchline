@@ -17,6 +17,38 @@ Versions are `major.minor.patch` under [semantic versioning](https://semver.org)
 - No exact terminal window/tab/Thread selection or cold-start recovery. Remote/daemon/agents, exec/SDK/piped runs, SSH/tmux/screen, custom homes and unrecognised invocations are excluded.
 - Native CLI acceptance remains based on 0.154.0. Asynchronous questions, additional permission forms, automatic-review mode, subagent variants and authenticated CLI quota behaviour have no independent acceptance claim. [Complete scope](docs/product-support.md#51-local-codex-cli).
 
+## 0.5.5 Beta — 2026-09-19
+
+**A finished Claude Code row in Claude Desktop retires when you read it again, instead of waiting for you to switch to another session and back.** (`docs/tech-design.md` §1.5.2.)
+
+### Fixed
+
+- **A row that was on screen when its Turn finished never retired.** Claude Desktop `2.2553.1` replaced its own log directory while still writing to the file it had open, so that log stopped existing by path — no rotation Notchline could see. Notchline kept the log's last word on which session was on screen for ever, and it then spoke against every other session. A statement now expires after 30 seconds without a readable log.
+
+### Known limitations
+
+- **A row can still retire while you type in a new session's composer.** With the log gone, which session is on screen comes from Claude Desktop's records alone, and they note a session being put on screen but never taken off. That is the behaviour from before Notchline read the log, and it lasts only as long as the log is missing: restarting Claude Desktop brings the full reading back.
+- **Not watched on the notch.** The missing log was measured on one Mac and the fix is covered by unit tests. Nobody has watched a row retire on screen since it landed.
+
+Everything listed under `0.5.4` and earlier still stands, unchanged.
+
+## 0.5.4 Beta — 2026-09-16
+
+**Trae rows you have already read stay gone when your Mac wakes up, and the panel no longer stutters while a finished row waits to be read.** (`docs/trae-integration.md`.)
+
+### Fixed
+
+- **Trae rows you had read came back after sleep.** Closing the lid drops the connection to Trae's companion. On waking, rows read the day before returned as finished and unread, and reading them again did not clear them. Notchline now remembers that a row was read for as long as it is tracking that Turn, and no longer asks Trae to send back Threads whose rows are over.
+- **The panel stuttered while a finished row waited to be read.** Every refresh redrew the whole overlay once per product, even when nothing had changed — once a second, for as long as a row waited. Expanding on hover and collapsing both stuttered. The overlay is now redrawn only when something it draws has actually changed.
+- **Trae monitoring could stop for good after a long run.** Each reconnect asked Trae's companion for every Thread seen since Trae started. Past 128 the companion refused the request and Notchline retried it unchanged, so waking left Trae unobserved until Trae or Notchline restarted. A reconnect now asks only for the Threads a row still needs.
+
+### Known limitations
+
+- **Not reproduced on a sleeping Mac.** All three were found and fixed from a report and from the code, and are covered by tests that drive the real companion socket. Nobody has watched a lid close and open. Why reading a returned row inside Trae did not clear it is still unexplained.
+- **A reconnect keeps at most 96 Trae Threads.** Beyond that, the oldest rows still waiting to be read lose their text after a reconnect, rather than Trae monitoring going dark.
+
+Everything listed under `0.5.3` and earlier still stands, unchanged.
+
 ## 0.5.3 Beta — 2026-09-15
 
 **A long answer typed on the notch now stays inside its field.** The field grows a line at a time up to four lines, then scrolls. (`docs/answer-in-notch.md` §7.1.)
