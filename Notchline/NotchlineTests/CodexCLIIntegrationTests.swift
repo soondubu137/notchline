@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import os
 import Testing
 @testable import Notchline
 
@@ -668,16 +669,144 @@ struct CodexCLIIntegrationTests {
         let home = URL(fileURLWithPath: "/Users/someone")
         let environment = ["PATH": "/usr/bin:/opt/custom/bin"]
         let directories = ProductInstallationDiscovery.commandDirectories(home: home, environment: environment)
-        let candidates = CodexExecutableLocator.candidates(home: home, environment: environment)
+        // No manifest is read, so what is installed on this machine cannot change the list.
+        let candidates = CodexExecutableLocator.candidates(home: home, environment: environment, readFile: { _ in nil })
 
-        let desktop = candidates.prefix(2).map(\.path)
-        #expect(desktop == ["/Applications/ChatGPT.app/Contents/Resources/codex",
+        let desktop = candidates.prefix(4).map(\.path)
+        #expect(desktop == ["/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+                            "/Applications/ChatGPT.app/Contents/Resources/codex",
+                            "/Applications/Codex.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
                             "/Applications/Codex.app/Contents/Resources/codex"],
-            "Desktop's own build answers for Desktop's App Server, and stays first")
-        #expect(Array(candidates.dropFirst(2)) == directories.map { $0.appendingPathComponent("codex") },
+            "Desktop's own build answers for Desktop's App Server, current layout before the old one, and stays first")
+        #expect(Array(candidates.dropFirst(4)) == directories.map { $0.appendingPathComponent("codex") },
             "everything after it is the shared list, in the shared order")
         #expect(!directories.contains { $0.path.hasPrefix("/Applications/") },
             "a Desktop bundle is not a CLI install and is never offered as one")
+    }
+
+    /// Desktop 26.924.20706 stopped shipping `Contents/Resources/codex` and packaged its CLI as
+    /// `Contents/Resources/codex-cli`, running the binary in the package's nested `CodexCLI.app`
+    /// directly. That binary is chosen first, as Desktop chooses it; the launcher the package's
+    /// manifest names is next, for a package that moves its insides and keeps its manifest; the
+    /// single binary of every earlier release is last. MEASUREMENT: the manifest below is the one
+    /// 26.924.20706 ships, byte for byte.
+    @Test func desktopsCLIIsFoundInEveryLayoutDesktopHasShipped() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nc-pkg-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let application = root.appendingPathComponent("ChatGPT.app")
+        let resources = application.appendingPathComponent("Contents/Resources")
+        let package = resources.appendingPathComponent("codex-cli")
+        let binary = package.appendingPathComponent("CodexCLI.app/Contents/MacOS/codex")
+        let launcher = package.appendingPathComponent("bin/codex")
+        let legacy = resources.appendingPathComponent("codex")
+        for executable in [binary, launcher, legacy] {
+            try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(),
+                                                    withIntermediateDirectories: true)
+            try "#!/bin/sh\n".write(to: executable, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executable.path)
+        }
+        try """
+            {
+              "layoutVersion": 1,
+              "version": "0.158.0-alpha.2",
+              "target": "aarch64-apple-darwin",
+              "variant": "codex",
+              "entrypoint": "bin/codex",
+              "resourcesDir": "codex-resources",
+              "pathDir": "codex-path"
+            }
+
+            """.write(to: package.appendingPathComponent("codex-package.json"), atomically: true, encoding: .utf8)
+
+        let candidates = { CodexExecutableLocator.desktopExecutables(in: application) { try? Data(contentsOf: $0) } }
+        let chosen = { candidates().first { FileManager.default.isExecutableFile(atPath: $0.path) } }
+        #expect(candidates() == [binary, launcher, legacy])
+        #expect(chosen() == binary, "the binary Desktop itself runs, not the launcher in front of it")
+        try FileManager.default.removeItem(at: binary)
+        #expect(chosen() == launcher, "a package whose binary moved is still run through its own launcher")
+        try FileManager.default.removeItem(at: package)
+        #expect(candidates() == [binary, legacy], "no manifest, no launcher")
+        #expect(chosen() == legacy, "a Desktop from before the package still has its single binary")
+        try FileManager.default.removeItem(at: legacy)
+        #expect(chosen() == nil)
+    }
+
+    /// The manifest is Desktop's private file and is read as strictly as any other: the one layout
+    /// measured, a path inside the package, or nothing. Nothing is not a failure — the search moves
+    /// on to the next candidate rather than guessing at a launcher.
+    @Test func aPackageManifestNamesALauncherOnlyInTheLayoutMeasured() {
+        let application = URL(fileURLWithPath: "/Applications/ChatGPT.app")
+        let package = application.appendingPathComponent("Contents/Resources/codex-cli")
+        func entrypoint(_ manifest: String) -> URL? {
+            CodexExecutableLocator.entrypoint(ofPackage: package, manifest: Data(manifest.utf8))
+        }
+        #expect(entrypoint(#"{"layoutVersion":1,"entrypoint":"bin/codex"}"#)?.path
+            == "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex")
+
+        let refused = [
+            (#"{"layoutVersion":2,"entrypoint":"bin/codex"}"#, "a layout never measured"),
+            (#"{"entrypoint":"bin/codex"}"#, "no layout"),
+            (#"{"layoutVersion":"1","entrypoint":"bin/codex"}"#, "a layout that is not a number"),
+            (#"{"layoutVersion":true,"entrypoint":"bin/codex"}"#, "a layout that is not a number"),
+            (#"{"layoutVersion":1}"#, "no entrypoint"),
+            (#"{"layoutVersion":1,"entrypoint":7}"#, "an entrypoint that is not a path"),
+            (#"{"layoutVersion":1,"entrypoint":""}"#, "an empty entrypoint"),
+            (#"{"layoutVersion":1,"entrypoint":"/bin/sh"}"#, "an absolute path"),
+            (#"{"layoutVersion":1,"entrypoint":"../codex"}"#, "a path out of the package"),
+            (#"{"layoutVersion":1,"entrypoint":"bin/../../../MacOS/ChatGPT"}"#, "a path out of the package"),
+            (#"{"layoutVersion":1,"entrypoint":"./bin/codex"}"#, "a path that is not written plainly"),
+            (#"{"layoutVersion":1,"entrypoint":"bin//codex"}"#, "a path that is not written plainly"),
+            (#"{"layoutVersion":1,"entrypoint":"bin/"}"#, "a directory"),
+            ("[]", "not an object"),
+            (#"{"layoutVersion":1,"entrypoint":"bin/codex""#, "a truncated file"),
+            ("", "an empty file")
+        ]
+        for (manifest, reason) in refused {
+            #expect(entrypoint(manifest) == nil, "\(reason): \(manifest)")
+        }
+
+        let binary = package.appendingPathComponent("CodexCLI.app/Contents/MacOS/codex")
+        let legacy = application.appendingPathComponent("Contents/Resources/codex")
+        #expect(CodexExecutableLocator.desktopExecutables(in: application) { _ in nil } == [binary, legacy],
+            "an absent manifest adds nothing")
+        #expect(CodexExecutableLocator.desktopExecutables(in: application) { _ in
+            Data(#"{"layoutVersion":2,"entrypoint":"bin/codex"}"#.utf8)
+        } == [binary, legacy], "nor does one this app cannot read")
+        #expect(CodexExecutableLocator.desktopExecutables(in: application) { _ in
+            Data(#"{"layoutVersion":1,"entrypoint":"CodexCLI.app/Contents/MacOS/codex"}"#.utf8)
+        } == [binary, legacy], "a manifest naming the binary itself does not list it twice")
+    }
+
+    /// A Desktop update can move its `codex` while this app runs — 26.924.20706 did — so the App
+    /// Server's executable is looked up at every connect. One found once at launch would fail every
+    /// reconnect after such an update, until this app was relaunched.
+    @Test func theAppServerExecutableIsLookedUpAtEveryConnect() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nc-loc-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let installed = OSAllocatedUnfairLock<URL?>(initialState: nil)
+        let client = CodexAppServerClient(executableURL: installed.withLock { $0 })
+
+        await #expect(throws: CodexAppServerError.executableNotFound) { try await client.connect() }
+
+        let server = root.appendingPathComponent("codex")
+        try #"""
+            #!/usr/bin/python3
+            import json
+            import sys
+
+            for line in sys.stdin:
+                request = json.loads(line)
+                if "id" in request:
+                    print(json.dumps({"id": request["id"], "result": {}}), flush=True)
+            """#.write(to: server, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: server.path)
+        installed.withLock { $0 = server }
+
+        try await client.connect()
+        await client.disconnect()
     }
 
     /// A CLI shipped on npm lands wherever the user's package or version manager keeps binaries,

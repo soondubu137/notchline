@@ -160,7 +160,13 @@ enum CodexAppServerError: LocalizedError, Equatable, Sendable {
 
 enum CodexExecutableLocator {
     /// An override for tests and for a user whose install is somewhere unusual.
-    static let overrideEnvironmentKey = "NOTCHLINE_CODEX_PATH"
+    nonisolated static let overrideEnvironmentKey = "NOTCHLINE_CODEX_PATH"
+
+    /// Codex Desktop under each name it has shipped as, current first.
+    nonisolated static let desktopApplications = [
+        URL(fileURLWithPath: "/Applications/ChatGPT.app"),
+        URL(fileURLWithPath: "/Applications/Codex.app")
+    ]
 
     /// Desktop ships its own `codex`, and it is preferred for the App Server because it is the
     /// build the running Desktop was released with. Everything after it is
@@ -173,20 +179,51 @@ enum CodexExecutableLocator {
     /// Turns get rows.
     nonisolated static func candidates(
         home: URL,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        readFile: (URL) -> Data? = { try? Data(contentsOf: $0) }
     ) -> [URL] {
         var candidates: [URL] = []
         if let override = environment[overrideEnvironmentKey], !override.isEmpty {
             candidates.append(URL(fileURLWithPath: override))
         }
-        candidates += [
-            URL(fileURLWithPath: "/Applications/ChatGPT.app/Contents/Resources/codex"),
-            URL(fileURLWithPath: "/Applications/Codex.app/Contents/Resources/codex")
-        ]
+        candidates += desktopApplications.flatMap { desktopExecutables(in: $0, readFile: readFile) }
         candidates += ProductInstallationDiscovery
             .commandDirectories(home: home, environment: environment)
             .map { $0.appendingPathComponent("codex") }
         return candidates
+    }
+
+    /// Desktop's own `codex` in each layout it has shipped, current first.
+    ///
+    /// Since 26.924.20706 (measured 2026-09-26) the CLI is a package, `Contents/Resources/codex-cli`,
+    /// whose binary sits in a nested bundle of its own (`com.openai.codex.cli`). Desktop runs that
+    /// binary directly from a path fixed in its own code, never reading the package's manifest, so
+    /// it comes first here and the App Server this app starts is the same file as Desktop's. The
+    /// manifest's `entrypoint` — a `/bin/sh` launcher that `exec`s that same binary — follows it,
+    /// for a package whose insides move while its manifest stays readable. Last is the single
+    /// `Contents/Resources/codex` every earlier release shipped.
+    nonisolated static func desktopExecutables(in application: URL, readFile: (URL) -> Data?) -> [URL] {
+        let resources = application.appendingPathComponent("Contents/Resources")
+        let package = resources.appendingPathComponent("codex-cli")
+        let binary = package.appendingPathComponent("CodexCLI.app/Contents/MacOS/codex")
+        var executables = [binary]
+        if let manifest = readFile(package.appendingPathComponent("codex-package.json")),
+           let entrypoint = entrypoint(ofPackage: package, manifest: manifest), entrypoint != binary {
+            executables.append(entrypoint)
+        }
+        return executables + [resources.appendingPathComponent("codex")]
+    }
+
+    /// The launcher a CLI package's manifest names, read only in the one layout measured
+    /// (`layoutVersion` 1) and only inside the package: a manifest that does not decode, an
+    /// unknown layout, or a path that is absolute or climbs out of the package names nothing.
+    nonisolated static func entrypoint(ofPackage package: URL, manifest: Data) -> URL? {
+        guard let decoded = try? JSONDecoder().decode(CodexPackageManifest.self, from: manifest),
+              decoded.layoutVersion == 1,
+              decoded.entrypoint.split(separator: "/", omittingEmptySubsequences: false)
+                  .allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." })
+        else { return nil }
+        return package.appendingPathComponent(decoded.entrypoint)
     }
 
     nonisolated static func locate(
@@ -196,6 +233,13 @@ enum CodexExecutableLocator {
         candidates(home: fileManager.homeDirectoryForCurrentUser, environment: environment)
             .first { fileManager.isExecutableFile(atPath: $0.path) }
     }
+}
+
+/// The two fields of Desktop's `codex-cli/codex-package.json` this app reads; `version`,
+/// `target`, `resourcesDir` and `pathDir` are left to Desktop.
+nonisolated private struct CodexPackageManifest: Decodable {
+    let layoutVersion: Int
+    let entrypoint: String
 }
 
 struct NewlineDelimitedMessageBuffer {
@@ -341,7 +385,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
         let continuation: CheckedContinuation<JSONValue, Error>
     }
 
-    private let executableURL: URL?
+    private let executableURL: @Sendable () -> URL?
     private let requestTimeoutNanoseconds: UInt64
     private let livenessProbeGraceNanoseconds: UInt64
     private let livenessProbeTimeoutNanoseconds: UInt64
@@ -363,8 +407,11 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
     private var livenessProbeTask: Task<Void, Never>?
     private var livenessProbeID = 0
 
+    /// `executableURL` is evaluated at every connect rather than once here: a Desktop update can
+    /// move its bundled `codex` while this app runs (26.924.20706 did), and a path found before it
+    /// would fail every reconnect after it.
     init(
-        executableURL: URL? = CodexExecutableLocator.locate(),
+        executableURL: @autoclosure @escaping @Sendable () -> URL? = CodexExecutableLocator.locate(),
         requestTimeoutNanoseconds: UInt64 = 15_000_000_000,
         livenessProbeGraceNanoseconds: UInt64 = 3_000_000_000,
         livenessProbeTimeoutNanoseconds: UInt64 = 5_000_000_000,
@@ -393,7 +440,7 @@ actor CodexAppServerClient: CodexAppServerCommunicating {
             break
         }
 
-        guard let executableURL else {
+        guard let executableURL = executableURL() else {
             throw CodexAppServerError.executableNotFound
         }
 

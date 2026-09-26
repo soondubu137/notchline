@@ -134,7 +134,7 @@ flowchart LR
     hookRegistrar -->|"overwrites only when bytes differ"| hookHelper
 
     executableLocator -->|"locates the executable URL"| codexBinary
-    executableLocator -->|"injects executableURL"| appServerClient
+    executableLocator -->|"answers executableURL at every connect"| appServerClient
     codexBinary -->|"executed by Process"| appServerProcess
     appServerClient -->|"launches and manages the subprocess"| appServerProcess
     appServerProcess -->|"stdout byte stream"| streamPump
@@ -186,7 +186,7 @@ Boundary classification:
 | --- | --- | --- |
 | Officially public | Hooks lifecycle; the App Server protocol and its **six** public read-only methods (`account/read`, `account/rateLimits/read`, `account/usage/read`, `thread/list`, `thread/loaded/list`, `thread/read` — the last always with `includeTurns: false`); `codex://threads/{threadId}` | Used as the primary integration contract |
 | Registered experimental App Server method | `thread/items/list` (scoped to this Turn, descending, `limit: 6`, taking only the newest `agentMessage.text`) — the seventh method the client speaks | Only for the current progress on a Running row; absent from the schema without `--experimental`, so registered as a non-public dependency. `-32601` (method absent, or that thread's `historyMode` is `legacy`) is **recorded per thread**, that row falls back to the prompt preview, and other rows are unaffected |
-| Registered non-public dependencies | Desktop Project/unread schema, the executable path inside the Desktop bundle, the Desktop bundle identifier | Read-only or discovery-only; fail closed on failure; keep the non-public feature registry in sync |
+| Registered non-public dependencies | Desktop Project/unread schema, the executable paths inside the Desktop bundle and its CLI package manifest, the Desktop bundle identifier | Read-only or discovery-only; fail closed on failure; keep the non-public feature registry in sync |
 | Internal to the app | The hook helper, socket, `install.json`, reducer, caches, snapshot and UI store | `install.json`'s `lastEventAt` answers only "has a hook ever executed successfully" and never proves anything about the current runtime, and its `eventsAwaitingTrust` answers only "which definitions did this app rewrite and not see fire since"; Turn state, thread identity, previews and caches exist **only** in memory — there is no event queue, so there are no events awaiting consumption ([ADR 0015](adr/0015-hook-events-go-straight-into-the-reducer.md)) |
 
 ## 2. The core refresh sequence
