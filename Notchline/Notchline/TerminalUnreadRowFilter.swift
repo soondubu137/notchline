@@ -25,7 +25,7 @@ nonisolated struct ReadEvidenceJudgement: Sendable {
 }
 
 /// A product's evidence that a finished row was read; ``TerminalUnreadRowFilter`` owns the rest.
-protocol ReadEvidenceSource: Sendable {
+nonisolated protocol ReadEvidenceSource: Sendable {
     /// Whether there is a screen the answer could be read on. A waiting row's re-check is deferred
     /// while there is none; this stream's edge restarts it.
     nonisolated var screen: any ScreenAvailabilityReporting { get }

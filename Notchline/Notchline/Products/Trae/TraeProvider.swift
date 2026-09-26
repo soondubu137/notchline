@@ -107,7 +107,6 @@ nonisolated final class TraeSource: MonitoringLifecycleSource, ProductSessionRea
     private var productPID: Int32?
     private var installedIntoPID: Int32?
     private let presence: RunningApplicationPresence
-    @MainActor
     init(installation: TraeInstallation) {
         self.installedLocation = installation
         presence = RunningApplicationPresence(bundleIdentifiers: ["com.trae.app"])

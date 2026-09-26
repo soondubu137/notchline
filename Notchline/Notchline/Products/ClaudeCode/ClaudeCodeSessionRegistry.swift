@@ -62,7 +62,7 @@ nonisolated struct ClaudeCodeActivity: Sendable, Equatable {
 /// interrupt produces (CC-019, #38), and what retires a row whose session died, since
 /// `SessionEnd` is not registered (``ClaudeCodeHookVocabulary``). This app's quota reading
 /// also reports `kind: "interactive"`; only its directory tells it apart.
-protocol ClaudeCodeSessionListing: ProductPresenceReporting {
+nonisolated protocol ClaudeCodeSessionListing: ProductPresenceReporting {
     func liveSessions() async -> [ClaudeCodeSession]
     /// Whether Claude Code is open at all; for a CLI the session list is the presence signal.
     func presence() async -> AgentPresence

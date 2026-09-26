@@ -5,7 +5,7 @@ import Foundation
 
 /// One product's observation boundary, reduced to what the store needs. The one contract every
 /// product implements (L1 in `docs/product-support.md` §2).
-protocol AgentMonitoring: Sendable {
+nonisolated protocol AgentMonitoring: Sendable {
     nonisolated var agent: AgentKind { get }
     /// Edges that mean "ask me again", merged by the store into one wake-up stream, so a slow
     /// provider does not hold up a fast one.
@@ -34,7 +34,7 @@ extension AgentMonitoring {
 
 /// A product whose observation has to be put in place (hook registration) and reports how
 /// complete it is.
-protocol IntegrationConfiguring: Sendable {
+nonisolated protocol IntegrationConfiguring: Sendable {
     func setupStatus() async -> IntegrationSetupStatus
     func installIntegration() async throws
     func removeIntegration() async throws
@@ -61,7 +61,7 @@ struct AnswerHandle: Hashable, Sendable {
 }
 
 /// A product whose requests can be answered from the notch (L6 for its declared request forms).
-protocol AnswerDelivering: Sendable {
+nonisolated protocol AnswerDelivering: Sendable {
     /// Sends one answer down the connection its request arrived on (``AnswerOutcome``). The attempt
     /// spends the handle whatever the outcome, except an operation the channel does not carry.
     func answer(_ answer: AgentAnswer, on handle: AnswerHandle) async -> AnswerOutcome
@@ -72,7 +72,7 @@ protocol AnswerDelivering: Sendable {
 /// Composed by the Provider, not read by the store: Claude Code uses ``ClaudeCodeUsageReader``,
 /// Codex ``CodexUsageReader``. A product with none publishes ``QuotaSnapshot/noneReported``
 /// (`quota-footer-v2.md` §5).
-protocol UsageReading: Sendable {
+nonisolated protocol UsageReading: Sendable {
     /// What is known now. Never waits for a read.
     func currentQuota() async -> QuotaSnapshot
     /// Starts a read if the figures are stale and a screen could show them; a landed read
@@ -86,6 +86,6 @@ protocol UsageReading: Sendable {
 
 /// A product whose monitoring leaves files on disk. Reporting only: nothing here deletes them,
 /// since the folder can hold the user's own sessions. Answers even before it can measure.
-protocol DiskFootprintReporting: Sendable {
+nonisolated protocol DiskFootprintReporting: Sendable {
     func diskFootprint() async -> AgentDiskFootprintReport
 }

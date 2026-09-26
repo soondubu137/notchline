@@ -1,7 +1,7 @@
 import AppKit
 import Foundation
 
-protocol CodexNavigationTargetChecking: Sendable {
+nonisolated protocol CodexNavigationTargetChecking: Sendable {
     func isThreadNavigable(_ threadID: String) async throws -> Bool
 }
 

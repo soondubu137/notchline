@@ -353,7 +353,7 @@ nonisolated protocol HookPayloadTranslating: Sendable {
 }
 
 /// How one product's lifecycle events are spelled.
-protocol AgentHookVocabulary: Sendable {
+nonisolated protocol AgentHookVocabulary: Sendable {
     nonisolated var agent: AgentKind { get }
     /// Every definition must map to a signal (tested).
     nonisolated var managedDefinitions: [ManagedHookDefinition] { get }

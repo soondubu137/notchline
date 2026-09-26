@@ -10,7 +10,7 @@ nonisolated enum MonitoringSourceGate: Sendable {
     )
 }
 
-protocol MonitoringLifecycleSource: Sendable {
+nonisolated protocol MonitoringLifecycleSource: Sendable {
     var repository: MonitoringRepository { get }
     func gate(productName: String) async -> MonitoringSourceGate
     func disconnect()

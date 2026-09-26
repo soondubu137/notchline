@@ -112,6 +112,7 @@ The full list lives in [`docs/system-architecture.md`](docs/system-architecture.
 - **Failures fail closed.** A parse failure is never reported as a valid empty value, as `Chats`, or as any other success. Thread status holds its last trustworthy value; only an unresponsive App Server justifies global Disconnected.
 - **Editing the user's files parses, never coerces.** Touch only the keys this app manages and preserve structures you do not understand.
 - **Order-sensitive state machines stay on the queue that serialises them** (byte-stream framing) — not in an actor. CPU-heavy decoding does not stay on an actor, where it would block timeout and connection management.
+- **A `Sendable` protocol is a `nonisolated protocol`.** Under the target's MainActor default isolation an unmarked one runs its struct and class conformers on the main thread, and Swift 6.4 exports it as MainActor, so no actor outside the module can conform. Nothing fails inside the app module. A conformer that needs the main actor annotates that itself (`RunningApplicationPresence`'s workspace read).
 
 ## 7. Overlay rendering: the most expensive class of mistake here
 

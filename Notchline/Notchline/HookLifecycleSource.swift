@@ -2,7 +2,7 @@ import Foundation
 
 /// What writes a product's hook registration and helper: ``ManagedHooksSetup``, or
 /// ``CodexHookRegistrar`` for content-hashed trust (ADR 0014).
-protocol HookRegistrationSetup: Sendable {
+nonisolated protocol HookRegistrationSetup: Sendable {
     /// Where the helper hands each payload, and where the listener binds.
     nonisolated var socketURL: URL { get }
     /// Says whether the socket is worth binding. Codex compares the helper once per launch.

@@ -5,7 +5,7 @@ import Foundation
 // §5.4). Read evidence, usage and transport shapes live beside their implementations.
 
 /// Whether a product is open, as the user would judge it (``AgentPresence``).
-protocol ProductPresenceReporting: Sendable {
+nonisolated protocol ProductPresenceReporting: Sendable {
     func presence() async -> AgentPresence
 }
 
@@ -65,7 +65,7 @@ enum ThreadAdmission: Sendable, Equatable {
     case unknown
 }
 
-protocol ThreadAdmitting: Sendable {
+nonisolated protocol ThreadAdmitting: Sendable {
     func admission() async -> ThreadAdmission
 }
 
@@ -89,7 +89,7 @@ nonisolated struct SessionReading: Sendable, Equatable {
 
 /// A product's presence and admission, read together once per refresh so both come from one
 /// list (two reads could straddle a change). Separate sources use ``SeparateSessionReading``.
-protocol ProductSessionReading: Sendable {
+nonisolated protocol ProductSessionReading: Sendable {
     /// One reading for this refresh.
     ///
     /// - Parameter state: The Turns the reducer holds after the drain, for a product whose list can
@@ -116,7 +116,7 @@ struct SeparateSessionReading: ProductSessionReading {
 ///
 /// It hands facts to the reducer and decides nothing: a source may end a Turn, close a wait or
 /// settle which Turn a thread is on, never open, name or describe one.
-protocol TurnEvidenceSource: Sendable {
+nonisolated protocol TurnEvidenceSource: Sendable {
     /// Ordered readings, so a record-confirmed held start applies before termination is asked.
     /// Sources receive values, never a reducer.
     nonisolated var phases: [TurnEvidencePhase] { get }
@@ -144,7 +144,7 @@ nonisolated struct RowContent: Sendable, Equatable {
 
 /// A product's project, title and line for each Turn, and whether a Turn draws a row at all;
 /// everything else on a row is the reducer's.
-protocol RowContentSource: Sendable {
+nonisolated protocol RowContentSource: Sendable {
     /// Content for each Turn that draws a row, keyed by Thread. A Turn with no entry draws none.
     func content(
         for turns: [MonitoredTurnState],
