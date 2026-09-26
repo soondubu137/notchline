@@ -11,6 +11,9 @@ enum CodexNavigationError: LocalizedError, Equatable {
     /// No live execution owns the Thread any more, on either surface. Distinct from
     /// ``targetUnavailable``, which is Codex answering that the Thread itself is gone.
     case sessionEnded
+    /// The Thread is live in Codex's shared background server, which cannot say which terminal
+    /// shows it.
+    case terminalUnknown
     case validationFailed
     case desktopUnavailable
     case openRejected
@@ -23,6 +26,8 @@ enum CodexNavigationError: LocalizedError, Equatable {
             "That session has been archived, deleted, or is no longer available."
         case .sessionEnded:
             "That session has ended and can no longer be opened."
+        case .terminalUnknown:
+            "Codex runs that session in its background server, which does not say which terminal is showing it."
         case .validationFailed:
             "Could not confirm that the session still exists; please try again shortly."
         case .desktopUnavailable:

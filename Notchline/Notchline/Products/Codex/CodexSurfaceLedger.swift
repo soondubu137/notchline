@@ -44,7 +44,10 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
         //
         // So a terminal's request is read here and answered there, and the cost is bounded: `nc`
         // returns 22 ms after this app closes (measured 2026-09-15), the same as if it were closed.
-        let replyDescriptor: Int32? = owner.surface == .cli ? nil : descriptor
+        // The background server is the same case one process removed: it runs the Hook, in the same
+        // engine, before any attached TUI hears of the request, so holding it would take that TUI's
+        // prompt away too. (Read from the engine, not measured in this mode: the probe had no model.)
+        let replyDescriptor: Int32? = owner.surface.isCLI ? nil : descriptor
         // No identity or no supported kind: this ledger can book no ownership from it, but the
         // repository's boundary already counts an unreadable payload and an unsupported kind under
         // sentences of their own. Short-circuiting here is what lost them.
@@ -131,7 +134,7 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
         // Both read `owners`, which the line above has already cut to executions still alive: an
         // owner is a kernel fact (pid *and* start time), so it is stronger evidence that a surface
         // is open than any application listing, and it cannot outlive the process it names.
-        let anyCLI = !discovered.isEmpty || owners.values.contains { $0.contains { $0.surface == .cli } }
+        let anyCLI = !discovered.isEmpty || owners.values.contains { $0.contains(where: \.surface.isCLI) }
         let anyDesktop = owners.values.contains { $0.contains { $0.surface == .desktop } }
         return Reading(
             threadIDs: Set(owners.keys),
@@ -144,12 +147,12 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
         lock.lock(); defer { lock.unlock() }
         // A Thread active on both surfaces has no unique terminal read authority.
         let live = owners[thread, default: []]
-        return !live.isEmpty && live.allSatisfy { $0.surface == .cli }
+        return !live.isEmpty && live.allSatisfy(\.surface.isCLI)
     }
 
     func hasCLI(_ thread: String) -> Bool {
         lock.lock(); defer { lock.unlock() }
-        return owners[thread, default: []].contains { $0.surface == .cli }
+        return owners[thread, default: []].contains(where: \.surface.isCLI)
     }
 
     /// Which surface can be raised for this Thread **right now**, or nil when none can.
@@ -161,12 +164,15 @@ nonisolated final class CodexSurfaceLedger: SessionProcessLocating, @unchecked S
     /// Desktop case. An owner that has exited is gone on either surface, and is said so once here.
     ///
     /// Desktop answers for a Thread open on both: a Thread this app can deep-link is not navigated
-    /// by raising a terminal that also holds it.
+    /// by raising a terminal that also holds it. A terminal answers before the background server,
+    /// which has none to raise: `.backgroundServer` means the Thread is live and nothing here can
+    /// say which window shows it.
     func navigableSurface(ofThread thread: String) -> CodexExecution.Surface? {
         lock.lock(); defer { lock.unlock() }
         let live = owners[thread, default: []].filter(source.isAlive)
         if live.contains(where: { $0.surface == .desktop }) { return .desktop }
-        return live.isEmpty ? nil : .cli
+        if live.contains(where: { $0.surface == .cli }) { return .cli }
+        return live.isEmpty ? nil : .backgroundServer
     }
 
     func processIdentifier(forThreadID threadID: String) async -> Int32? {

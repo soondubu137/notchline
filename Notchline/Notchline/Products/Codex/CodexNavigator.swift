@@ -24,6 +24,9 @@ final class CodexNavigator: AgentNavigating {
         switch surfaces.navigableSurface(ofThread: session.threadID) {
         case .desktop: return try await desktop.open(session)
         case .cli: return try await terminal.open(session)
+        // Its hooks come from a server any number of TUIs attach to, and nothing it reports names
+        // one; raising the terminal that started the server would raise another Thread's window.
+        case .backgroundServer: throw CodexNavigationError.terminalUnknown
         case nil: throw CodexNavigationError.sessionEnded
         }
     }

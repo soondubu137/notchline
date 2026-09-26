@@ -1,6 +1,8 @@
 # Codex CLI support — implementation plan and isolated evidence
 
 > **Historical preflight, superseded by the implementation.** As checked on 2026-09-22, ordinary local CLI support is implemented at **L5**: ordinary approvals and synchronous questions are read here and answered in the terminal. The proposed held approval channel and exact TTY navigation below are not current features. Conditional terminal-gesture read removal was added after the original current-view proposal was rejected. Native acceptance remains based on CLI 0.154.0; current coverage and remaining unverified variants live in [product support §5.1](../../product-support.md#51-local-codex-cli), with the implementation in [technical design](../../tech-design.md#codex-local-cli-boundary-2026-09-15). Home identity uses an open `state_5.sqlite` descriptor because the measured macOS version did not expose envp through `KERN_PROCARGS2`. The proposal and measurements below are retained as historical evidence, not outstanding implementation instructions.
+>
+> **The shared daemon deferred in §1 became the default in CLI 0.157.0**: a plain `codex` now runs its Turns in the background server, so the ownership gap that row names is live for every ordinary session. Since 2026-09-26 those Turns are attributed to the server itself rather than to a terminal; see [product support §5.1](../../product-support.md#51-local-codex-cli).
 
 
 

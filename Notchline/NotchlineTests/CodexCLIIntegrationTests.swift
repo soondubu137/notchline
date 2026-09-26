@@ -218,6 +218,93 @@ struct CodexCLIIntegrationTests {
         #expect(try await navigator.open(row) == .raisedApplication(host: "Terminal"))
     }
 
+    /// Since CLI 0.157.0 a plain `codex` hands its Turns to the shared background server, so every
+    /// hook of theirs comes from that server — measured on 0.157.1 with two TUIs attached to one.
+    /// The server owns the Thread: it kept a Turn running after the TUI that asked for it quit, and
+    /// said `SessionEnd` only once the Thread had sat idle with no TUI attached for its unload delay
+    /// (61 s). It has no terminal, so nothing is read or raised on its behalf.
+    @Test func aThreadTheBackgroundServerRunsIsOwnedByItAndNamesNoTerminal() async {
+        let server = CodexExecution(pid: 300, startedAt: now, surface: .backgroundServer, terminal: nil)
+        let alive = CLIProcessFixture([server])
+        let source = CodexSurfaceLedger(source: alive.source)
+        #expect(source.refresh(at: now).cliIsOpen == false,
+            "a server that owns nothing is not an open terminal: the inventory never lists it")
+
+        source.record(owner: server, thread: "one", event: "SessionStart")
+        #expect(source.admit(owner: server, thread: "one", turn: "t", event: "UserPromptSubmit"))
+        let reading = source.refresh(at: now)
+        #expect(reading.threadIDs == ["one"])
+        #expect(reading.cliIsOpen == true && !reading.desktopIsOpen)
+        #expect(source.isCLI("one") && source.hasCLI("one"),
+            "a CLI Turn wherever it runs: grouped by folder and never judged by Desktop's unread set")
+        #expect(source.navigableSurface(ofThread: "one") == .backgroundServer)
+        #expect(source.navigationProcess("one") == nil)
+        #expect(await source.processIdentifier(forThreadID: "one") == nil,
+            "the server's pid is no terminal: reading its device would read nothing, or somebody else's")
+
+        source.record(owner: server, thread: "one", event: "SessionEnd")
+        #expect(source.refresh(at: now).threadIDs.isEmpty, "unloading the Thread ends the server's ownership")
+        #expect(source.refresh(at: now).cliIsOpen == false)
+        source.record(owner: server, thread: "one", event: "SessionStart")
+        #expect(source.refresh(at: now).threadIDs == ["one"], "a TUI resuming it loads it back")
+        alive.replace([])
+        #expect(source.refresh(at: now).threadIDs.isEmpty, "a server that exits takes its Threads with it")
+    }
+
+    /// The server's parent is whichever TUI happened to start it, so raising "the terminal above
+    /// the executor" would raise another Thread's window. The click says why nothing was raised
+    /// instead, and it is not the sentence for a Thread that has ended.
+    @Test @MainActor func aBackgroundServerThreadRaisesNoTerminalAndSaysWhy() async throws {
+        let server = CodexExecution(pid: 300, startedAt: now, surface: .backgroundServer, terminal: nil)
+        let terminal = cli()
+        let ledger = CodexSurfaceLedger(source: CLIProcessFixture([server, terminal]).source)
+        ledger.record(owner: server, thread: "served", event: "SessionStart")
+        ledger.record(owner: terminal, thread: "local", event: "SessionStart")
+        let desktop = CLINavigatorFixture(outcome: .raisedApplication(host: "Codex"))
+        let host = CLINavigatorFixture(outcome: .raisedApplication(host: "Terminal"))
+        let navigator = CodexNavigator(surfaces: ledger, desktop: desktop, terminal: host)
+        func row(_ thread: String) -> MonitoredSession {
+            MonitoredSession(threadID: thread, turnID: "t", projectName: "work", title: "title",
+                preview: nil, status: .completed, startedAt: now)
+        }
+
+        await #expect(throws: CodexNavigationError.terminalUnknown) { try await navigator.open(row("served")) }
+        #expect(host.calls == 0 && desktop.calls == 0, "neither navigator is reached for the server's Thread")
+        #expect(try await navigator.open(row("local")) == .raisedApplication(host: "Terminal"),
+            "a TUI running its own Turns beside it still answers for them")
+        #expect(CodexNavigationError.terminalUnknown.errorDescription
+            != CodexNavigationError.sessionEnded.errorDescription, "a live Thread is not an ended one")
+    }
+
+    /// `--managed-daemon` is the server's own mark: the CLI's daemon launcher passes it and nothing
+    /// else does. Desktop's server listens on `stdio://`, and the daemon's updater runs no Turns.
+    @Test func theBackgroundServerIsKnownByItsOwnFlagAndIsNoTUI() {
+        for argv in [["codex", "app-server", "--listen", "unix://", "--managed-daemon"],
+                     ["codex", "app-server", "--remote-control", "--listen", "unix://", "--managed-daemon"],
+                     ["codex", "app-server", "--listen", "unix://", "-c", "features.code_mode_host=true",
+                      "--managed-daemon"],
+                     ["codex", "app-server", "--listen=unix://", "--managed-daemon"]] {
+            #expect(CodexNativeProcesses.isBackgroundServer(argv))
+            #expect(CodexNativeProcesses.isAppServer(argv))
+            #expect(!CodexNativeProcesses.isLocalTUI(argv))
+        }
+        for argv in [["codex", "app-server", "--listen", "stdio://"], ["codex", "app-server", "--listen", "unix://"],
+                     ["codex", "app-server", "daemon", "pid-update-loop"], ["codex", "app-server", "-c", "--managed-daemon"],
+                     ["codex", "--managed-daemon"], ["codex", "exec", "--managed-daemon"], ["codex"], []] {
+            #expect(!CodexNativeProcesses.isBackgroundServer(argv))
+        }
+
+        // Its home is where its binary lives: the launcher copies the CLI into the home's packages.
+        let home = URL(fileURLWithPath: "/Users/someone")
+        #expect(CodexNativeProcesses.isPackaged(
+            "/Users/someone/.codex/packages/app-server-daemon/releases/0.157.1-aarch64-apple-darwin/bin/codex", inHome: home))
+        #expect(CodexNativeProcesses.isPackaged("/Users/someone/.codex/packages/standalone/current/codex", inHome: home))
+        for path in ["/opt/homebrew/bin/codex", "/Users/elsewhere/.codex/packages/app-server-daemon/bin/codex",
+                     "/Users/someone/.codex/packages-old/bin/codex", "/Users/someone/.codex/packages"] {
+            #expect(!CodexNativeProcesses.isPackaged(path, inHome: home), "\(path) is not this home's server")
+        }
+    }
+
     /// A drop nobody counts is indistinguishable from "the hooks never fired", which is the one
     /// reading a user cannot act on. Provenance failure is the shape an unsupported home or mode
     /// arrives in, so it is the drop that has to be said out loud.
@@ -268,9 +355,10 @@ struct CodexCLIIntegrationTests {
     /// 2026-09-15). This drives the production listener over a real socket because the observable
     /// is the helper's connection: `nc` returns as soon as this end closes, which is what lets Codex
     /// ask in the terminal. Desktop has no terminal to ask in, so its connection is still handed
-    /// over and its row keeps the decision.
+    /// over and its row keeps the decision. The background server runs the Hook before any TUI
+    /// attached to it hears of the request, so its connection is freed exactly as a TUI's is.
     @Test func aTerminalsApprovalFreesTheHookWhileDesktopsIsStillHeld() async throws {
-        for surface in [CodexExecution.Surface.cli, .desktop] {
+        for surface in [CodexExecution.Surface.cli, .backgroundServer, .desktop] {
             let root = URL(fileURLWithPath: "/tmp")
                 .appendingPathComponent("nc-free-\(UUID().uuidString.prefix(8))")
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -312,8 +400,8 @@ struct CodexCLIIntegrationTests {
                 "hook_event_name": "PermissionRequest", "session_id": "s-1", "turn_id": "t-1",
                 "tool_name": "Bash", "tool_input": ["command": "rm /tmp/x"]
             ]))
-            #expect(asking.waitForClose() == (surface == .cli),
-                "a \(surface) approval's connection should \(surface == .cli ? "close" : "stay open")")
+            #expect(asking.waitForClose() == surface.isCLI,
+                "a \(surface) approval's connection should \(surface.isCLI ? "close" : "stay open")")
 
             let reading = await eventuallyDrained(repository) { $0.requestAwaitingAnAnswer != nil }
             let request = try #require(reading?.requestAwaitingAnAnswer)
@@ -476,6 +564,55 @@ struct CodexCLIIntegrationTests {
         #expect(reading.sessions.allSatisfy { $0.status == .completed })
         #expect(Set(reading.sessions.map(\.threadID)) == ["one", "two"],
             "a gesture at either device speaks for neither of these rows")
+        await service.disconnect()
+    }
+
+    /// A Turn the background server runs draws its row as any CLI Turn does, grouped by its folder.
+    /// Once it finishes nothing can say it was read: no terminal speaks for the server and Desktop
+    /// never ran it. So it stays until the next submission, removal, or the server unloading the
+    /// Thread — `SessionEnd`, about a minute after the last TUI has left it idle.
+    @Test func aBackgroundServerRowIsDrawnAndLeavesWhenTheServerUnloadsItsThread() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("nc-srv-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let paths = HookIntegrationPaths(supportDirectory: root.appendingPathComponent("support"),
+            hooksConfiguration: root.appendingPathComponent(".codex/hooks.json"))
+        let registrar = CodexHookRegistrar(paths: paths)
+        try await registrar.install()
+        let repository = HookEventRepository(paths: paths)
+        let server = CodexExecution(pid: 300, startedAt: now, surface: .backgroundServer, terminal: nil)
+        let surfaces = CodexSurfaceLedger(source: CLIProcessFixture([server]).source)
+        // Were the server's pid ever read as a terminal, this reading would retire the row at once.
+        let gestures = CLIGestureFixture()
+        gestures.wasAtTheTerminal(of: server.pid, at: .distantFuture)
+        var timing = MonitorTiming.standard
+        timing.terminalReadSettlingInterval = 0
+        let service = LiveCodexMonitorService(client: CLIMetadataClient(), hookEvents: repository,
+            hookRegistrar: registrar, surfaces: surfaces, unreadState: CLIEmptyDesktopReading(),
+            terminalGestures: gestures, timing: timing, desktopProcessIdentifierProvider: { nil })
+
+        surfaces.record(owner: server, thread: "one", event: "UserPromptSubmit")
+        _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "UserPromptSubmit",
+            "session_id": "one", "turn_id": "t-one", "cwd": "/work/shared", "prompt": "Live prompt"]),
+            at: Date().addingTimeInterval(-2))
+        var reading = await service.fetchSnapshot()
+        for _ in 0..<100 where reading.sessions.count != 1 {
+            try await Task.sleep(for: .milliseconds(10))
+            reading = await service.fetchSnapshot()
+        }
+        #expect(reading.presence == .open)
+        #expect(reading.sessions.first?.status == .running)
+        #expect(reading.sessions.first?.projectName == "shared")
+
+        _ = repository.deliver(try JSONSerialization.data(withJSONObject: ["hook_event_name": "Stop",
+            "session_id": "one", "turn_id": "t-one", "last_assistant_message": "Finished"]), at: Date())
+        #expect(await service.fetchSnapshot().sessions.first?.status == .completed,
+            "neither a terminal nor Desktop's empty unread set speaks for the server's Thread")
+        #expect(gestures.timesAsked == 0, "the server's pid is never read as a terminal")
+
+        surfaces.record(owner: server, thread: "one", event: "SessionEnd")
+        let unloaded = await service.fetchSnapshot()
+        #expect(unloaded.sessions.isEmpty, "the server unloading the Thread ends its row")
+        #expect(unloaded.presence == .closed)
         await service.disconnect()
     }
 
@@ -654,6 +791,104 @@ struct CodexCLIIntegrationTests {
         // The same process read against another home is not this user's TUI: still fails closed.
         let elsewhere = CodexNativeProcesses(home: root.appendingPathComponent("someone-else"))
         #expect(elsewhere.localTUI(pid) == nil)
+    }
+
+    /// The topology measured on 0.157.1, against the kernel. The first TUI starts the background
+    /// server and stays its parent, so a hook's ancestry reads hook → server → that TUI **whichever
+    /// TUI's Turn it is**: a second TUI's hooks named the first one. The server is the answer, and
+    /// the walk stops at it. Before 0.157 the walk went on looking for Desktop above it, found none,
+    /// and every one of these hooks was dropped as unattributable.
+    ///
+    /// Both stand-ins are the renamed `perl` from the test above. The server's argv is exact because
+    /// perl takes the first bare argument, `app-server`, as the script to run from its directory; it
+    /// runs from the home's packages as the real one does, and holds no database open, as an idle
+    /// real one does not.
+    @Test func theBackgroundServerOwnsItsHooksEvenWhenATUIStartedIt() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nc-srv-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let database = home.appendingPathComponent(".codex/state_5.sqlite")
+        let installed = root.appendingPathComponent("bin")
+        let packaged = home.appendingPathComponent(".codex/packages/app-server-daemon/releases/0.157.1/bin")
+        let serverDirectory = root.appendingPathComponent("server")
+        let started = root.appendingPathComponent("started")
+        for directory in [database.deletingLastPathComponent(), installed, packaged, serverDirectory] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try Data().write(to: database)
+        let executable = installed.appendingPathComponent(CodexNativeProcesses.executableName)
+        let serverExecutable = packaged.appendingPathComponent(CodexNativeProcesses.executableName)
+        for copy in [executable, serverExecutable] {
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/perl"), to: copy)
+        }
+
+        let master = posix_openpt(O_RDWR | O_NOCTTY)
+        try #require(master >= 0, "no pty available")
+        defer { close(master) }
+        try #require(grantpt(master) == 0 && unlockpt(master) == 0)
+        let terminal = String(cString: ptsname(master))
+
+        // The server leaves the TUI's session, as the real one does, and forks a hook to stand for
+        // the `nc` whose peer pid is all the listener gets.
+        try """
+            my $hook = fork();
+            exit 10 unless defined $hook;
+            if ($hook == 0) { exec "/bin/sleep", "120"; exit 11; }
+            open(OUT, ">", "\(started.path).partial") or exit 12;
+            print OUT "$$ $hook";
+            close(OUT);
+            rename("\(started.path).partial", "\(started.path)");
+            sleep 120;
+            """.write(to: serverDirectory.appendingPathComponent("app-server"), atomically: true, encoding: .utf8)
+        let script = root.appendingPathComponent("tui.pl")
+        try """
+            open(TTY, "+<", "\(terminal)") or exit 3;
+            open(DB, "<", "\(database.path)") or exit 4;
+            my $server = fork();
+            exit 5 unless defined $server;
+            if ($server == 0) {
+                close(TTY);
+                eval { require POSIX; POSIX::setsid(); };
+                chdir("\(serverDirectory.path)") or exit 6;
+                exec { "\(serverExecutable.path)" } "\(serverExecutable.path)", "app-server", "--listen", "unix://", "--managed-daemon";
+                exit 7;
+            }
+            sleep 120;
+            """.write(to: script, atomically: true, encoding: .utf8)
+
+        let tui = try #require(Self.spawnInItsOwnSession(executable.path, script.path))
+        var staged: [Int32] = [tui]
+        defer { staged.forEach { kill($0, SIGKILL) } }
+        var identifiers: [Int32] = []
+        for _ in 0 ..< 200 where identifiers.count != 2 {
+            identifiers = ((try? String(contentsOf: started, encoding: .utf8)) ?? "")
+                .split(separator: " ").compactMap { Int32($0) }
+            if identifiers.count != 2 { try await Task.sleep(for: .milliseconds(25)) }
+        }
+        try #require(identifiers.count == 2, "the staged server never started")
+        let (server, hook) = (identifiers[0], identifiers[1])
+        staged += [server, hook]
+        // Until it execs, the fork is a copy of the server and would rightly be read as one.
+        for _ in 0 ..< 200 where ProcessAncestryHostResolver.systemExecutablePath(ofProcess: hook) != "/bin/sleep" {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+
+        let reader = CodexNativeProcesses(home: home)
+        let owner = try #require(reader.owner(of: hook),
+            "a hook the default home's background server runs is attributed, not dropped")
+        #expect(owner.surface == .backgroundServer)
+        #expect(owner.pid == server, "the server that ran the hook, never the TUI that started the server")
+        #expect(owner.terminal == nil)
+        #expect(reader.localTUI(server) == nil)
+        var startedTUI: CodexExecution?
+        for _ in 0 ..< 200 where startedTUI == nil {
+            startedTUI = reader.localTUI(tui)
+            if startedTUI == nil { try await Task.sleep(for: .milliseconds(25)) }
+        }
+        #expect(startedTUI?.pid == tui, "the TUI above it is still a TUI, and still answers presence")
+        #expect(CodexNativeProcesses(home: root.appendingPathComponent("someone-else")).owner(of: hook) == nil,
+            "another home's server is not this user's")
     }
 
     /// A future `codex <newsubcommand>` used to be admitted as an interactive session, because an

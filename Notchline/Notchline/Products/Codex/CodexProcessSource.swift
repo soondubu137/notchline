@@ -3,7 +3,20 @@ import Foundation
 
 /// Native provenance stays at the Codex boundary. A PID alone is never an execution identity.
 nonisolated struct CodexExecution: Hashable, Sendable {
-    enum Surface: Hashable, Sendable { case desktop, cli }
+    enum Surface: Hashable, Sendable {
+        case desktop
+        /// A local interactive TUI running its own Turns, on its own controlling terminal.
+        case cli
+        /// Codex's shared background server (`codex app-server --managed-daemon`). Since CLI 0.157.0
+        /// a plain `codex` hands its Turns to it rather than running them, so its hooks come from
+        /// here. It serves whichever TUIs attach and outlives them all, so it has no terminal and
+        /// names none: nothing can be read or raised at a terminal on its behalf.
+        case backgroundServer
+
+        /// Turns the CLI started, whichever process runs them: read on the notch and answered where
+        /// they were asked, grouped by working directory, never judged by Desktop's unread set.
+        var isCLI: Bool { self != .desktop }
+    }
     let pid: Int32
     let startedAt: Date
     let surface: Surface
@@ -38,7 +51,8 @@ nonisolated struct CodexProcessSource: Sendable {
     }
 }
 
-/// Observed on 0.154.0; unsupported modes and unreadable process arguments fail closed.
+/// Observed on 0.154.0 and, with the background server, 0.157.1; unsupported modes and unreadable
+/// process arguments fail closed.
 nonisolated struct CodexNativeProcesses: Sendable {
     /// What the kernel calls both surfaces' executable, and what ``CodexProcessSource/live()``
     /// asks the process table for.
@@ -58,9 +72,19 @@ nonisolated struct CodexNativeProcesses: Sendable {
             else { return nil }
             if URL(fileURLWithPath: path).lastPathComponent == Self.executableName {
                 if let local = localTUI(pid) { return local }
+                guard let arguments = Self.arguments(pid), Self.isAppServer(arguments) else { return nil }
+                // The background server runs Turns for whichever TUI attaches, so nothing above it
+                // says whose they are, and it is never walked past. Its parent is launchd, or the
+                // TUI that happened to start it — measured on 0.157.1, a second TUI's hooks named
+                // the first TUI there — and a TUI in Desktop's own terminal would even make it look
+                // Desktop's.
+                if Self.isBackgroundServer(arguments) {
+                    guard Self.isPackaged(path, inHome: home), let start = ControllingTerminalGestureReader
+                        .systemProcessStartedAt(forProcessIdentifier: pid) else { return nil }
+                    return CodexExecution(pid: pid, startedAt: start, surface: .backgroundServer, terminal: nil)
+                }
                 // Only an app-server belonging to the actual Desktop application can vouch for it.
-                guard let arguments = Self.arguments(pid), Self.isAppServer(arguments),
-                      usesDefaultHome(pid) else { return nil }
+                guard usesDefaultHome(pid) else { return nil }
                 var ancestor = pid
                 for _ in 0..<32 {
                     guard let parent = ProcessAncestryHostResolver.systemParent(ofProcess: ancestor), parent > 1,
@@ -119,6 +143,20 @@ nonisolated struct CodexNativeProcesses: Sendable {
 
     func usesDefaultHome(_ pid: Int32) -> Bool {
         Self.hasHomeDatabase(in: LibprocProcessTable().openFilePaths(ofProcess: pid), home: home)
+    }
+
+    /// The background server's home, read off where it runs from rather than what it holds open.
+    ///
+    /// The daemon launcher copies the CLI package into `<CODEX_HOME>/packages/` and starts the
+    /// server from that copy whatever the calling CLI was installed as (upstream
+    /// `managed_codex_bin`), so the binary names the home for the server's whole life. The home
+    /// database does not: an idle server closes `state_5.sqlite` and reopens it on the next write
+    /// — measured on 0.157.1, a server with a Thread loaded and a Turn running held no descriptor
+    /// on it after half an hour without a write — so a `Stop` after a quiet Turn, or the
+    /// `SessionEnd` of an unload, could find it closed and be dropped.
+    static func isPackaged(_ executable: String, inHome home: URL) -> Bool {
+        let packages = home.appendingPathComponent(".codex/packages").resolvingSymlinksInPath().path
+        return URL(fileURLWithPath: executable).resolvingSymlinksInPath().path.hasPrefix(packages + "/")
     }
 
     /// Presence evidence only: no SQLite contents or historical Turns are read.
@@ -213,18 +251,48 @@ nonisolated struct CodexNativeProcesses: Sendable {
 
     /// Desktop places global -c overrides before the app-server subcommand.
     static func isAppServer(_ argv: [String]) -> Bool {
+        appServerArguments(argv) != nil
+    }
+
+    /// Codex's shared background server, and not Desktop's server or the daemon's updater.
+    ///
+    /// `--managed-daemon` is what says so: only the CLI's own daemon launcher passes it, as
+    /// `codex app-server [--remote-control] --listen unix:// [-c features.…] --managed-daemon` on
+    /// 0.157.1. Desktop's server listens on `stdio://` and never has it, and
+    /// `app-server daemon pid-update-loop` runs no Turns. An older pinned daemon launched without the
+    /// flag is refused, and its payloads are counted as unattributable rather than guessed at.
+    static func isBackgroundServer(_ argv: [String]) -> Bool {
+        guard let arguments = appServerArguments(argv) else { return false }
+        var index = arguments.startIndex
+        while index < arguments.endIndex {
+            let argument = arguments[index]
+            let name = argument.split(separator: "=", maxSplits: 1).first.map(String.init) ?? argument
+            if ["-c", "--config", "--enable", "--disable", "--listen"].contains(name) {
+                if name == argument { index += 1 }
+            } else if argument == "--managed-daemon" {
+                return true
+            } else if !argument.hasPrefix("-") {
+                return false
+            }
+            index += 1
+        }
+        return false
+    }
+
+    /// What follows `app-server`, when that is the subcommand; nil for every other mode.
+    private static func appServerArguments(_ argv: [String]) -> ArraySlice<String>? {
         var index = 1
         while index < argv.count {
             let argument = argv[index]
             let name = argument.split(separator: "=", maxSplits: 1).first.map(String.init) ?? argument
             if ["-c", "--config", "--enable", "--disable"].contains(name) {
-                if name == argument { index += 1; if index >= argv.count { return false } }
+                if name == argument { index += 1; if index >= argv.count { return nil } }
             } else if argument != "--strict-config" {
-                return argument == "app-server"
+                return argument == "app-server" ? argv[(index + 1)...] : nil
             }
             index += 1
         }
-        return false
+        return nil
     }
 
     /// Reads argv only. No environment values are retained.
