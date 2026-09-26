@@ -680,6 +680,11 @@ struct CodexCLIIntegrationTests {
                      ["codex", "--local-provider", "ollama"]] {
             #expect(CodexNativeProcesses.isLocalTUI(argv))
         }
+        // Added in 0.156.0: the one way left, since 0.157.0, to keep a TUI running its own Turns.
+        for argv in [["codex", "--no-daemon"], ["codex", "resume", "--no-daemon", "--last"],
+                     ["codex", "--no-daemon", "fix the login bug"]] {
+            #expect(CodexNativeProcesses.isLocalTUI(argv))
+        }
         // A remote TUI is not a local execution, and --help/--version print and exit.
         for argv in [["codex", "--remote", "ws://host:1"], ["codex", "--help"], ["codex", "-V"]] {
             #expect(!CodexNativeProcesses.isLocalTUI(argv))

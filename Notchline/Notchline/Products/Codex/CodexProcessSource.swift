@@ -148,13 +148,16 @@ nonisolated struct CodexNativeProcesses: Sendable {
         "mcp-server", "agent"]
 
     /// Interactive options that take a value, and those that do not. The union of `codex`,
-    /// `codex resume` and `codex fork` on 0.154.0, plus names older versions had (`--full-auto`).
+    /// `codex resume` and `codex fork` on 0.154.0, plus names older versions had (`--full-auto`)
+    /// and `--no-daemon` from 0.156.0, which keeps the TUI running its own Turns rather than
+    /// handing them to the shared background server.
     static let valueOptions: Set<String> = ["-c", "--config", "--enable", "--disable", "-m", "--model",
         "-p", "--profile", "-C", "--cd", "--add-dir", "-s", "--sandbox", "-a", "--ask-for-approval",
         "-i", "--image", "--local-provider"]
     static let booleanOptions: Set<String> = ["--search", "--full-auto", "--oss", "--approve-for-me",
         "--dangerously-bypass-approvals-and-sandbox", "--no-alt-screen", "--last", "--all",
-        "--strict-config", "--worktree", "--dangerously-bypass-hook-trust", "--include-non-interactive"]
+        "--strict-config", "--worktree", "--dangerously-bypass-hook-trust", "--include-non-interactive",
+        "--no-daemon"]
 
     /// Interactive options this app deliberately does not admit, so the drift check can tell them
     /// from an option nobody has classified. `--remote` and its token variable point the TUI at a
