@@ -6,7 +6,8 @@ import Testing
 /// outside the app module can implement it (`system-architecture.md` §7). Left unmarked, Swift 6.4
 /// exports such a protocol from this MainActor-default module as MainActor-isolated, and this file
 /// stops compiling. The actor doubles in the other suites pin the rest of the family, except
-/// `AgentHookVocabulary`, whose conformers are values.
+/// `AgentHookVocabulary`, whose conformers are values. The mark does not reach a protocol's
+/// extensions, so their defaults are marked one by one and pinned at run time below.
 struct ContractIsolationTests {
     private struct Screen: ScreenAvailabilityReporting {
         func isAvailable() -> Bool { true }
@@ -69,4 +70,86 @@ struct ContractIsolationTests {
         #expect(await HookLifecycleSource(setup: sources, repository: repository).setupStatus() == .active)
         await runtime.disconnect()
     }
+
+    /// Leans on every default an extension of these contracts supplies. Not an actor, and nothing
+    /// in it suspends, so a default that calls back into it does not queue on the cooperative pool.
+    private final class ReliesOnEveryDefault: AgentMonitoring, ClaudeCodeSessionListing,
+        ManagedMonitoringSource, CodexAppServerCommunicating {
+        let agent = AgentKind.claudeCode
+        let stateChangeEvents = AsyncStream<Void> { $0.finish() }
+
+        func fetchSnapshot(dismissedRowIDs: Set<String>) -> AgentSnapshot {
+            AgentSnapshot(agent: .claudeCode, availability: .ready, sessions: [], quota: .noneReported,
+                          diagnostic: nil)
+        }
+        func nextRefreshDeadline() -> Date? { nil }
+        func disconnect() {}
+        func liveSessions() -> [ClaudeCodeSession] { [] }
+        func invalidate() {}
+        func listReadStartedAt() -> Date { .distantFuture }
+        func stopMonitoring() {}
+        func connect() {}
+        func request(method: String, params: JSONValue?, timeoutNanoseconds: UInt64?) -> JSONValue { .null }
+    }
+
+    /// The `nonisolated` on a protocol does not reach its extensions, whose members took the app's
+    /// MainActor default. Each call to one hopped to the main thread and waited there: every Codex
+    /// quota read through `request(method:params:)`, and the runtime's empty `releaseEndedRows` and
+    /// `startMonitoring`. No warning says so. This holds the main thread while every default is
+    /// called elsewhere; one that needs the main actor cannot finish until the hold ends.
+    ///
+    /// The calls run on a queue of their own, not the cooperative pool: in the suite's opening burst
+    /// the pool made them wait 1-3 s, and holding the main thread that long starved the tests beside it.
+    @MainActor
+    @Test func theContractsDefaultsDoNotWaitForTheMainActor() async {
+        let reliant = ReliesOnEveryDefault()
+        let calls: [(String, @Sendable () async -> Void)] = [
+            ("AgentMonitoring.recheckConnection", { await (reliant as any AgentMonitoring).recheckConnection() }),
+            ("AgentMonitoring.fetchSnapshot", { _ = await (reliant as any AgentMonitoring).fetchSnapshot() }),
+            ("ClaudeCodeSessionListing.presence", { _ = await (reliant as any ClaudeCodeSessionListing).presence() }),
+            ("ManagedMonitoringSource.startMonitoring", {
+                await (reliant as any ManagedMonitoringSource).startMonitoring()
+            }),
+            ("RowContentSource.releaseEndedRows", {
+                await (WorkingDirectoryRowContent() as any RowContentSource).releaseEndedRows([:])
+            }),
+            ("CodexAppServerCommunicating.request", {
+                _ = try? await (reliant as any CodexAppServerCommunicating).request(method: "probe", params: nil)
+            })
+        ]
+        let executor = QueueExecutor()
+        let finished = FinishedCalls()
+        let tasks = calls.map { name, call in
+            Task.detached(executorPreference: executor) {
+                await call()
+                finished.insert(name)
+            }
+        }
+        // Held on purpose: nothing below yields until every call is in or the limit passes.
+        let limit = Date().addingTimeInterval(2)
+        while finished.count < calls.count, Date() < limit { usleep(100) }
+        let waiting = calls.map(\.0).filter { !finished.contains($0) }
+        for task in tasks { await task.value }
+
+        #expect(waiting.isEmpty, "these defaults waited for the main actor: \(waiting)")
+    }
+}
+
+/// Runs a task's nonisolated work on a serial queue of its own.
+private final class QueueExecutor: TaskExecutor {
+    private let queue = DispatchQueue(label: "com.yinfenglu.Notchline.tests.contract-defaults")
+
+    func enqueue(_ job: consuming ExecutorJob) {
+        let job = UnownedJob(job)
+        queue.async { job.runSynchronously(on: self.asUnownedTaskExecutor()) }
+    }
+}
+
+private final class FinishedCalls: @unchecked Sendable {
+    private let lock = NSLock()
+    private var names: Set<String> = []
+
+    var count: Int { lock.withLock { names.count } }
+    func insert(_ name: String) { lock.withLock { _ = names.insert(name) } }
+    func contains(_ name: String) -> Bool { lock.withLock { names.contains(name) } }
 }

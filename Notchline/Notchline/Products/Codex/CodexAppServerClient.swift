@@ -96,7 +96,7 @@ nonisolated protocol CodexAppServerCommunicating: Sendable {
 }
 
 extension CodexAppServerCommunicating {
-    func request(method: String, params: JSONValue?) async throws -> JSONValue {
+    nonisolated func request(method: String, params: JSONValue?) async throws -> JSONValue {
         try await request(
             method: method,
             params: params,

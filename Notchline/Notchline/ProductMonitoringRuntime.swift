@@ -156,7 +156,7 @@ nonisolated protocol RowContentSource: Sendable {
 }
 
 extension RowContentSource {
-    func releaseEndedRows(_ turnIDsByThread: [String: String]) async {}
+    nonisolated func releaseEndedRows(_ turnIDsByThread: [String: String]) async {}
 }
 
 /// The L2 context fallback: directory name for project, prompt for title, closing words or newest

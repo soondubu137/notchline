@@ -80,7 +80,7 @@ nonisolated protocol ClaudeCodeSessionListing: ProductPresenceReporting {
 
 extension ClaudeCodeSessionListing {
     /// Correct only for sources that cannot go stale; a caching source must override it.
-    func presence() async -> AgentPresence {
+    nonisolated func presence() async -> AgentPresence {
         await liveSessions().isEmpty ? .closed : .open
     }
 }

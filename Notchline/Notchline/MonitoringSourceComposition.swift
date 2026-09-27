@@ -10,7 +10,7 @@ nonisolated protocol ManagedMonitoringSource: AnyObject, Sendable {
 
 extension ManagedMonitoringSource {
     nonisolated var sourceChanges: [AsyncStream<Void>] { [] }
-    func startMonitoring() async {}
+    nonisolated func startMonitoring() async {}
 }
 
 /// A timed reader updates its own held evidence here. The ordinary source

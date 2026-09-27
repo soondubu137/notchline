@@ -25,9 +25,9 @@ nonisolated protocol AgentMonitoring: Sendable {
 }
 
 extension AgentMonitoring {
-    func recheckConnection() async {}
+    nonisolated func recheckConnection() async {}
     /// Nothing removed; the store holds the only removal record.
-    func fetchSnapshot() async -> AgentSnapshot {
+    nonisolated func fetchSnapshot() async -> AgentSnapshot {
         await fetchSnapshot(dismissedRowIDs: [])
     }
 }
