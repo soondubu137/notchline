@@ -43,7 +43,7 @@
 | 产品 | 等级 | 额外能力（独立于等级） | 边界 |
 | --- | --- | --- | --- |
 | **Codex Desktop** | **L6**：普通审批 | 精确 Thread 导航、Desktop Project／已读移除、最终答案预览、子智能体、配额和每日 token 用量 | 本地 CLI 的范围在下方单独列出；同步问题与 `request_permissions` 只读；异步问题仅预览 |
-| **Codex CLI（本地交互式）** | **L5**：普通审批和同步问题，只读 | 最终答案预览、有条件的终端已读移除、返回宿主、共用账户读数 | 仅默认 home；所有请求都在终端回答；无精确窗口／标签页／Thread 选择，不恢复启动前状态，不支持 remote/daemon/exec（[范围与验证](docs/product-support-zh.md#51-本地-codex-cli)） |
+| **Codex CLI（本地交互式）** | **L5**：普通审批和同步问题，只读 | 最终答案预览、有条件的终端已读移除、返回宿主、共用账户读数 | 仅默认 home；所有请求都在终端回答；无精确窗口／标签页／Thread 选择，不恢复启动前状态，不支持 remote/exec；由 Codex 后台服务器运行的 Turn（自 CLI 0.157 起为默认方式）没有可读取或返回的终端，请使用 `codex --no-daemon`（[范围与验证](docs/product-support-zh.md#51-本地-codex-cli)） |
 | **Claude Code（Desktop + CLI）** | **L6**：工具／计划审批与问题集 | 以文件夹为 Project、有条件的 Desktop／终端已读移除、宿主／标签页导航、子智能体、配额和每日 token 用量 | 无最终答案预览；精确导航取决于宿主，无法到达全屏宿主 |
 | **Antigravity（Desktop + CLI）** | **L3** | Desktop Project、有条件的 Desktop／终端已读移除、宿主导航和最终答案预览 | 无等待检测、请求、配额、token 用量或子智能体；进度可能等待工具返回；Desktop 停止后条目可能仍显示工作中；CLI 已读移除需要输入／粘贴，仅切换标签页无效 |
 | **Trae Desktop（本地 IDE/V2）** | **L5**：普通命令与结构化问题 | 精确导航至已观察的 Thread、基于可见完成内容的条件式已读移除、保留主对话文字 | 仅限已验证的 3.5.91 构建；需在 Trae 中回答；无配额、token 用量或子智能体；IDE 内 SOLO 不属于 L5，排除独立 SoloLite、远程、Plan/Spec 和复杂权限形式（[范围](docs/trae-integration.md)） |
@@ -56,7 +56,7 @@
 | **kitty、WezTerm、Alacritty、VS Code 终端** | 能识别宿主时唤起应用；不精确选择标签页／窗格 | 共用终端证据路径；各宿主组合未经独立验证 |
 | **tmux、screen、SSH、管道** | 无专用返回目标 | 不支持 |
 
-Codex CLI 始终只返回宿主，包括 Terminal.app 和 iTerm2。已完成条目可在输入／粘贴后移除；若终端报告焦点，返回窗口也可以：已验证 Ghostty，Apple Terminal 不提供此报告。移动指针不会移除条目。具体条件和 CLI 0.154.0 验收基线见[支持契约](docs/product-support-zh.md#51-本地-codex-cli)。
+Codex CLI 始终只返回宿主，包括 Terminal.app 和 iTerm2。已完成条目可在输入／粘贴后移除；若终端报告焦点，返回窗口也可以：已验证 Ghostty，Apple Terminal 不提供此报告。移动指针不会移除条目。自 CLI 0.157 起，直接运行 `codex` 时 Turn 由 Codex 共享后台服务器运行，而该服务器不指明任何终端：这些条目既不会因阅读而移除，也无法返回窗口。运行 `codex --no-daemon` 即可保留这两项能力。具体条件和 CLI 0.154.0 验收基线见[支持契约](docs/product-support-zh.md#51-本地-codex-cli)。
 
 ## 整体限制
 
