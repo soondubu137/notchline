@@ -14040,7 +14040,13 @@ struct NotchlineTests {
         }
         let installer = CodexHookRegistrar(paths: paths)
         try await installer.install()
-        let repository = HookEventRepository(paths: paths)
+        // The thread is readable but never listed, so the reducer keeps its Turn only for the new-Turn
+        // grace, counted from `received_at`. Under the full suite this test took 8-11 s to reach its
+        // first snapshot against the 10 s default, and a late one lost the Turn to reconciliation,
+        // which is not what it asserts. A setup-status read that consumed the delivery still fails.
+        var timing = MonitorTiming.standard
+        timing.newTurnReconciliationGrace = 600
+        let repository = HookEventRepository(paths: paths, timing: timing)
         deliverHook([
             "received_at": Date().timeIntervalSince1970,
             "hook_event_name": "UserPromptSubmit",
@@ -20041,6 +20047,11 @@ for line in sys.stdin:
     /// The watcher must be retained (its `deinit` finishes every continuation), and the edge must
     /// invalidate the list, not refresh from a cache. Costs a Turn for Claude Code in the desktop
     /// app, whose sessions are created by their first prompt.
+    ///
+    /// Measured from a baseline, since attaching the watcher already invalidated once and left a wake
+    /// in the stream: counted from zero and taking the first wake, this passed with the write deleted.
+    /// The wakes are stamped off the main actor, so the check waits on the product, not on when the
+    /// main thread is next free (a MainActor observer missed its 3 s in the suite's opening burst).
     @Test @MainActor
     func aSessionAppearingWakesTheProductAndReportsTheListOutOfDate() async throws {
         let harness = try ClaudeCodeHarness()
@@ -20053,31 +20064,27 @@ for line in sys.stdin:
             withIntermediateDirectories: true
         )
         _ = await harness.service.fetchSnapshot()
+        let baseline = harness.invalidations
 
         let triggers = harness.service.stateChangeEvents
-        let observer = Task {
-            for await _ in triggers { return true }
-            return false
+        let wakes = WakeStamps()
+        let observer = Task.detached {
+            for await _ in triggers { wakes.stamp() }
         }
+        defer { observer.cancel() }
 
+        let written = Date()
         try Data("{}".utf8).write(
             to: harness.sessionsDirectory.appendingPathComponent("4242.json")
         )
 
-        let signalled = await withTaskGroup(of: Bool.self) { group in
-            group.addTask { await observer.value }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                return false
-            }
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
-        }
-        observer.cancel()
-        #expect(signalled)
         // Invalidated before waking, so the refresh this edge causes re-reads.
-        #expect(harness.invalidations >= 1)
+        #expect(await harness.invalidationsRise(above: baseline))
+        let deadline = Date().addingTimeInterval(3)
+        while !wakes.any(after: written), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        #expect(wakes.any(after: written), "the product did not wake for the session appearing")
     }
 
     /// This app's own `claude -p "/usage"` session record (a pid it launched) is not news: each
@@ -29501,6 +29508,15 @@ private extension Collection {
         guard offset >= 0, offset < count else { return nil }
         return self[index(startIndex, offsetBy: offset)]
     }
+}
+
+/// When each change-stream element arrived, taken off the main actor.
+private final class WakeStamps: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stamps: [Date] = []
+
+    func stamp() { lock.withLock { stamps.append(Date()) } }
+    func any(after instant: Date) -> Bool { lock.withLock { stamps.contains { $0 > instant } } }
 }
 
 private final class ClaudeCodeHarness {
