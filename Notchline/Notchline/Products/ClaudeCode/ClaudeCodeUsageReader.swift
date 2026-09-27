@@ -108,11 +108,16 @@ actor ClaudeCodeUsageReader: UsageReading, ManagedMonitoringSource {
 
     /// A reader that answers nothing and runs no command, for tests: each real reading leaves a
     /// transcript folder in the user's `~/.claude/projects` (380 in two days from the suite).
+    ///
+    /// Its empty answer is asked again no sooner than a real one would be. At the 5 s retry, a test
+    /// asserting that nothing is due within 2 s passed only if it reached the check within 3 s of
+    /// the attempt, which a MainActor test in the suite's opening burst does not.
     static func silent(
         clock: any MonitorClock = SystemMonitorClock()
     ) -> ClaudeCodeUsageReader {
         ClaudeCodeUsageReader(
             clock: clock,
+            retryInterval: 1800,
             read: { nil },
             // Nor the user's `~/.claude.json`: it would assert against the machine's account.
             readConfiguration: { nil }
