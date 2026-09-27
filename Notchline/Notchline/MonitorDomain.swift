@@ -2,7 +2,7 @@ import Foundation
 
 /// Which product a row came from. Declaration order is display order and never changes: sorting
 /// by urgency would swap the matrix marks while they are being read.
-enum AgentKind: String, CaseIterable, Codable, Sendable, Comparable {
+nonisolated enum AgentKind: String, CaseIterable, Codable, Sendable, Comparable {
     case codex
     case claudeCode
     /// Antigravity: `agy` and Antigravity Desktop behind one hooks file (``AntigravitySurface``).
@@ -28,14 +28,14 @@ enum AgentKind: String, CaseIterable, Codable, Sendable, Comparable {
         Self.allCases.firstIndex(of: self) ?? Self.allCases.count
     }
 
-    nonisolated static func < (lhs: AgentKind, rhs: AgentKind) -> Bool {
+    static func < (lhs: AgentKind, rhs: AgentKind) -> Bool {
         lhs.rank < rhs.rank
     }
 }
 
 /// Whether a product is open, as the user would judge it. Not derived from work in flight:
 /// presence draws the matrix, the Turn reducer lights it.
-enum AgentPresence: String, CaseIterable, Codable, Sendable {
+nonisolated enum AgentPresence: String, CaseIterable, Codable, Sendable {
     case open
     case closed
     /// No trustworthy evidence either way: the source's last answer has expired. Drawn like
@@ -47,7 +47,7 @@ enum AgentPresence: String, CaseIterable, Codable, Sendable {
     var isOpen: Bool { self == .open }
 }
 
-enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
+nonisolated enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     case connected
     case setupRequired
     case connecting
@@ -122,7 +122,7 @@ enum MonitorStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     ]
 }
 
-enum SessionStatus: String, CaseIterable, Codable, Identifiable, Sendable {
+nonisolated enum SessionStatus: String, CaseIterable, Codable, Identifiable, Sendable {
     case running
     case inputNeeded
     case approvalNeeded
@@ -172,7 +172,7 @@ enum SessionStatus: String, CaseIterable, Codable, Identifiable, Sendable {
         }
     }
 
-    nonisolated func transitioned(on signal: SessionStatusSignal) -> SessionStatus {
+    func transitioned(on signal: SessionStatusSignal) -> SessionStatus {
         if self == .completed {
             return .completed
         }
@@ -201,7 +201,7 @@ enum SessionStatusSignal: Sendable {
     case completed
 }
 
-enum MonitorAvailability: Equatable, Sendable {
+nonisolated enum MonitorAvailability: Equatable, Sendable {
     case setupRequired
     case connecting
     case ready

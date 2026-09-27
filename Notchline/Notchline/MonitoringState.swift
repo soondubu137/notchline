@@ -259,7 +259,7 @@ nonisolated struct ProducerWaits: Sendable, Equatable {
     }
 }
 
-struct MonitoredTurnState: Sendable {
+nonisolated struct MonitoredTurnState: Sendable {
     let threadID: String
     let turnID: String
     var sessionStatus: SessionStatus
@@ -349,7 +349,7 @@ struct MonitoredTurnState: Sendable {
         }
     }
 
-    nonisolated init(
+    init(
         threadID: String,
         turnID: String,
         sessionStatus: SessionStatus,
@@ -387,7 +387,7 @@ struct MonitoredTurnState: Sendable {
         self.workingDirectory = workingDirectory
     }
 
-    nonisolated var status: SessionStatus {
+    var status: SessionStatus {
         sessionStatus
     }
 
@@ -396,7 +396,7 @@ struct MonitoredTurnState: Sendable {
     /// Derived, not stepped, so resolving one approval of two leaves `Approval needed`. A question
     /// outranks an approval (Codex never closes a denied approval, so the following question is
     /// the proof of an answer); a finished turn absorbs everything.
-    nonisolated mutating func deriveStatus() {
+    mutating func deriveStatus() {
         guard sessionStatus != .completed else { return }
         sessionStatus = !waits.inputs.isEmpty
             ? .inputNeeded
@@ -407,19 +407,19 @@ struct MonitoredTurnState: Sendable {
     ///
     /// Capped by ``runningSubagentIDs``: both products stamp `agent_id` on unannounced agents
     /// (2026-08-23), so a slot is not evidence of a subagent (`PRD.md` §6.2). Only `> 0` is drawn.
-    nonisolated var subagentsAwaitingApprovalCount: Int {
+    var subagentsAwaitingApprovalCount: Int {
         subagentSlots.filter { agentID, slots in
             runningSubagentIDs.contains(agentID) && slots.pendingApproval != nil
         }.count
     }
 
-    nonisolated var subagentsAwaitingApproval: Bool {
+    var subagentsAwaitingApproval: Bool {
         subagentsAwaitingApprovalCount > 0
     }
 
     /// Every connection this turn is holding open, its subagents' included; closing one the row
     /// is not drawing would answer that subagent by silence.
-    nonisolated var heldAnswerHandles: [AnswerHandle] {
+    var heldAnswerHandles: [AnswerHandle] {
         waits.heldAnswerHandles + subagentSlots.values.flatMap(\.heldAnswerHandles)
     }
 
@@ -429,7 +429,7 @@ struct MonitoredTurnState: Sendable {
     /// subagents' approvals (`PRD.md` §6.2). Within a rank, answerable before readable, then
     /// arrival order (a replacement keeps its place; subagents by open instant, then agent), then
     /// identity. A newer arrival of equal or lower rank never moves the one on screen.
-    nonisolated var requestsAwaitingAnAnswer: [AgentRequest] {
+    var requestsAwaitingAnAnswer: [AgentRequest] {
         struct Ranked {
             let request: AgentRequest
             let order: Double
@@ -469,7 +469,7 @@ struct MonitoredTurnState: Sendable {
         return sorted(ownInputs) + sorted(ownApprovals) + sorted(subagents)
     }
 
-    nonisolated var requestAwaitingAnAnswer: AgentRequest? {
+    var requestAwaitingAnAnswer: AgentRequest? {
         requestsAwaitingAnAnswer.first
     }
 
@@ -479,14 +479,14 @@ struct MonitoredTurnState: Sendable {
     /// `lastFocusedAt`, foregrounding, terminal access time, Codex Desktop's blue dot). Not
     /// ``terminalBoundaryAt``, which a subagent pushes past the unread answer. Meaningful only
     /// once terminal.
-    nonisolated var turnEndedAt: Date { lastEventAt }
+    var turnEndedAt: Date { lastEventAt }
 
     /// The instant a finished row's settling window is measured from: the later of `lastEventAt`
     /// and ``lastSubagentBoundaryAt``.
     ///
     /// Never for dating read evidence: a `SubagentStop` came 91 s after `Stop` (2026-08-22), and
     /// reads taken while the subagent worked were discarded. Use ``turnEndedAt``.
-    nonisolated var terminalBoundaryAt: Date {
+    var terminalBoundaryAt: Date {
         max(lastEventAt, lastSubagentBoundaryAt ?? lastEventAt)
     }
 }

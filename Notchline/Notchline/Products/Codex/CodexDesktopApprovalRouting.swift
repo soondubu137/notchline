@@ -61,7 +61,7 @@ struct TurnApprovalRoutingPin: Sendable {
 
     /// `value` is the answer the row uses; `rolloutReading` is what the authority has been asked,
     /// and of which file.
-    private struct Answer: Sendable {
+    private nonisolated struct Answer: Sendable {
         var value: Bool?
         var rolloutReading: RolloutReading = .notAsked
     }

@@ -45,7 +45,7 @@ nonisolated protocol IntegrationConfiguring: Sendable {
 /// Opaque: only the issuing channel (``HookReplyRegistry``) can resolve it, and only while it
 /// still holds the connection. A handle from an earlier issuer or already spent addresses
 /// nothing, so a stale or repeated click is harmless.
-struct AnswerHandle: Hashable, Sendable {
+nonisolated struct AnswerHandle: Hashable, Sendable {
     /// The channel that minted this handle, so another channel's number cannot address a request.
     let issuer: UUID
     /// The issuer's own name for the held connection, meaningless anywhere else.

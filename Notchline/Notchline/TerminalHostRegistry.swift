@@ -15,7 +15,7 @@ struct TerminalHostAdapter: Sendable {
     let paneLocator: PaneLocator
 }
 
-enum TerminalHostRegistry {
+nonisolated enum TerminalHostRegistry {
     /// Hosts that publish a tty: Terminal.app on `tab`, iTerm2 on `session`. Ghostty 1.3.1 exposes
     /// none (`Ghostty.sdef`, 2026-08-19); kitty, WezTerm and Alacritty have no dictionary. A test
     /// keeps those unregistered.

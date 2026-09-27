@@ -1,7 +1,7 @@
 import Foundation
 import OSLog
 
-indirect enum JSONValue: Codable, Equatable, Sendable {
+nonisolated indirect enum JSONValue: Codable, Equatable, Sendable {
     case object([String: JSONValue])
     case array([JSONValue])
     case string(String)
@@ -9,7 +9,7 @@ indirect enum JSONValue: Codable, Equatable, Sendable {
     case bool(Bool)
     case null
 
-    nonisolated init(from decoder: Decoder) throws {
+    init(from decoder: Decoder) throws {
         let container = try decoder.singleValueContainer()
         if container.decodeNil() {
             self = .null
@@ -26,7 +26,7 @@ indirect enum JSONValue: Codable, Equatable, Sendable {
         }
     }
 
-    nonisolated func encode(to encoder: Encoder) throws {
+    func encode(to encoder: Encoder) throws {
         var container = encoder.singleValueContainer()
         switch self {
         case let .object(value):
@@ -44,42 +44,42 @@ indirect enum JSONValue: Codable, Equatable, Sendable {
         }
     }
 
-    nonisolated subscript(key: String) -> JSONValue? {
+    subscript(key: String) -> JSONValue? {
         guard case let .object(object) = self else { return nil }
         return object[key]
     }
 
-    nonisolated var objectValue: [String: JSONValue]? {
+    var objectValue: [String: JSONValue]? {
         guard case let .object(value) = self else { return nil }
         return value
     }
 
-    nonisolated var arrayValue: [JSONValue]? {
+    var arrayValue: [JSONValue]? {
         guard case let .array(value) = self else { return nil }
         return value
     }
 
-    nonisolated var stringValue: String? {
+    var stringValue: String? {
         guard case let .string(value) = self else { return nil }
         return value
     }
 
-    nonisolated var doubleValue: Double? {
+    var doubleValue: Double? {
         guard case let .number(value) = self else { return nil }
         return value
     }
 
     /// Truncated toward zero, so `42.5` reads `42`. A number the type cannot hold is nil: valid JSON
     /// such as `1e300` would otherwise trap in `Int.init(_: Double)` and end the process.
-    nonisolated var intValue: Int? {
+    var intValue: Int? {
         doubleValue.flatMap { Int(exactly: $0.rounded(.towardZero)) }
     }
 
-    nonisolated var int64Value: Int64? {
+    var int64Value: Int64? {
         doubleValue.flatMap { Int64(exactly: $0.rounded(.towardZero)) }
     }
 
-    nonisolated var boolValue: Bool? {
+    var boolValue: Bool? {
         guard case let .bool(value) = self else { return nil }
         return value
     }
