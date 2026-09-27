@@ -83,7 +83,9 @@ nonisolated struct CodexNativeProcesses: Sendable {
                         .systemProcessStartedAt(forProcessIdentifier: pid) else { return nil }
                     return CodexExecution(pid: pid, startedAt: start, surface: .backgroundServer, terminal: nil)
                 }
-                // Only an app-server belonging to the actual Desktop application can vouch for it.
+                // Only an app-server belonging to the actual Desktop application, in this home, can
+                // vouch for it. Desktop's server outlives long quiet stretches, which is why its home
+                // is read off the helper lock as well as the database (``namesOnlyHome(_:in:)``).
                 guard usesDefaultHome(pid) else { return nil }
                 var ancestor = pid
                 for _ in 0..<32 {
@@ -120,8 +122,9 @@ nonisolated struct CodexNativeProcesses: Sendable {
     /// What is left identifies it without reference to any list, and is no weaker: the kernel's own
     /// name for the running executable, TUI-shaped argv (`exec`, `app-server` and every other
     /// subcommand are rejected), a controlling terminal, no multiplexer or SSH ancestor, and
-    /// `proc_pidfdinfo` reporting this user's own `~/.codex/state_5.sqlite` open and no other
-    /// home's. A process holding that database open is Codex; nothing else has reason to.
+    /// `proc_pidfdinfo` reporting a file of this user's own `~/.codex` open — its `state_5.sqlite`
+    /// or its helper lock (``namesOnlyHome(_:in:)``) — and no other home's. A process holding
+    /// either is Codex; nothing else has reason to.
     func localTUI(_ pid: Int32) -> CodexExecution? {
         guard let path = ProcessAncestryHostResolver.systemExecutablePath(ofProcess: pid),
               URL(fileURLWithPath: path).lastPathComponent == Self.executableName,
@@ -142,7 +145,7 @@ nonisolated struct CodexNativeProcesses: Sendable {
     }
 
     func usesDefaultHome(_ pid: Int32) -> Bool {
-        Self.hasHomeDatabase(in: LibprocProcessTable().openFilePaths(ofProcess: pid), home: home)
+        Self.namesOnlyHome(home, in: LibprocProcessTable().openFilePaths(ofProcess: pid))
     }
 
     /// The background server's home, read off where it runs from rather than what it holds open.
@@ -159,13 +162,48 @@ nonisolated struct CodexNativeProcesses: Sendable {
         return URL(fileURLWithPath: executable).resolvingSymlinksInPath().path.hasPrefix(packages + "/")
     }
 
-    /// Presence evidence only: no SQLite contents or historical Turns are read.
-    /// KERN_PROCARGS2 omits envp on macOS 26.6, so environment is not a home identity source.
-    static func hasHomeDatabase(in paths: [String], home: URL) -> Bool {
-        let expected = home.appendingPathComponent(".codex/state_5.sqlite").resolvingSymlinksInPath().path
-        let databases = Set(paths.filter { URL(fileURLWithPath: $0).lastPathComponent == "state_5.sqlite" }
-            .map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path })
-        return databases == [expected]
+    /// Whether what a process holds open names this user's default Codex home, and no other.
+    ///
+    /// Two files name a home, and either is enough. `state_5.sqlite` sits at its root, but an App
+    /// Server holds a database only while it is using it: it closes one about fourteen minutes
+    /// after the last use and reopens it on the next. Measured 2026-09-26 on Desktop 26.924
+    /// (bundled CLI 0.158.0-alpha.2), Desktop's own server closed every `state_5.sqlite` descriptor
+    /// 13 min 52 s into a Turn waiting on an approval, and held none for the minute after.
+    /// Approving reopened it a second before `PostToolUse`, so no hook was lost that time — but
+    /// that is the server's write order, not a contract, and a hook fired in such a window without
+    /// a write before it would find no database and be dropped as unattributable.
+    ///
+    /// The other is the lock every Codex process takes as it starts, on the helper directory it
+    /// makes under `<home>/tmp/arg0/` (upstream `arg0`). The lock is what keeps Codex's own janitor
+    /// from deleting a live process's helpers, so it is held from startup to exit: descriptor 3 in
+    /// every process measured, idle or mid-Turn, and the directory is gone once the process is.
+    /// It is the one that answers for the process's whole life.
+    ///
+    /// **A process naming another home as well is refused**, as is one naming none: a custom
+    /// `CODEX_HOME`, or a `sqlite_home` that moves the database out of the home, fails closed and
+    /// is counted rather than read as this user's. Presence evidence only: nothing is opened, and
+    /// no SQLite contents or historical Turns are read. KERN_PROCARGS2 omits envp on macOS 26.6,
+    /// so environment is not a home identity source.
+    static func namesOnlyHome(_ home: URL, in paths: [String]) -> Bool {
+        let expected = home.appendingPathComponent(".codex").resolvingSymlinksInPath().path
+        return Set(paths.compactMap(homeNamed(by:))) == [expected]
+    }
+
+    /// The Codex home an open file names, when it is one of the two files that name one.
+    static func homeNamed(by path: String) -> String? {
+        let file = URL(fileURLWithPath: path)
+        let components = file.pathComponents
+        let home: URL
+        if file.lastPathComponent == "state_5.sqlite" {
+            home = file.deletingLastPathComponent()
+        } else if file.lastPathComponent == ".lock", components.count >= 5,
+                  components[components.count - 4] == "tmp", components[components.count - 3] == "arg0" {
+            home = file.deletingLastPathComponent().deletingLastPathComponent()
+                .deletingLastPathComponent().deletingLastPathComponent()
+        } else {
+            return nil
+        }
+        return home.resolvingSymlinksInPath().path
     }
 
     /// The subcommands that open the interactive TUI. **This is the only list that has to stay

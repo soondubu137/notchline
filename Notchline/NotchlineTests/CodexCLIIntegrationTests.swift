@@ -98,10 +98,10 @@ struct CodexCLIIntegrationTests {
             #expect(!CodexNativeProcesses.isLocalTUI(args))
         }
         let home = URL(fileURLWithPath: "/Users/a")
-        #expect(CodexNativeProcesses.hasHomeDatabase(in: ["/Users/a/.codex/state_5.sqlite"], home: home))
+        #expect(CodexNativeProcesses.namesOnlyHome(home, in: ["/Users/a/.codex/state_5.sqlite"]))
         for paths in [[], ["/tmp/other/state_5.sqlite"], ["/Users/a/.codex/state_6.sqlite"],
                       ["/Users/a/.codex/state_5.sqlite", "/tmp/other/state_5.sqlite"]] {
-            #expect(!CodexNativeProcesses.hasHomeDatabase(in: paths, home: home))
+            #expect(!CodexNativeProcesses.namesOnlyHome(home, in: paths))
         }
     }
 
@@ -844,12 +844,40 @@ struct CodexCLIIntegrationTests {
         #expect(!CodexNativeProcesses.isLocalTUI(["/opt/local/bin/codex", "exec", "do the thing"]))
 
         let home = URL(fileURLWithPath: "/Users/someone")
-        #expect(CodexNativeProcesses.hasHomeDatabase(
-            in: ["/Users/someone/.codex/state_5.sqlite"], home: home
+        #expect(CodexNativeProcesses.namesOnlyHome(
+            home, in: ["/Users/someone/.codex/state_5.sqlite"]
         ), "the home database is read from the process, not from where the binary sits")
-        #expect(!CodexNativeProcesses.hasHomeDatabase(
-            in: ["/Users/elsewhere/.codex/state_5.sqlite"], home: home
+        #expect(!CodexNativeProcesses.namesOnlyHome(
+            home, in: ["/Users/elsewhere/.codex/state_5.sqlite"]
         ))
+    }
+
+    /// The home has to be readable for a process's whole life, and the database is not: an App
+    /// Server closes `state_5.sqlite` after a quiet stretch and reopens it on the next write, so a
+    /// late `Stop` could find nothing and be dropped. The helper lock under `tmp/arg0` is held from
+    /// startup to exit, and names the same home.
+    @Test func theHelperLockNamesTheHomeWhileTheDatabaseIsClosed() {
+        let home = URL(fileURLWithPath: "/Users/someone")
+        let lock = "/Users/someone/.codex/tmp/arg0/codex-arg0szBUCu/.lock"
+        let others = ["/Users/someone/.codex/logs_2.sqlite", "/Users/someone/.codex/queue_1.sqlite"]
+        #expect(CodexNativeProcesses.namesOnlyHome(home, in: [lock] + others),
+            "an idle server holding only its lock and the other databases is still this home's")
+        #expect(CodexNativeProcesses.namesOnlyHome(home, in: [lock, "/Users/someone/.codex/state_5.sqlite"]),
+            "the two agree while the database is open")
+
+        // Still fails closed: another home named anywhere, or no home at all.
+        for paths in [others, [lock, "/Users/elsewhere/.codex/state_5.sqlite"],
+                      [lock, "/Users/elsewhere/.codex/tmp/arg0/codex-arg0abc/.lock"],
+                      ["/Users/elsewhere/.codex/tmp/arg0/codex-arg0abc/.lock"],
+                      ["/Users/someone/.codex/state_5.sqlite", "/tmp/custom-home/tmp/arg0/codex-arg0abc/.lock"]] {
+            #expect(!CodexNativeProcesses.namesOnlyHome(home, in: paths), "\(paths)")
+        }
+        // Only the lock itself names a home, not any file that happens to sit near one.
+        for path in ["/Users/someone/.codex/tmp/arg0/.lock", "/Users/someone/.codex/tmp/arg0/codex-arg0abc/codex",
+                     "/Users/someone/.codex/tmp/other/codex-arg0abc/.lock", "/Users/someone/.codex/.lock"] {
+            #expect(CodexNativeProcesses.homeNamed(by: path) == nil, "\(path)")
+        }
+        #expect(CodexNativeProcesses.homeNamed(by: lock) == "/Users/someone/.codex")
     }
 
     /// The same claim against the kernel rather than against pure functions, because this is the
@@ -1018,6 +1046,92 @@ struct CodexCLIIntegrationTests {
         #expect(startedTUI?.pid == tui, "the TUI above it is still a TUI, and still answers presence")
         #expect(CodexNativeProcesses(home: root.appendingPathComponent("someone-else")).owner(of: hook) == nil,
             "another home's server is not this user's")
+    }
+
+    /// Desktop's own server, against the kernel, at the moment that used to drop its hooks: after a
+    /// quiet stretch it holds no `state_5.sqlite` descriptor, only the helper lock it took at
+    /// startup. Measured on Desktop 26.924: its server closed every `state_5.sqlite` descriptor
+    /// 13 min 52 s into an approval wait, and its lock was descriptor 3 in every sample and at
+    /// every hook.
+    ///
+    /// The stand-ins are the renamed `perl` again: one inside an app bundle carrying Desktop's
+    /// identifier, and its child running as `codex app-server` with the lock open and no database.
+    /// The first sits in `Contents/Helpers` rather than `Contents/MacOS`: AppleSystemPolicy refuses
+    /// to launch an unsigned copy from a bundle's main-executable slot, and hangs it at
+    /// `_dyld_start`. The walk reads only the enclosing bundle, so the slot changes nothing here.
+    @Test func desktopsServerOwnsItsHooksWhileItsDatabaseIsClosed() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("nc-dsk-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let home = root.appendingPathComponent("home")
+        let lock = home.appendingPathComponent(".codex/tmp/arg0/codex-arg0Test/.lock")
+        let bundle = root.appendingPathComponent("Desktop.app")
+        let desktopExecutable = bundle.appendingPathComponent("Contents/Helpers/Desktop")
+        let installed = bundle.appendingPathComponent("Contents/Resources/codex-cli/bin")
+        let serverDirectory = root.appendingPathComponent("server")
+        let started = root.appendingPathComponent("started")
+        for directory in [lock.deletingLastPathComponent(), desktopExecutable.deletingLastPathComponent(),
+                          installed, serverDirectory] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try Data().write(to: lock)
+        try PropertyListSerialization.data(fromPropertyList: [
+            "CFBundleIdentifier": "com.openai.codex", "CFBundleName": "Desktop", "CFBundleExecutable": "Desktop"
+        ], format: .xml, options: 0).write(to: bundle.appendingPathComponent("Contents/Info.plist"))
+        let serverExecutable = installed.appendingPathComponent(CodexNativeProcesses.executableName)
+        for copy in [desktopExecutable, serverExecutable] {
+            try FileManager.default.copyItem(at: URL(fileURLWithPath: "/usr/bin/perl"), to: copy)
+        }
+
+        try """
+            open(LOCK, "<", "\(lock.path)") or exit 12;
+            my $hook = fork();
+            exit 10 unless defined $hook;
+            if ($hook == 0) { exec "/bin/sleep", "120"; exit 11; }
+            open(OUT, ">", "\(started.path).partial") or exit 13;
+            print OUT "$$ $hook";
+            close(OUT);
+            rename("\(started.path).partial", "\(started.path)");
+            sleep 120;
+            """.write(to: serverDirectory.appendingPathComponent("app-server"), atomically: true, encoding: .utf8)
+        let script = root.appendingPathComponent("desktop.pl")
+        try """
+            my $server = fork();
+            exit 5 unless defined $server;
+            if ($server == 0) {
+                chdir("\(serverDirectory.path)") or exit 6;
+                exec { "\(serverExecutable.path)" } "\(serverExecutable.path)", "app-server", "--analytics-default-enabled";
+                exit 7;
+            }
+            sleep 120;
+            """.write(to: script, atomically: true, encoding: .utf8)
+
+        let desktop = try #require(Self.spawnInItsOwnSession(desktopExecutable.path, script.path))
+        var staged: [Int32] = [desktop]
+        defer { staged.forEach { kill($0, SIGKILL) } }
+        var identifiers: [Int32] = []
+        for _ in 0 ..< 200 where identifiers.count != 2 {
+            identifiers = ((try? String(contentsOf: started, encoding: .utf8)) ?? "")
+                .split(separator: " ").compactMap { Int32($0) }
+            if identifiers.count != 2 { try await Task.sleep(for: .milliseconds(25)) }
+        }
+        try #require(identifiers.count == 2, "the staged server never started")
+        let (server, hook) = (identifiers[0], identifiers[1])
+        staged += [server, hook]
+        for _ in 0 ..< 200 where ProcessAncestryHostResolver.systemExecutablePath(ofProcess: hook) != "/bin/sleep" {
+            try await Task.sleep(for: .milliseconds(25))
+        }
+
+        let reader = CodexNativeProcesses(home: home)
+        #expect(!LibprocProcessTable().openFilePaths(ofProcess: server).contains { $0.hasSuffix("state_5.sqlite") },
+            "the staged server holds no database, as an idle one does not")
+        let owner = try #require(reader.owner(of: hook),
+            "a hook Desktop's server runs after a quiet stretch is attributed, not dropped")
+        #expect(owner.surface == .desktop)
+        #expect(owner.pid == desktop, "the Desktop application above the server owns the Turn")
+        #expect(owner.terminal == nil)
+        #expect(CodexNativeProcesses(home: root.appendingPathComponent("someone-else")).owner(of: hook) == nil,
+            "a Desktop server running in another home is still not this user's")
     }
 
     /// A future `codex <newsubcommand>` used to be admitted as an interactive session, because an
