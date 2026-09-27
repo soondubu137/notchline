@@ -4,6 +4,24 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## 0.6.1 Beta — 2026-09-26
+
+**Codex CLI 0.157 sessions appear on the notch again, and Codex Desktop keeps working after its 26.924 update.** A plain `codex` now runs its Turns in Codex's shared background server. Those rows show and finish, but cannot be read or returned to at their terminal. (`docs/product-support.md` §5.1.)
+
+### Fixed
+
+- **Codex CLI 0.157 sessions drew no rows.** 0.157.0 hands a plain `codex`'s Turns to a shared background server, and the hooks come from there. Notchline dropped them as unattributable and counted them in Settings. They are now attributed to that server and shown. A TUI started with `--no-daemon` was refused as an unknown option. It is watched again, with read removal and host return.
+- **Codex Desktop 26.924 could read as Disconnected, with no rows or quota.** The update moved Desktop's bundled `codex` into a package, and Notchline knew only the old path. With no CLI installed it found nothing; otherwise it started a different `codex` from Desktop's. It now finds the new layout and looks again at every reconnect, so updating Desktop while Notchline runs no longer needs a relaunch.
+- **A Codex Desktop hook could be dropped after a quiet stretch.** Desktop's server was recognised by a database it closes after about 14 minutes unused, even mid-Turn while an approval waits. It is now recognised by a lock it holds for its whole life. No lost hook was seen; the old check held only because of the order in which the server writes.
+- **Monitoring no longer waits for the panel.** Every refresh, each quota reading and each Claude Code session listing stopped on the main thread first, so a busy panel delayed them. They now run off it.
+
+### Known limitations
+
+- **A Codex CLI row run by the background server has no terminal.** This is new with CLI 0.157 and applies to Codex's default launch. Nothing Codex reports names the terminal a Turn belongs to. A finished row stays until you dismiss it, submit again or the server unloads the Thread, and clicking it raises nothing. Run `codex --no-daemon` to keep both. Upstream: [openai/codex#37537](https://github.com/openai/codex/issues/37537).
+- **Background-server approvals and questions were not probed.** The 0.157.1 measurement had no model. They come from the same hook engine as the lifecycle events it did capture.
+
+Everything else listed under `0.6.0` and earlier still stands, except that Codex's background server is now watched rather than excluded.
+
 ## 0.6.0 Beta — 2026-09-22
 
 **Notchline now watches Codex in a local terminal as well as in Codex Desktop, at L5.** The same `Codex` switch covers both. A CLI row shows each Turn with its folder, title and progress, and reads an approval or a question in full, to be answered in the terminal. To pick it up, press Repair for Codex in Settings, then trust the three new definitions in Codex's `/hooks`. (`docs/product-support.md` §5.1.)
