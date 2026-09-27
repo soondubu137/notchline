@@ -183,7 +183,7 @@ nonisolated enum ClaudeCodeUsageUtilization {
 }
 
 private extension Optional {
-    func filter(_ isIncluded: (Wrapped) -> Bool) -> Wrapped? {
+    nonisolated func filter(_ isIncluded: (Wrapped) -> Bool) -> Wrapped? {
         guard let self, isIncluded(self) else { return nil }
         return self
     }

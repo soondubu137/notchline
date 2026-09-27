@@ -355,7 +355,7 @@ enum AutomationPermission: Sendable, Equatable {
 }
 
 /// Lets exactly one of two racers resume a continuation.
-private final class FirstAnswer: @unchecked Sendable {
+nonisolated private final class FirstAnswer: @unchecked Sendable {
     private let lock = NSLock()
     private var taken = false
 

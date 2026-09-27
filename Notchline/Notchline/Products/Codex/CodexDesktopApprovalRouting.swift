@@ -295,15 +295,19 @@ actor CodexRolloutTurnReviewerReader: TurnReviewerReading {
 
 /// The rollout record timestamp format (`2026-08-26T04:44:51.593Z`, always UTC). The
 /// formatter is cached because `ISO8601DateFormatter` is expensive to create.
+///
+/// Shared behind a lock: two actors parse with it, and unlike `DateFormatter` its header promises
+/// no thread safety and leaves it non-`Sendable`.
 nonisolated enum CodexRolloutTimestamp {
-    nonisolated private static let formatter: ISO8601DateFormatter = {
+    nonisolated(unsafe) private static let formatter: ISO8601DateFormatter = {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter
     }()
+    private static let formatterLock = NSLock()
 
-    nonisolated static func date(from stamp: String) -> Date? {
-        formatter.date(from: stamp)
+    static func date(from stamp: String) -> Date? {
+        formatterLock.withLock { formatter.date(from: stamp) }
     }
 }
 

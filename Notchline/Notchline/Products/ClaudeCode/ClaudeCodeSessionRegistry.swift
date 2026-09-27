@@ -90,20 +90,20 @@ extension ClaudeCodeSessionListing {
 /// Desktop-only machines have no `claude` on `PATH`; Desktop's copy answers the same command
 /// against `~/.claude/sessions` (`2.1.258`, 2026-09-02). Tried last: a CLI the user installed
 /// is the one they drive.
-enum ClaudeExecutableLocator {
+nonisolated enum ClaudeExecutableLocator {
     /// An override for tests and for a user whose install is somewhere unusual.
     static let overrideEnvironmentKey = "NOTCHLINE_CLAUDE_PATH"
 
     /// Where Claude Desktop keeps downloaded CLI versions, several at once (`2.1.255` and
     /// `2.1.258` side by side, 2026-09-02), so one is chosen by the version in the name.
-    nonisolated private static let desktopVersionsDirectoryName = "claude-code"
+    private static let desktopVersionsDirectoryName = "claude-code"
 
     /// The executable inside a version directory; its bundle `com.anthropic.claude-code` is
     /// also what ``ProcessHostNavigator`` depends on.
-    nonisolated private static let desktopRelativeExecutablePath =
+    private static let desktopRelativeExecutablePath =
         "claude.app/Contents/MacOS/claude"
 
-    nonisolated static func locate(
+    static func locate(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> URL? {
@@ -137,7 +137,7 @@ enum ClaudeExecutableLocator {
 
     /// Claude Desktop's own CLI copies, newest first. Unparseable names are still offered, last;
     /// `.verified` is not read, only `isExecutableFile`.
-    nonisolated static func desktopBundledExecutables(
+    static func desktopBundledExecutables(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         fileManager: FileManager = .default
     ) -> [URL] {
@@ -157,7 +157,7 @@ enum ClaudeExecutableLocator {
     }
 
     /// Numeric version order (`2.1.10` above `2.1.9`); non-numeric names sort older, by string.
-    nonisolated private static func isNewer(_ lhs: String, than rhs: String) -> Bool {
+    private static func isNewer(_ lhs: String, than rhs: String) -> Bool {
         let left = versionComponents(lhs)
         let right = versionComponents(rhs)
         if left == nil, right == nil { return lhs > rhs }
@@ -168,7 +168,7 @@ enum ClaudeExecutableLocator {
         return lhs > rhs
     }
 
-    nonisolated private static func versionComponents(_ name: String) -> [Int]? {
+    private static func versionComponents(_ name: String) -> [Int]? {
         let parts = name.split(separator: ".", omittingEmptySubsequences: false)
         guard !parts.isEmpty else { return nil }
         var numbers: [Int] = []
@@ -187,7 +187,7 @@ enum ClaudeExecutableLocator {
 /// (CR-Fable-038): EOF needs every inherited write end closed, and one orphan wedged every
 /// caller in both products. Reading stops at EOF, a ``drainGrace`` after the child exits, or a
 /// ``readGrace`` past its deadline.
-enum ClaudeCommand {
+nonisolated enum ClaudeCommand {
     private static let log = Logger(
         subsystem: "com.yinfenglu.Notchline",
         category: "ClaudeCommand"
@@ -228,21 +228,21 @@ enum ClaudeCommand {
 
     /// Whether a sessions-directory entry belongs to a `claude` this app launched. Takes the name:
     /// `<pid>.json` and `<pid>.<hash>.key` both lead with the pid.
-    nonisolated static func ownsSessionRecord(named name: String) -> Bool {
+    static func ownsSessionRecord(named name: String) -> Bool {
         guard let pid = Int32(name.prefix { $0 != "." }) else { return false }
         ownPIDsLock.lock()
         defer { ownPIDsLock.unlock() }
         return ownPIDs.contains(pid)
     }
 
-    nonisolated private static func noteOwn(pid: Int32) {
+    private static func noteOwn(pid: Int32) {
         guard pid > 0 else { return }
         ownPIDsLock.lock()
         ownPIDs.insert(pid)
         ownPIDsLock.unlock()
     }
 
-    nonisolated private static func forgetOwn(pid: Int32) {
+    private static func forgetOwn(pid: Int32) {
         ownPIDsLock.lock()
         ownPIDs.remove(pid)
         ownPIDsLock.unlock()

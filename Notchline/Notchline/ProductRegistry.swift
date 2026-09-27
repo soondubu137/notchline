@@ -1,7 +1,7 @@
 import Foundation
 
 /// Native setup is optional and separate from observation availability.
-enum ProductSetup: Sendable {
+nonisolated enum ProductSetup: Sendable {
     case none
     case managedHooks(SetupDescription)
     case companionExtension
@@ -44,7 +44,7 @@ enum ProductSetup: Sendable {
 /// Everything the app needs to know about a product before building its Provider: its name,
 /// how its integration is set up, and how to make the Provider and navigator. The store,
 /// Settings rows and their sentences all read these values (`tiered-support.md` §5.1).
-struct ProductDescriptor: Sendable {
+nonisolated struct ProductDescriptor: Sendable {
     let kind: AgentKind
     /// The row's label in Settings and first run; Codex names its Desktop app.
     let settingsTitle: String
@@ -88,7 +88,7 @@ struct ProductModule {
 
 /// How one product's observation is put in place, in the terms Settings explains it in. Every
 /// sentence about the file derives from the same values the writer uses.
-struct SetupDescription: Sendable {
+nonisolated struct SetupDescription: Sendable {
     let configurationFileRelativeToHome: String
     /// How many definitions this build writes there, read off the vocabulary, never typed.
     let definitionCount: Int
@@ -136,7 +136,7 @@ struct SetupDescription: Sendable {
     }
 }
 
-enum ProductRegistry {
+nonisolated enum ProductRegistry {
     /// Every product this build knows, in `AgentKind` declaration order (a test holds them together).
     static let builtIn: [ProductDescriptor] = [
         ProductDescriptor(

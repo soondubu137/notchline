@@ -100,7 +100,7 @@ final class AppKitCodexWorkspace: CodexWorkspaceOpening {
 
 @MainActor
 final class CodexDesktopNavigator: AgentNavigating {
-    static let desktopBundleIdentifier = "com.openai.codex"
+    nonisolated static let desktopBundleIdentifier = "com.openai.codex"
     static let desktopDisplayName = "Codex Desktop"
 
     private let targetChecker: any CodexNavigationTargetChecking
