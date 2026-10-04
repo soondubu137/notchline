@@ -107,6 +107,9 @@ struct SyntheticProductConformanceTests {
             initialSnapshot: AgentSnapshot(
                 agent: .claudeCode, availability: .ready, sessions: [], quota: .noneReported, diagnostic: nil
             ),
+            // Wired as `MonitorStore.shared` wires every product: a deadline's read lands after the
+            // snapshot that started it, and only this edge brings the store back for what it read.
+            refreshEvents: product.stateChangeEvents,
             clock: clock
         )
 
@@ -153,14 +156,17 @@ struct SyntheticProductConformanceTests {
 
         store.refreshNow()
         #expect(await eventually { store.sessions.first?.requests.map(\.id) == ["req-A", "req-B"] })
+        // The first rows may be drawn before the first read lands, and say `Step 0`.
+        #expect(await eventually { store.sessions.first?.preview == "Step 1" })
         let row = try #require(store.sessions.first)
         #expect(row.status == .inputNeeded)
         #expect(row.title == "Choose the database")
         #expect(row.projectName == "Synthetic")
-        #expect(row.preview == "Step 1")
         #expect(await product.fetchSnapshot().quota == .noneReported)
 
-        #expect(await product.nextRefreshDeadline() == t0.addingTimeInterval(30))
+        // Its deadline is booked when the read completes, which can be after `Step 1` is drawn.
+        // Advancing before then would land the read late and book `t0 + 35`, which never comes.
+        #expect(await eventually { await product.nextRefreshDeadline() == t0.addingTimeInterval(30) })
         await clock.advance(by: 30)
         store.refreshNow()
         #expect(await eventually { store.sessions.first?.preview == "Step 2" })

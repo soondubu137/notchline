@@ -386,14 +386,14 @@ struct CodexCLIIntegrationTests {
                 "hook_event_name": "UserPromptSubmit", "session_id": "s-1", "turn_id": "t-1",
                 "prompt": "Delete the temporary file"
             ]))
-            try #require(opening.waitForClose())
+            try #require(await opening.waitForClose())
             let calling = CLIHookConnection(to: socket)
             try #require(calling.send([
                 "hook_event_name": "PreToolUse", "session_id": "s-1", "turn_id": "t-1",
                 "tool_name": "Bash", "tool_use_id": "call-1",
                 "tool_input": ["command": "rm /tmp/x"]
             ]))
-            try #require(calling.waitForClose())
+            try #require(await calling.waitForClose())
 
             // The one connection the helper would be sitting in `nc` on.
             let asking = CLIHookConnection(to: socket)
@@ -401,7 +401,7 @@ struct CodexCLIIntegrationTests {
                 "hook_event_name": "PermissionRequest", "session_id": "s-1", "turn_id": "t-1",
                 "tool_name": "Bash", "tool_input": ["command": "rm /tmp/x"]
             ]))
-            #expect(asking.waitForClose() == surface.isCLI,
+            #expect(await asking.waitForClose() == surface.isCLI,
                 "a \(surface) approval's connection should \(surface.isCLI ? "close" : "stay open")")
 
             let reading = await eventuallyDrained(repository) { $0.requestAwaitingAnAnswer != nil }
@@ -1288,11 +1288,15 @@ struct CodexCLIIntegrationTests {
         return found
     }
 
+    /// Inherits nothing but the three `/dev/null` streams. A bare `posix_spawn` hands the child
+    /// every descriptor open in the test host, and its `sleep 120` then kept parallel tests'
+    /// sockets open past their own close: `aWindowThatRanOutWithdrawsTheHandleAndKeepsTheRequest`
+    /// saw no EOF after the registry let its connection go (2026-10-04).
     private static func spawnInItsOwnSession(_ executable: String, _ argument: String) -> pid_t? {
         var attributes: posix_spawnattr_t?
         posix_spawnattr_init(&attributes)
         defer { posix_spawnattr_destroy(&attributes) }
-        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID))
+        posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETSID | POSIX_SPAWN_CLOEXEC_DEFAULT))
         var actions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
@@ -1455,13 +1459,17 @@ private nonisolated final class CLIHookConnection {
     }
 
     /// Whether this app closed its end, which is where the helper exits and Codex carries on.
-    /// `false` after the window means the connection is being held for a person.
-    func waitForClose(within seconds: TimeInterval = 2) -> Bool {
-        var timeout = timeval(tv_sec: Int(seconds), tv_usec: 0)
-        setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout,
-                   socklen_t(MemoryLayout<timeval>.size))
-        var byte: UInt8 = 0
-        return recv(descriptor, &byte, 1, 0) == 0
+    /// `false` after the window means the connection is being held for a person. A held one runs
+    /// the whole window out, so it waits off the main thread.
+    func waitForClose(within seconds: TimeInterval = 2) async -> Bool {
+        let descriptor = descriptor
+        return await offTheMainThread {
+            var timeout = timeval(tv_sec: Int(seconds), tv_usec: 0)
+            setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                       socklen_t(MemoryLayout<timeval>.size))
+            var byte: UInt8 = 0
+            return recv(descriptor, &byte, 1, 0) == 0
+        }
     }
 }
 

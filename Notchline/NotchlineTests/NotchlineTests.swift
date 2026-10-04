@@ -15736,7 +15736,7 @@ for line in sys.stdin:
         ])
         let helper = paths.hookHelper
         let signalled = await receivesChange(stream) {
-            _ = try self.runHelper(at: helper, stdin: payload)
+            _ = try await self.runHelper(at: helper, stdin: payload)
         }
         #expect(signalled)
         let turns = await waitForReducedTurns(repository, count: 1)
@@ -17603,7 +17603,7 @@ for line in sys.stdin:
             "tool_use_id": "tool-script",
             "prompt": "script preview"
         ])
-        let result = try runHelper(at: paths.hookHelper, stdin: payload)
+        let result = try await runHelper(at: paths.hookHelper, stdin: payload)
 
         // An agent prints a line for every hook that fails or writes to stderr (ADR 0013).
         #expect(result.status == 0)
@@ -18447,12 +18447,12 @@ for line in sys.stdin:
     private func receivesChange(
         _ stream: AsyncStream<Void>,
         within budget: Duration = NotchlineTests.waitBudget,
-        whileRepeating mutation: @escaping @Sendable () throws -> Void
+        whileRepeating mutation: @escaping @Sendable () async throws -> Void
     ) async -> Bool {
         let repeater = Task {
             while !Task.isCancelled {
                 do {
-                    try mutation()
+                    try await mutation()
                 } catch {
                     Issue.record(
                         "the change under test could not be made: \(error)"
@@ -26516,7 +26516,7 @@ for line in sys.stdin:
         ])
 
         // 1. App not running: exit 0, both streams empty.
-        let closed = try runHelper(at: paths.hookHelper, stdin: payload)
+        let closed = try await runHelper(at: paths.hookHelper, stdin: payload)
         #expect(closed.status == 0)
         #expect(closed.stdout.isEmpty)
         #expect(closed.stderr.isEmpty)
@@ -26527,7 +26527,7 @@ for line in sys.stdin:
         defer { listener.stop() }
         #expect(listener.start(socketURL: paths.hookSocket))
 
-        let open = try runHelper(at: paths.hookHelper, stdin: payload)
+        let open = try await runHelper(at: paths.hookHelper, stdin: payload)
         #expect(open.status == 0)
         // Claude Code parses stdout for directives, so it must stay empty.
         #expect(open.stdout.isEmpty)
@@ -26541,7 +26541,7 @@ for line in sys.stdin:
         // 3. The waiting form, registered only on the asking event: exit 0 and silent without an
         //    answer, but stdout is not silenced. The listener closing the connection makes the empty
         //    reply arrive immediately.
-        let waiting = try runHelper(
+        let waiting = try await runHelper(
             at: paths.hookHelper,
             stdin: payload,
             arguments: [AgentHookHelper.answeringArgument]
@@ -26553,7 +26553,7 @@ for line in sys.stdin:
 
         // 4. Waiting form with nothing listening: still silent, still exit 0.
         listener.stop()
-        let waitingWithNobodyHome = try runHelper(
+        let waitingWithNobodyHome = try await runHelper(
             at: paths.hookHelper,
             stdin: payload,
             arguments: [AgentHookHelper.answeringArgument]
@@ -26564,7 +26564,7 @@ for line in sys.stdin:
 
         // 5. One variable keeps an agent out of the notch, on either form, with no connection attempt.
         #expect(listener.start(socketURL: paths.hookSocket))
-        let suppressed = try runHelperSuppressed(at: paths.hookHelper, stdin: payload)
+        let suppressed = try await runHelperSuppressed(at: paths.hookHelper, stdin: payload)
         #expect(suppressed.status == 0)
         #expect(suppressed.stdout.isEmpty)
         #expect(suppressed.stderr.isEmpty)
@@ -26799,7 +26799,7 @@ for line in sys.stdin:
             }
             return recorder.answerHeld(with: decision)
         }
-        let waiting = try runHelper(
+        let waiting = try await runHelper(
             at: paths.hookHelper,
             stdin: try JSONSerialization.data(withJSONObject: [
                 "hook_event_name": "PermissionRequest",
@@ -27272,26 +27272,29 @@ for line in sys.stdin:
     }
 
     @discardableResult
-    /// Runs the installed helper exactly as Claude Code's exec form does.
+    /// Runs the installed helper exactly as Claude Code's exec form does. Its pipes are read off
+    /// the main thread, since the tests that run it are `@MainActor`.
     private func runHelper(
         at url: URL,
         stdin: Data,
         arguments: [String] = []
-    ) throws -> (status: Int32, stdout: Data, stderr: Data) {
-        let process = Process()
-        process.executableURL = url
-        process.arguments = arguments
-        let input = Pipe(), output = Pipe(), errors = Pipe()
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = errors
-        try process.run()
-        input.fileHandleForWriting.write(stdin)
-        try input.fileHandleForWriting.close()
-        let out = output.fileHandleForReading.readDataToEndOfFile()
-        let err = errors.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return (process.terminationStatus, out, err)
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        try await offTheMainThread {
+            let process = Process()
+            process.executableURL = url
+            process.arguments = arguments
+            let input = Pipe(), output = Pipe(), errors = Pipe()
+            process.standardInput = input
+            process.standardOutput = output
+            process.standardError = errors
+            try process.run()
+            input.fileHandleForWriting.write(stdin)
+            try input.fileHandleForWriting.close()
+            let out = output.fileHandleForReading.readDataToEndOfFile()
+            let err = errors.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return (process.terminationStatus, out, err)
+        }
     }
 
     /// A real `socketpair`: pins that a descriptor handed to the reducer stays open and writable,
@@ -27345,23 +27348,25 @@ for line in sys.stdin:
     private func runHelperSuppressed(
         at url: URL,
         stdin: Data
-    ) throws -> (status: Int32, stdout: Data, stderr: Data) {
-        let process = Process()
-        process.executableURL = url
-        var environment = ProcessInfo.processInfo.environment
-        environment[AgentHookHelper.suppressionEnvironmentKey] = "1"
-        process.environment = environment
-        let input = Pipe(), output = Pipe(), errors = Pipe()
-        process.standardInput = input
-        process.standardOutput = output
-        process.standardError = errors
-        try process.run()
-        input.fileHandleForWriting.write(stdin)
-        try input.fileHandleForWriting.close()
-        let out = output.fileHandleForReading.readDataToEndOfFile()
-        let err = errors.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        return (process.terminationStatus, out, err)
+    ) async throws -> (status: Int32, stdout: Data, stderr: Data) {
+        try await offTheMainThread {
+            let process = Process()
+            process.executableURL = url
+            var environment = ProcessInfo.processInfo.environment
+            environment[AgentHookHelper.suppressionEnvironmentKey] = "1"
+            process.environment = environment
+            let input = Pipe(), output = Pipe(), errors = Pipe()
+            process.standardInput = input
+            process.standardOutput = output
+            process.standardError = errors
+            try process.run()
+            input.fileHandleForWriting.write(stdin)
+            try input.fileHandleForWriting.close()
+            let out = output.fileHandleForReading.readDataToEndOfFile()
+            let err = errors.fileHandleForReading.readDataToEndOfFile()
+            process.waitUntilExit()
+            return (process.terminationStatus, out, err)
+        }
     }
 
     /// Same shape as `ManagedHooksSetup.helperScript`: connect, write once, close. The close is the
