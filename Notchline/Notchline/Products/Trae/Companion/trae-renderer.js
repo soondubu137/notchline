@@ -5,7 +5,7 @@
   // One tag per companion version. Installing restarts Trae's extension host without reloading the
   // window, and a defined element cannot be redefined: under a shared tag the previous companion's
   // class kept running behind the new extension.
-  const tag = 'notchline-trae-reader-1-2-3';
+  const tag = 'notchline-trae-reader-1-2-4';
   if (customElements.get(tag)) return;
   const P = globalThis.__notchlineTraeProjectionV1;
   class Reader extends HTMLElement {
@@ -51,15 +51,8 @@
       if (typeof q.moduleURL !== 'string' || !q.moduleURL.endsWith('/node_modules/@byted-icube/ai-modules-chat/dist/index.mjs')) throw Error('Invalid module');
       const module = await import(q.moduleURL); if (generation !== this.generation) return;
       const r = module.__webpack_require__;
-      const c = r(6493).m.getInstance(); this.api = c.resolve(r(21458).R).getClient(); this.v2 = r(10678).Ok;
-      try { this.nativeHost = r(20469).mc.getInstance().resolve(r(35007).k.INativeHostService); }
-      catch { this.nativeHost = null; } // Read evidence and the exact window raise fail closed.
-      this.stores = r(57419); this.store = r(22976).z.getStoreInstance();
-      this.permission = r(71788).rT;
-      // Read the same pure pending-question selector the form consumes.
-      this.questions = r(95259).D;
-      this.flags = r(1606).Cw; this.platform = r(67679).Ov;
-      const i18n = r(40739).XT.tryResolve(r(78303).F.I18n);
+      const {i18n, ...bindings} = globalThis.__notchlineTraeCompatibility.resolve(r, q.version);
+      Object.assign(this, bindings); this.version = q.version;
       if (!i18n || typeof i18n.localize !== 'function') throw Error('Missing localisation');
       this.localize = i18n.localize.bind(i18n);
       if (typeof this.api.chat.getSession !== 'function' || typeof this.store.subscribe !== 'function' ||
@@ -220,7 +213,7 @@
             }
             rows.push({...row, folder:row.folder ?? this.validated.get(row.threadID).folder});
           }
-          this.emit({type:'snapshot', schema:1, version:'3.5.91', sequence:++this.sequence, baseline:batch.baseline, observedAt:batch.at, rows, excluded:batch.excluded});
+          this.emit({type:'snapshot', schema:1, version:this.version, sequence:++this.sequence, baseline:batch.baseline, observedAt:batch.at, rows, excluded:batch.excluded});
         }
       } catch { if (generation === this.generation) this.fail('Trae Thread identity could not be confirmed.'); }
       finally { if (generation === this.generation) this.running = false; }

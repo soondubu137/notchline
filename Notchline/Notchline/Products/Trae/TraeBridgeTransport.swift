@@ -166,7 +166,7 @@ nonisolated final class TraeBridgeTransport: TraeReadReporting, @unchecked Senda
                     peer.lastRead = Date()
                     switch frame.type {
                     case "hello":
-                        guard !peer.hello, frame.schema == 1, frame.version == TraeInstallation.traeVersion,
+                        guard !peer.hello, frame.schema == 1, TraeInstallation.supports(frame.version),
                               frame.bridgeVersion == TraeInstallation.companionVersion,
                               frame.pid.map(String.init) == URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent else { throw TraeBridgeError.version }
                         peer.hello = true
@@ -177,7 +177,7 @@ nonisolated final class TraeBridgeTransport: TraeReadReporting, @unchecked Senda
                         let wasHealthy = peer.healthy; peer.healthy = true; failedPaths.remove(path); if failedPaths.isEmpty { lastDiagnostic = nil }
                         if !wasHealthy || !(frame.rows?.isEmpty ?? true) || !(frame.excluded?.isEmpty ?? true) { changes.signal() }
                     case "heartbeat":
-                        guard peer.hello, frame.schema == 1, frame.version == TraeInstallation.traeVersion else { throw TraeBridgeError.schema }
+                        guard peer.hello, frame.schema == 1, TraeInstallation.supports(frame.version) else { throw TraeBridgeError.schema }
                     case "unavailable":
                         peer.identity = UUID()
                         boundary.lost(peer: path)

@@ -133,7 +133,7 @@ nonisolated enum TraeBridgeError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .schema: "Trae's displayed data could not be verified. Reopen its window to reconnect."
-        case .version: "This integration requires Trae 3.5.91 with the verified application build."
+        case .version: "This integration requires Trae \(TraeInstallation.supportedVersionDescription) with the verified application build."
         case .unavailable: "Trae’s companion connection is unavailable."
         case let .installation(message): message
         }
@@ -155,7 +155,7 @@ nonisolated struct TraeEvidenceBoundary {
 
     mutating func consume(_ frame: TraeFrame, peer: String, repository: MonitoringRepository,
                           epoch: MonitoringEpoch) throws {
-        guard frame.type == "snapshot", frame.schema == 1, frame.version == TraeInstallation.traeVersion,
+        guard frame.type == "snapshot", frame.schema == 1, TraeInstallation.supports(frame.version),
               let sequence = frame.sequence, sequence > 0, let baseline = frame.baseline,
               let stamp = frame.observedAt, stamp.isFinite, stamp > 0,
               let rows = frame.rows, rows.count <= 128,

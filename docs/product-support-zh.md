@@ -14,7 +14,7 @@ Codex CLI 覆盖范围于 **2026-09-22** 对照当前实现、测试及保留的
 | **Codex CLI — 普通本地交互式终端** | **L5 — 请求阅读** | 生命周期、目录/标题、当前 Turn 进展、审批/输入等待及请求阅读 | 仅默认 home，且 Turn 由经验证的本地 TUI 或 Codex 共享后台服务器运行。**所有请求均为只读，须在其自己的终端中回答**：Codex 会等待 Hook，而不是在旁边另外提问，因此保持连接会把 TUI 自己的提问顶掉（见第 3 节）。已读移除需要在该 Thread 自己的终端上操作；不支持精确终端导航；由后台服务器运行的 Turn 没有终端，因此既无已读移除，也无宿主返回。自 CLI 0.157.0 起这是 Codex 的默认启动方式，`codex --no-daemon` 可避免。原生验证边界见 §5.1 |
 | **Claude Code — Desktop 与 CLI** | **L6 — 请求回答** | 生命周期、文件夹/标题、进展、审批/输入等待、工具和计划审批、问题集回答 | 回答取决于请求的实时连接及允许操作；宿主导航和已读后移除另有条件 |
 | **Antigravity — Desktop 与 CLI** | **L3 — 进展监测** | 已观察到的生命周期与经过时间、上下文及事件触发的进展更新 | 不识别审批/输入等待，不支持请求阅读或回答；Desktop 取消没有可观察的结束事件，长时间工具调用可能延迟进展更新 |
-| **Trae Desktop — 本地 IDE/V2 根 Thread** | **L5 — 请求阅读** | 生命周期、文件夹/标题、已显示的根 Thread 进展、普通手动命令审批及结构化问题 | 仅限已验证的 **3.5.91** 构建；须在 Trae 中回答请求 |
+| **Trae Desktop — 本地 IDE/V2 根 Thread** | **L5 — 请求阅读** | 生命周期、文件夹/标题、已显示的根 Thread 进展、普通手动命令审批及结构化问题 | 仅限已验证的 **3.5.91 / 3.5.104** 构建；须在 Trae 中回答请求 |
 | **Trae — IDE 内的 SOLO** | **未单独授予等级；不纳入已声明的 L5 范围** | 原生测试确认普通本地生命周期/上下文、并发 Thread、结构化问题阅读与解除、取消、观察器重连及单窗口内精确导航 | 样本 Turn 没有提供预览文本，未触发手动命令审批；问题可读不能证明累积满足 L5 |
 
 IDE 内的 SOLO 与**独立 SoloLite**不同，后者仍被排除。[SOLO 验收记录](technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md)分别列出原生观察、测试夹具验证和未测试项。当前没有产品支持恢复启动前的 Turn 状态。已读后移除、导航、最终答案预览、subagents、额度和 token 用量独立于等级，具体范围见第 5 节。
@@ -93,7 +93,7 @@ Notchline 不提供持久权限规则。请求形态、编码限制和交付语�
 
 | 功能 | Codex Desktop | Claude Code（Desktop 与 CLI） | Antigravity（Desktop 与 CLI） | Trae Desktop（本地 IDE） |
 | --- | --- | --- | --- | --- |
-| **层级** | 普通 `PermissionRequest` 达到 **L6**；同步问题和 `request_permissions` 具备 L4/L5 覆盖 | 第 3 节列出的请求形态达到 **L6** | 两个界面上已观察到的 Turn 达到 **L3**；模式限制见下文 | **L5**，限 Trae 3.5.91 已验证构建、普通命令和结构化问题 |
+| **层级** | 普通 `PermissionRequest` 达到 **L6**；同步问题和 `request_permissions` 具备 L4/L5 覆盖 | 第 3 节列出的请求形态达到 **L6** | 两个界面上已观察到的 Turn 达到 **L3**；模式限制见下文 | **L5**，限 Trae 3.5.91 / 3.5.104 已验证构建、普通命令和结构化问题 |
 | Turn 生命周期与经过时间 | 支持 | 支持 | 支持从首次模型调用到 `Stop` 的监测。Desktop 的 **Stop execution** 不发出 `Stop`（已测量），因此该 Turn 会保持 `Working...`，直到该会话的下一次 Turn、Desktop 退出或用户手动移除；CLI 中不伴随 `Stop` 的中断未独立观察 | 使用原生实时 Turn ID 和开始时间；完成、失败及取消均结束 Turn |
 | Project 名 | Desktop 的 Project 归属，或 `Chats`；绝不从 cwd 推断 | 工作目录名称 | Desktop：其 Project 归属，未归入任何 Project 时显示 `Standalone`，无法读取时显示 `Project unavailable`；绝不使用文件夹名。CLI：TUI 工作区路径；当前 `-p` 载荷没有路径，显示 `Untitled folder` | 原生本地工作区文件夹名称；明确缺失时显示 `Untitled folder` |
 | Thread 标题 | Desktop 名称 → Thread 预览 → 当前用户请求 → `Untitled` | transcript 中的标题记录；不可用时显示 `Untitled` | 两个界面均从 transcript 读取用户请求生成标题，不与 Desktop 生成的标题同步 | 界面显示的原生标题；为空时显示 `Untitled` |
@@ -115,7 +115,7 @@ Notchline 不提供持久权限规则。请求形态、编码限制和交付语�
 
 Antigravity 的两个界面是同一引擎，读取同一个 `~/.gemini/config/hooks.json`，因此一次注册即可观察两者，Settings 中也只有一个开关。其 live progress 由事件触发更新，并非 token 流式更新。CLI 的中断实验尚未确认 `Ctrl-C` 是否总会发出 `Stop`；已测量到 Desktop 的 **Stop execution** 不发出任何 `Stop`。缺少结束信号时，绝不因没有后续信号而合成结束事件，即使 Desktop 自身的摘要记录了会话转为空闲。[CLI 测量记录](technical-explorations/multi-product-provider-architecture/antigravity-cli.md)和 [Desktop 测量记录](technical-explorations/multi-product-provider-architecture/antigravity-desktop.md)列出了模式、延迟和保守的移除路径。这些限制属于其 L3 声明的一部分。
 
-Trae 固定到已验证的 3.5.91 应用文件指纹。支持本地 IDE/V2 中持久存在的根 Thread。IDE 内的 SOLO 仍不纳入已声明的 L5 覆盖，尽管[原生边界测试](technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md)已确认普通本地生命周期及结构化问题能力。捕获的 22 帧 SOLO 数据均没有预览文本：当前读取器没有投影测试中位于 `finish.params.summary` 的最终答案。无害命令直接在沙箱中执行，没有进入手动等待，因此 SOLO 命令审批的原生验收仍未完成。这是两项独立限制，不代表 SOLO 完全无法观察。它与独立 SoloLite 不同；后者、远程工作区、Plan/Spec 和子级活动仍被排除。初始快照不会准入历史或已经运行的 Turn。失去观察时隐藏监测行，不推断完成；删除不是移除来源。IDE 与 IDE 内 SOLO 的已读移除使用新鲜的逐窗口证据；完成控件无法确认或被遮挡时保留条目。辅助窗口及完整的操作系统遮挡检测仍未验证。[实现及原生验收记录](trae-integration.md)说明安装方式、来源限制和验证。
+Trae 固定到 3.5.91 与 3.5.104 各自的已验证应用文件指纹。[3.5.104 更新记录](trae-integration.md#compatibility-update--2026-10-04)涵盖原生接口、连接验证与回归测试；其未登录的测试配置中没有重新执行真实模型审批、问题、正向已读移除及多窗口导航验收。支持本地 IDE/V2 中持久存在的根 Thread。IDE 内的 SOLO 仍不纳入已声明的 L5 覆盖，尽管[原生边界测试](technical-explorations/multi-product-provider-architecture/trae-solo-boundaries.md)已确认普通本地生命周期及结构化问题能力。捕获的 22 帧 SOLO 数据均没有预览文本：当前读取器没有投影测试中位于 `finish.params.summary` 的最终答案。无害命令直接在沙箱中执行，没有进入手动等待，因此 SOLO 命令审批的原生验收仍未完成。这是两项独立限制，不代表 SOLO 完全无法观察。它与独立 SoloLite 不同；后者、远程工作区、Plan/Spec 和子级活动仍被排除。初始快照不会准入历史或已经运行的 Turn。失去观察时隐藏监测行，不推断完成；删除不是移除来源。IDE 与 IDE 内 SOLO 的已读移除使用新鲜的逐窗口证据；完成控件无法确认或被遮挡时保留条目。辅助窗口及完整的操作系统遮挡检测仍未验证。[实现及原生验收记录](trae-integration.md)说明安装方式、来源限制和验证。
 
 ### 5.1 本地 Codex CLI
 

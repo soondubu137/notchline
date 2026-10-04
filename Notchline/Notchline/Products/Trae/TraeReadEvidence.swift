@@ -98,7 +98,7 @@ nonisolated enum TraeReadQuery {
             if let newline = data.firstIndex(of: 10) {
                 guard newline == data.count - 1,
                       let reply = try? JSONDecoder().decode(Reply.self, from: Data(data[..<newline])),
-                      reply.ok, reply.schema == 1, reply.version == TraeInstallation.traeVersion else { return nil }
+                      reply.ok, reply.schema == 1, TraeInstallation.supports(reply.version) else { return nil }
                 return reply.reading
             }
         }

@@ -89,10 +89,10 @@ struct TraeReadTransportTests {
             q=json.loads(c.makefile('rb').readline())
             if q['op']=='watch':
               watches.append(c)
-              emit(c,dict(type='hello',schema=1,version='3.5.91',bridgeVersion='1.2.3',pid=os.getpid()))
+              emit(c,dict(type='hello',schema=1,version='3.5.104',bridgeVersion='1.2.4',pid=os.getpid()))
               now=time.time()
               row=dict(threadID='1'*24,turnID='2'*24,messageID='3'*24,userMessageID='4'*24,title='Test',status='completed',startedAt=now-10,endedAt=now-3,historical=True,requests=[])
-              emit(c,dict(type='snapshot',schema=1,version='3.5.91',sequence=1,baseline=True,observedAt=now,rows=[row]))
+              emit(c,dict(type='snapshot',schema=1,version='3.5.104',sequence=1,baseline=True,observedAt=now,rows=[row]))
               open(prefix+'.watched','w').close()
               return
             if q['op']=='read':
@@ -100,7 +100,7 @@ struct TraeReadTransportTests {
               if state['broken']:c.sendall(b'{broken}\n')
               else:
                 proof=dict(windowID=window,threadID='1'*24,turnID='2'*24,messageID='3'*24,observedAt=time.time()) if state['focused'] else None
-                emit(c,dict(ok=True,schema=1,version='3.5.91',reading=proof))
+                emit(c,dict(ok=True,schema=1,version='3.5.104',reading=proof))
           except (OSError,ValueError):pass
           finally:
             if c not in watches:c.close()

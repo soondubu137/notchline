@@ -61,16 +61,16 @@ struct TraeTransportTests {
         c,_=s.accept();q=json.loads(c.makefile('rb').readline());assert q['op']=='watch' and q['schema']==1
         def emit(f):
           b=(json.dumps(f)+'\n').encode();c.sendall(b[:7]);time.sleep(.01);c.sendall(b[7:])
-        emit(dict(type='hello',schema=1,version='3.5.91',bridgeVersion='1.2.3',pid=os.getpid()))
+        emit(dict(type='hello',schema=1,version='3.5.104',bridgeVersion='1.2.4',pid=os.getpid()))
         now=time.time();sequence=1
-        emit(dict(type='snapshot',schema=1,version='3.5.91',sequence=1,baseline=True,observedAt=now,rows=[]))
+        emit(dict(type='snapshot',schema=1,version='3.5.104',sequence=1,baseline=True,observedAt=now,rows=[]))
         for command in sys.stdin:
           if command.strip()=='corrupt':c.sendall(b'{broken}\n');break
           if command.strip()=='start':
             sequence+=1
             request=dict(id='5'*24,toolID='6'*24,producer='root',name='RunCommand',kind='command',command='printf test')
             row=dict(threadID='1'*24,turnID='2'*24,messageID='3'*24,userMessageID='4'*24,title='Test',preview=str(sequence),status='in_progress',startedAt=now+.1,historical=False,requests=[request])
-            emit(dict(type='snapshot',schema=1,version='3.5.91',sequence=sequence,baseline=False,observedAt=now+.2,rows=[row]))
+            emit(dict(type='snapshot',schema=1,version='3.5.104',sequence=sequence,baseline=False,observedAt=now+.2,rows=[row]))
         """#
     }
 }

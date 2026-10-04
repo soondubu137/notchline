@@ -13,8 +13,12 @@ nonisolated enum TraeCompanionRegistration: Sendable, Equatable {
 /// are edited. Installed state is read from `~/.trae/extensions/extensions.json`, never a marker
 /// of our own, so a companion removed elsewhere reads absent.
 nonisolated struct TraeInstallation: Sendable {
-    static let traeVersion = "3.5.91"
-    static let companionVersion = "1.2.3"
+    static let supportedVersions = ["3.5.91", "3.5.104"]
+    static var supportedVersionDescription: String { supportedVersions.joined(separator: " and ") }
+    static func supports(_ version: String?) -> Bool {
+        version.map { supportedVersions.contains($0) } ?? false
+    }
+    static let companionVersion = "1.2.4"
     static let extensionID = "notchline.trae-companion"
     let application: URL
     let directory: URL
@@ -59,7 +63,7 @@ nonisolated struct TraeInstallation: Sendable {
     }
     var compatible: Bool {
         guard case let .found(instances) = applicationReading else { return false }
-        return instances.first?.version == Self.traeVersion
+        return Self.supports(instances.first?.version)
     }
     private struct ManifestEntry: Decodable {
         struct Identifier: Decodable { let id: String }
@@ -142,7 +146,10 @@ nonisolated struct TraeInstallation: Sendable {
                         to: extensionDirectory.appendingPathComponent("extension.js"))
         try fm.copyItem(at: resources.appendingPathComponent("companion-icon.png"),
                         to: extensionDirectory.appendingPathComponent("icon.png"))
-        var bridge = try Data(contentsOf: resources.appendingPathComponent("trae-projection.js"))
+        try fm.copyItem(at: resources.appendingPathComponent("trae-compatibility.js"),
+                        to: extensionDirectory.appendingPathComponent("trae-compatibility.js"))
+        var bridge = try Data(contentsOf: resources.appendingPathComponent("trae-compatibility.js"))
+        bridge.append(try Data(contentsOf: resources.appendingPathComponent("trae-projection.js")))
         bridge.append(try Data(contentsOf: resources.appendingPathComponent("trae-renderer.js")))
         try bridge.write(to: extensionDirectory.appendingPathComponent("bridge-v1.js"))
         let types = """

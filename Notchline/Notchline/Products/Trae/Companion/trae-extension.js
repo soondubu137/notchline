@@ -5,14 +5,10 @@ const path = require('node:path');
 const os = require('node:os');
 const net = require('node:net');
 const crypto = require('node:crypto');
-const VERSION = '3.5.91', SCHEMA = 1, MAX_FRAME = 1024 * 1024;
-const BRIDGE = '1.2.3', TAG = `notchline-trae-reader-${BRIDGE.replaceAll('.', '-')}`;
-const fingerprints = {
-  'out/main.js':'90fda6a0e5b4851a8a060afe1ebef3dbe69403934ab8f5669c98539b95acdf8d',
-  'modules/ai-agent/libai_agent.dylib':'2e93b706d711574a717a985bc84c329aa903d9a75b4bcde83e01ce84d2450f6f',
-  'out/vs/workbench/workbench.desktop.main.js':'a7a826e8191a386eb7c73bc3f6926924ef981f377721486c4480f0917b24276d',
-  'node_modules/@byted-icube/ai-modules-chat/dist/index.mjs':'1198074030bb24e4b79f349c06ffc67b20feda642a9e35836c7194ed4c0fe7ac'
-};
+const SCHEMA = 1, MAX_FRAME = 1024 * 1024;
+const BRIDGE = '1.2.4', TAG = `notchline-trae-reader-${BRIDGE.replaceAll('.', '-')}`;
+const compatibility = require('./trae-compatibility.js');
+let version;
 let widget, server, socketPath, lease, watching = false, stopping = false;
 const clients = new Set(), pending = new Map();
 let retainedThreadIDs = [];
@@ -44,7 +40,7 @@ function unavailable() {
 async function begin(moduleURL) {
   if (watching || !clients.size || stopping) return;
   watching = true;
-  try { await widget.postMessage({op:'start', moduleURL, retainedThreadIDs}); }
+  try { await widget.postMessage({op:'start', moduleURL, version, retainedThreadIDs}); }
   catch { watching = false; unavailable(); }
 }
 exports.activate = async function(context) {
@@ -52,8 +48,10 @@ exports.activate = async function(context) {
   if (vscode.env.remoteName) return;
   const appRoot = vscode.env.appRoot;
   const product = JSON.parse(await fs.promises.readFile(path.join(appRoot, 'product.json'), 'utf8'));
-  if (product.appVersion !== VERSION) return;
-  for (const [file, expected] of Object.entries(fingerprints)) {
+  const build = compatibility.build(product.appVersion);
+  if (!build) return;
+  version = product.appVersion;
+  for (const [file, expected] of Object.entries(build.fingerprints)) {
     if (await fingerprint(path.join(appRoot, file)) !== expected) return;
   }
   if (!vscode.icube?.defineComponent || !vscode.icube?.addIcubeComponentInTitleCenter) return;
@@ -92,11 +90,11 @@ exports.activate = async function(context) {
             !(q.retainedThreadIDs ?? []).every(id => /^[a-f0-9]{24}$/.test(id))) { client.destroy(); return; }
         retainedThreadIDs = q.retainedThreadIDs ?? [];
         subscribed = true; client.setTimeout(0); clients.add(client);
-        send(client, {type:'hello', schema:SCHEMA, version:VERSION, bridgeVersion:BRIDGE, pid:process.pid});
+        send(client, {type:'hello', schema:SCHEMA, version, bridgeVersion:BRIDGE, pid:process.pid});
         void begin(moduleURL);
       } else if (q.op === 'read' && !subscribed && watching) {
         forward({op:'read'}, 800).then(message => {
-          send(client, {ok:true, schema:SCHEMA, version:VERSION, reading:message.reading ?? null}); client.end();
+          send(client, {ok:true, schema:SCHEMA, version, reading:message.reading ?? null}); client.end();
         }, () => { send(client, {ok:false}); client.end(); });
       } else if (q.op === 'navigate' && !subscribed && /^[a-f0-9]{24}$/.test(q.threadID ?? '')) {
         forward({op:'navigate', threadID:q.threadID}).then(() => {
@@ -116,7 +114,7 @@ exports.activate = async function(context) {
   lease = setInterval(async () => {
     if (!clients.size) return;
     if (!watching) { void begin(moduleURL); return; }
-    try { await forward({op:'lease'}); for (const c of clients) send(c, {type:'heartbeat', schema:SCHEMA, version:VERSION}); }
+    try { await forward({op:'lease'}); for (const c of clients) send(c, {type:'heartbeat', schema:SCHEMA, version}); }
     catch { watching = false; unavailable(); }
   }, 10000);
   context.subscriptions.push({dispose:() => { void exports.deactivate(); }});

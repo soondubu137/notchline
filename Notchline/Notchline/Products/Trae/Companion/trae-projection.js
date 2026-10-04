@@ -1,4 +1,4 @@
-// Passive projection of Trae 3.5.91's displayed V2 data. No native writes.
+// Passive projection of the verified Trae builds' displayed V2 data. No native writes.
 // Loaded before the component and also exercised directly by Node fixtures.
 (function (root) {
   'use strict';
@@ -64,7 +64,8 @@
         const params = tool.params;
         // Rich permission fields need their own presentation; do not omit them.
         const rich = ['sandbox_status','sandbox_recovery_type','sandbox_config_command','block_level','block_command_list','hit_red_list','hit_black_list']
-          .some(k => c[k] != null && c[k] !== false);
+          .some(k => c[k] != null && c[k] !== false) ||
+          Object.entries(c).some(([key, value]) => key.startsWith('permission_request_') && value != null && value !== false);
         if (!rich && object(params) && params.requires_approval === true &&
             Object.keys(params).every(k => ['command','blocking','requires_approval','cwd','command_description','command_type'].includes(k))) {
           request.kind = 'command'; request.command = text(params.command);

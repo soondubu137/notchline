@@ -28,6 +28,29 @@ struct TraeConformanceTests {
         try boundary.consume(frame, peer: peer, repository: repository, epoch: repository.observationEpoch)
     }
 
+    @Test func onlyPinnedVersionsAreAccepted() throws {
+        for version in ["3.5.91", "3.5.104"] {
+            #expect(TraeInstallation.supports(version))
+            var boundary = TraeEvidenceBoundary()
+            let repository = MonitoringRepository(policy: .explicit)
+            try consume(TraeFrame(type: "snapshot", schema: 1, version: version, sequence: 1,
+                baseline: true, observedAt: t0, rows: []), &boundary, repository)
+            try consume(TraeFrame(type: "snapshot", schema: 1, version: version, sequence: 2,
+                baseline: false, observedAt: t0 + 2, rows: [row(requests: [command()])]), &boundary, repository)
+            #expect(boundary.current[id(1)]?.requests.first?.command == "printf test")
+        }
+        for version in [nil, "", "3.5.92", "3.5.105", "3.5.104-beta"] as [String?] {
+            #expect(!TraeInstallation.supports(version))
+            var boundary = TraeEvidenceBoundary()
+            let repository = MonitoringRepository(policy: .explicit)
+            #expect(throws: (any Error).self) {
+                try consume(TraeFrame(type: "snapshot", schema: 1, version: version, sequence: 1,
+                    baseline: true, observedAt: t0, rows: []), &boundary, repository)
+            }
+            #expect(boundary.current.isEmpty)
+        }
+    }
+
     @Test func historicalBaselineDoesNotAdmitACompletedOrAlreadyRunningTurn() async throws {
         var boundary = TraeEvidenceBoundary(); let repository = MonitoringRepository(policy: .explicit)
         try consume(frame(1, [row(at: t0 - 10), row(thread: 3, turn: 4, status: "completed")], baseline: true), &boundary, repository)
@@ -138,6 +161,7 @@ struct TraeConformanceTests {
         #expect(descriptor.setup.managedHooks == nil)
         #expect(descriptor.setup.installedMessage.contains("when Trae’s windows next open"))
         #expect(descriptor.watches?.contains("3.5.91") == true)
+        #expect(descriptor.watches?.contains("3.5.104") == true)
         #expect(descriptor.notShown?.contains("SOLO") == true)
     }
     @Test func companionSettingsDistinguishInstallationFromConnectionAndVersion() {
@@ -169,6 +193,11 @@ struct TraeConformanceTests {
         #expect(!bridge.contains("sendUserDecision")); #expect(!bridge.contains("ahaIpc.connect"))
         #expect(!bridge.contains("stopSession(")); #expect(!bridge.contains("submitChatMessage"))
         #expect(bridge.contains("switchToSession"))
+        let compatibility = try String(contentsOf: root.appendingPathComponent("package/extension/trae-compatibility.js"), encoding: .utf8)
+        #expect(bridge.hasPrefix(compatibility))
+        for version in TraeInstallation.supportedVersions {
+            #expect(compatibility.contains("'\(version)':"))
+        }
         // Trae restarts its extension host on install without reloading the window, and the renderer
         // keeps any custom element already defined: a tag shared across versions ran the old class.
         let tag = "notchline-trae-reader-" + TraeInstallation.companionVersion.replacingOccurrences(of: ".", with: "-")
@@ -282,11 +311,11 @@ struct TraeConformanceTests {
         try Data(#"[{"identifier":{"id":"notchline.trae-companion"},"version":"1.1.0"}]"#.utf8).write(to: manifest)
         #expect(installation.registration == .mismatched)
         // Trae's extension host lower-cases VSIX identifiers; the read tolerates any case.
-        try Data(#"[{"identifier":{"id":"NOTCHLINE.TRAE-COMPANION"},"version":"1.2.3"}]"#.utf8).write(to: manifest)
+        try Data(#"[{"identifier":{"id":"NOTCHLINE.TRAE-COMPANION"},"version":"1.2.4"}]"#.utf8).write(to: manifest)
         #expect(installation.registration == .mismatched, "a manifest entry alone cannot prove the package exists")
-        let package = root.appendingPathComponent("notchline.trae-companion-1.2.3/package.json")
+        let package = root.appendingPathComponent("notchline.trae-companion-1.2.4/package.json")
         try FileManager.default.createDirectory(at: package.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.3"}"#.utf8).write(to: package)
+        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.4"}"#.utf8).write(to: package)
         #expect(installation.registration == .current)
         try Data("{".utf8).write(to: package)
         #expect(installation.registration == .unreadable)
@@ -306,13 +335,13 @@ struct TraeConformanceTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let manifest = extensionsDirectory.appendingPathComponent("extensions.json")
         // An unmodelled `metadata` field: removal must rewrite the manifest as loose JSON, not drop it.
-        let companionFolder = extensionsDirectory.appendingPathComponent("notchline.trae-companion-1.2.3")
+        let companionFolder = extensionsDirectory.appendingPathComponent("notchline.trae-companion-1.2.4")
         let otherFolder = extensionsDirectory.appendingPathComponent("someone.else-9.9.9")
         try FileManager.default.createDirectory(at: companionFolder, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: otherFolder, withIntermediateDirectories: true)
         try Data(#"""
         [
-          {"identifier":{"id":"notchline.trae-companion"},"version":"1.2.3","relativeLocation":"notchline.trae-companion-1.2.3"},
+          {"identifier":{"id":"notchline.trae-companion"},"version":"1.2.4","relativeLocation":"notchline.trae-companion-1.2.4"},
           {"identifier":{"id":"someone.else"},"version":"9.9.9","relativeLocation":"someone.else-9.9.9","metadata":{"pinned":true}}
         ]
         """#.utf8).write(to: manifest)
@@ -322,7 +351,7 @@ struct TraeConformanceTests {
             directory: root,
             extensionsManifest: manifest
         )
-        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.3"}"#.utf8)
+        try Data(#"{"publisher":"notchline","name":"trae-companion","version":"1.2.4"}"#.utf8)
             .write(to: companionFolder.appendingPathComponent("package.json"))
         #expect(installation.registration == .current)
         try await installation.remove()

@@ -179,7 +179,7 @@ struct TraeReconnectTests {
               with lock:
                 state['held'].append(c);state['retained']=q.get('retainedThreadIDs',[]);state['watches']+=1
                 json.dump(state['retained'],open(prefix+'.retained','w'))
-                emit(c,dict(type='hello',schema=1,version='3.5.91',bridgeVersion='1.2.3',pid=os.getpid()))
+                emit(c,dict(type='hello',schema=1,version='3.5.91',bridgeVersion='1.2.4',pid=os.getpid()))
                 rows=[r for t,r in state['rows'].items() if r['status']=='in_progress' or t in state['retained']]
                 if len(rows)>128:
                   state['watch']=None

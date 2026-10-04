@@ -1,6 +1,6 @@
 # Trae local IDE integration
 
-Implemented for the verified macOS Trae **3.5.91** build at **L5**, within the mode and request-form limits in [product support](product-support.md). This is a production companion implementation following the [feasibility record](technical-explorations/multi-product-provider-architecture/trae-desktop-l5-preflight.md), not a proposal to own Trae’s model connection.
+Implemented for the verified macOS Trae **3.5.91 and 3.5.104** builds at **L5**, within the mode and request-form limits in [product support](product-support.md). This is a production companion implementation following the [feasibility record](technical-explorations/multi-product-provider-architecture/trae-desktop-l5-preflight.md), not a proposal to own Trae’s model connection.
 
 ## Setup and scope
 
@@ -18,9 +18,9 @@ Only a new native Turn observed after attachment may open a row. A baseline is n
 
 ## Implementation and private dependencies
 
-The current [official Hook reference](https://docs.trae.cn/ide_hook-configuration-reference), rechecked 2026-09-12, does not supply an equivalent displayed-content and faithful native-form observation stream. The normally installed companion uses Trae’s private `icube` proposed extension API and renderer modules. This dependence is explicit in [the registry](non-public-codex-integration-features.md#trae-desktop-local-ide).
+The current [official Hook reference](https://docs.trae.cn/ide_hook-configuration-reference), rechecked 2026-10-04, does not supply an equivalent displayed-content and faithful native-form observation stream. The normally installed companion uses Trae’s private `icube` proposed extension API and renderer modules. This dependence is explicit in [the registry](non-public-codex-integration-features.md#trae-desktop-local-ide).
 
-`trae-extension.js` checks `product.json.appVersion` and streams SHA-256 over these application-relative files before exposing any socket:
+`trae-extension.js` selects an exact build from `trae-compatibility.js` using `product.json.appVersion` and streams SHA-256 over every file in that build before exposing any socket. The same compatibility resource supplies renderer module identities and is packaged into both extension and renderer contexts. Unknown versions and mismatched files remain refused. The 3.5.91 fingerprints are:
 
 | File under `Contents/Resources/app/` | SHA-256 |
 | --- | --- |
@@ -28,6 +28,18 @@ The current [official Hook reference](https://docs.trae.cn/ide_hook-configuratio
 | `modules/ai-agent/libai_agent.dylib` | `2e93b706d711574a717a985bc84c329aa903d9a75b4bcde83e01ce84d2450f6f` |
 | `out/vs/workbench/workbench.desktop.main.js` | `a7a826e8191a386eb7c73bc3f6926924ef981f377721486c4480f0917b24276d` |
 | `node_modules/@byted-icube/ai-modules-chat/dist/index.mjs` | `1198074030bb24e4b79f349c06ffc67b20feda642a9e35836c7194ed4c0fe7ac` |
+
+The 3.5.104 macOS arm64 build (`tronBuildVersion` 2.3.88407) has separate fingerprints:
+
+| File under `Contents/Resources/app/` | SHA-256 |
+| --- | --- |
+| `out/main.js` | `a3b3f9e050f8a5d6720760900e4ca047d5605aa72c8ac3d9905b7649806dc831` |
+| `modules/ai-agent/libai_agent.dylib` | `87677916de9f183ec5ad9b355dde12a0f4effb8202fe55e76246ba6ae5d55e02` |
+| `out/vs/workbench/workbench.desktop.main.js` | `97aa42b23b9b5040695fb8a131b03761242ea6c12bc1ed779deec084d8425382` |
+| `node_modules/@byted-icube/ai-modules-chat/dist/index.mjs` | `7c379d4d6e8b327b8a695bd604951de8449c78344729d417e95d6c1cf95da60f` |
+| `node_modules/@byted-icube/ai-modules-chat/dist/598.fe68f329.mjs` | `15d1328552d251ec6d44dbd9ce3e0317b77a9713431a4dc176efbe4b568e0e61` |
+
+The fifth file contains the new V2 selection API; pinning only the index would leave that dependency unchecked. Companion **1.2.4** reports the detected application version on hello, snapshots, heartbeats and read replies, and uses a new renderer tag so an extension-host restart cannot retain 1.2.3’s bindings. Both supported builds retain the same bounded wire schema and mode limits.
 
 The component listener is attached in its constructor because the title-slot component is not guaranteed to have a normal connected-element lifetime. It imports the application module by absolute path, resolves the **existing product-owned client**, and subscribes to the same session/message/plan stores and pending-request selectors the UI uses. It neither connects nor disconnects Aha. Its stop operation removes only its own subscriptions and timers.
 
@@ -101,7 +113,7 @@ The refusal is `capture` in `trae-renderer.js`. A local Node test, `tests/trae/r
 
 Still unbounded: a Turn whose row vanished for good without being read or removed, such as a Thread deleted in Trae or one whose only window closed, stays admitted and keeps a place in the 96. The reducer, and the gate's read verdicts, keep every finished Trae Turn until Trae restarts, since Trae supplies no list of Threads that still exist. That costs memory, not observation. Within one observation generation the companion also remembers every Thread that ran, and past 512 it reports itself unavailable. The retry that follows starts with a fresh memory and, with the bounded list, recovers.
 
-Upgrade the companion through Notchline's Trae setup and reopen Trae windows; version 1.0.0 does not implement the new query. The four application fingerprints above are required. The [research record](technical-explorations/multi-product-provider-architecture/trae-read-removal.md) separates native window/visibility experiments from production acceptance.
+Upgrade the companion through Notchline's Trae setup and reopen Trae windows; version 1.0.0 does not implement the new query. Every fingerprint for the selected build above is required. The [research record](technical-explorations/multi-product-provider-architecture/trae-read-removal.md) separates native window/visibility experiments from production acceptance.
 
 
 ### Read-removal validation — 2026-09-13
@@ -117,3 +129,13 @@ Release (`ENABLE_TESTABILITY=YES`, retaining `-O`) measured **100 production rea
 Trae presence remains the macOS application presence even when the companion cannot be observed. A configured, closed Trae reads `Not open`, with no warning or reload instruction. The registration reader distinguishes missing manifest, unreadable/invalid manifest, missing package and package identity/version mismatch. Setup resolves one discovered application rather than assuming `/Applications/Trae.app`; ambiguous discovery refuses installation. Validated peers clear their own failure; partial coverage is restricted to discovered peers. A silent, never-connected companion stays unverified. See [Product connection checks](product-connections.md) for the shared model and profile/window limits.
 
 A successful install into an already open Trae process records a transient reload requirement. A validated companion connection clears it; normal closure suppresses it. An unknown, never-connected companion does not acquire a reload requirement merely by waiting.
+
+## Compatibility update — 2026-10-04
+
+Trae 3.5.104 changed all four formerly pinned files and every module identity used by the companion. Merely allowing its version would have left the renderer unable to attach. Companion 1.2.4 retains the 3.5.91 bindings and adds an exact 3.5.104 mapping, including `27704.apis` in its separate selection chunk. The new build's additional permission-request fields are withheld as unsupported rich forms rather than shown as an ordinary command.
+
+A disposable local profile and Project verified the actual 3.5.104 renderer's product-owned client, root and Project readers, session/message/plan selectors, pending command/question selectors, feature flags, localisation, selection API and native focus service. The production renderer emitted a version-correct baseline and returned no read proof for an empty window. The companion was also installed through Trae's normal extension CLI and started after a window reload; its Unix socket returned hello (bridge 1.2.4), baseline and heartbeat with version 3.5.104. This profile was signed out: no new live model Turn, manual approval, question, positive completion-read proof or multi-window navigation was accepted in this pass. Earlier native lifecycle/request fixtures remain explicitly labelled 3.5.91; they have not been relabelled as new native evidence.
+
+Regression checks cover both accepted versions, rejection of unknown versions, damaged or missing pinned files, packaging, request preservation and socket framing. The tracked JavaScript checks run with `node --test scripts/tests/trae-compatibility.test.cjs`; existing local projection/renderer checks run with `node --test tests/trae/*.test.cjs`. Reinstall the companion through Notchline's Products setup after updating Notchline; an existing 1.2.3 installation correctly requires repair.
+
+Validation: the complete Debug unit suite passed **1,056 tests / 1,059 executions**, serially with `-parallel-testing-enabled NO`; all **37 JavaScript checks** passed. The final Release build passed and its four companion resources matched the source. Two intermediate full runs failed the existing Codex `readingSetupStatusNeverConsumesWhatTheRefreshIsOwed` timing case; the final full run passed unchanged, with Xcode retry-on-failure enabled (1,059 executions, no additional retry execution needed).

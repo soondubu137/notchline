@@ -231,7 +231,7 @@ nonisolated enum ProductRegistry {
         ),
         ProductDescriptor(
             kind: .trae, settingsTitle: "Trae Desktop", setup: .companionExtension,
-            watches: "Trae 3.5.91 local IDE Threads. Requests are read here and answered in Trae. "
+            watches: "Trae 3.5.91 and 3.5.104 local IDE Threads. Requests are read here and answered in Trae. "
                 + "Visible completed Turns clear in IDE and IDE-hosted SOLO, including multiple windows.",
             notShown: "Complete SOLO progress/approval coverage, standalone SOLO, Plan/Spec, remote work and usage quota.",
             make: {

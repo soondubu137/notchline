@@ -133,9 +133,9 @@ nonisolated final class TraeSource: MonitoringLifecycleSource, ProductSessionRea
         case let .unknown(reason):
             return .closed(availability: .disconnected, setupStatus: .reviewRequired, diagnostic: reason)
         case let .found(instances):
-            guard instances.first?.version == TraeInstallation.traeVersion else {
+            guard TraeInstallation.supports(instances.first?.version) else {
                 return .closed(availability: .unsupportedVersion, setupStatus: .reviewRequired,
-                    diagnostic: "Trae \(instances.first?.version ?? "(version unavailable)") is not supported. This build supports Trae \(TraeInstallation.traeVersion).")
+                    diagnostic: "Trae \(instances.first?.version ?? "(version unavailable)") is not supported. This build supports Trae \(TraeInstallation.supportedVersionDescription).")
             }
         case .notChecked:
             return .closed(availability: .disconnected, setupStatus: .reviewRequired, diagnostic: nil)
