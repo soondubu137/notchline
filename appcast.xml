@@ -6,6 +6,28 @@
     <description>Notchline's update feed, read by every copy through SUFeedURL. Items are added by scripts/release/build-release.sh, newest first; do not rename or move this file.</description>
     <language>en</language>
     <item>
+      <title>Notchline 0.6.2 Beta</title>
+      <pubDate>Sun, 04 Oct 2026 17:15:37 GMT</pubDate>
+      <sparkle:version>25</sparkle:version>
+      <sparkle:shortVersionString>0.6.2</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/soondubu137/notchline/releases/tag/v0.6.2</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown"><![CDATA[**Trae 3.5.104 is watched, alongside 3.5.91.** It needs companion 1.2.4: press Repair for Trae in Settings, then restart extensions when Trae asks. (`docs/trae-integration.md`.)
+
+### Fixed
+
+- **Trae 3.5.104 was refused.** The update changed every private file and module the companion reads, so Settings asked for 3.5.91 and nothing was observed. Companion 1.2.4 carries an exact mapping for each supported build and still refuses any other version or a damaged install. The new permission-request fields 3.5.104 adds are withheld as unsupported, not shown as an ordinary command.
+
+### Known limitations
+
+- **3.5.104 was verified signed out.** The companion's connection, the readers it uses, selection and window focus were checked on the real build, but no live Turn, approval, question, read removal or multi-window navigation ran on it. Those were last watched on 3.5.91.
+- **Only those two builds.** Any other Trae version, older or newer, is refused until it has been verified.
+
+Everything listed under `0.6.1` and earlier still stands, except that Trae's verified builds now include 3.5.104.
+]]></description>
+      <enclosure url="https://github.com/soondubu137/notchline/releases/download/v0.6.2/Notchline-0.6.2.zip" type="application/octet-stream" sparkle:edSignature="nvOud8cw9vOdds+ocOuyY5uqDRll5J6uk1F0zt4t1ZjizJXo7/+YWjnznaIS9YTBl/u4O5gUaZWFFEf3DN9TAQ==" length="4003378"/>
+    </item>
+    <item>
       <title>Notchline 0.6.1 Beta</title>
       <pubDate>Sun, 27 Sep 2026 02:45:20 GMT</pubDate>
       <sparkle:version>24</sparkle:version>
