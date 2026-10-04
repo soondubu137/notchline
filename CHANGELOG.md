@@ -4,6 +4,21 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## 0.6.2 Beta — 2026-10-04
+
+**Trae 3.5.104 is watched, alongside 3.5.91.** It needs companion 1.2.4: press Repair for Trae in Settings, then restart extensions when Trae asks. (`docs/trae-integration.md`.)
+
+### Fixed
+
+- **Trae 3.5.104 was refused.** The update changed every private file and module the companion reads, so Settings asked for 3.5.91 and nothing was observed. Companion 1.2.4 carries an exact mapping for each supported build and still refuses any other version or a damaged install. The new permission-request fields 3.5.104 adds are withheld as unsupported, not shown as an ordinary command.
+
+### Known limitations
+
+- **3.5.104 was verified signed out.** The companion's connection, the readers it uses, selection and window focus were checked on the real build, but no live Turn, approval, question, read removal or multi-window navigation ran on it. Those were last watched on 3.5.91.
+- **Only those two builds.** Any other Trae version, older or newer, is refused until it has been verified.
+
+Everything listed under `0.6.1` and earlier still stands, except that Trae's verified builds now include 3.5.104.
+
 ## 0.6.1 Beta — 2026-09-26
 
 **Codex CLI 0.157 sessions appear on the notch again, and Codex Desktop keeps working after its 26.924 update.** A plain `codex` now runs its Turns in Codex's shared background server. Those rows show and finish, but cannot be read or returned to at their terminal. (`docs/product-support.md` §5.1.)
