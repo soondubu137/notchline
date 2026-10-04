@@ -269,7 +269,7 @@ That source is written by the CLI itself, so it works for every Claude Code user
 
 ### 7.3 Project
 
-See [ADR 0009](adr/0009-resolve-project-per-product.md). Project is resolved per product: a Codex Desktop row's is the user-created Desktop Project or `Chats`, while a local CLI row uses its native `cwd` grouping; a Claude Code row's is the thread's working directory (`cwd`), showing the last path component in-row with the full `cwd` as the accessibility name. [ADR 0003](adr/0003-use-codex-desktop-project-identity.md)'s ban on path inference now binds only the Codex side — its reasoning was that paths do not map one-to-one onto Desktop Projects, whereas Claude Code's `cwd` *is* that product's grouping unit.
+See [ADR 0009](adr/0009-resolve-project-per-product.md). Project is resolved per product: a Codex Desktop row's is the user-created Desktop Project, or `Untitled Project` for a Thread in `Chats`, while a local CLI row uses its native `cwd` grouping; a Claude Code row's is the thread's working directory (`cwd`), showing the last path component in-row with the full `cwd` as the accessibility name. [ADR 0003](adr/0003-use-codex-desktop-project-identity.md)'s ban on path inference now binds only the Codex side — its reasoning was that paths do not map one-to-one onto Desktop Projects, whereas Claude Code's `cwd` *is* that product's grouping unit.
 
 ## 8. Open items
 

@@ -108,9 +108,9 @@ A missing, corrupt, permission-denied or schema-incompatible main state must con
 
 - Monitor every Project and `Chats` under the current Codex Desktop account, without following the sidebar selection.
 - For Desktop, a Project must be a user-created Project entity in the Codex Desktop sidebar, and may span one or more repositories.
-- A thread with no Project shows `Chats`.
+- A thread with no Project (one in `Chats`) shows `Untitled Project`, the shared missing-name fallback every product uses since 0.4.3.
 - Deriving a Desktop Project from `cwd`, the Git root or the last path component is forbidden. Local CLI rows use their native `cwd` grouping and the shared missing-name fallback.
-- The current officially supported interfaces do not expose Desktop Project identity; with product approval, the strictly read-only private adapter registered in [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) may be used. `Chats` shows only on an explicit hit in Desktop's `projectless-thread-ids`; missing or corrupt data must show `Project unavailable` and fail closed.
+- The current officially supported interfaces do not expose Desktop Project identity; with product approval, the strictly read-only private adapter registered in [`non-public-codex-integration-features.md`](non-public-codex-integration-features.md) may be used. `Untitled Project` shows only on an explicit hit in Desktop's `projectless-thread-ids`; missing or corrupt data must show `Project unavailable` and fail closed.
 
 ## 5. First-run onboarding
 
@@ -259,7 +259,7 @@ A single failed preview read hides only that preview and never turns a thread or
 
 ### 8.1 Title
 
-Prefer the thread title the desktop app displays. Where it has none, use a safe single-line truncation of this Turn's user input; where that is unavailable too, show `Untitled`.
+Prefer the thread title the desktop app displays. Where it has none, use a safe single-line truncation of this Turn's user input; where that is unavailable too, show `Untitled Session`.
 
 ### 8.2 Processing time
 
@@ -433,7 +433,7 @@ If Project, unread membership or exact navigation cannot be met, V1 must not fak
 6. Processing time follows §8.2: unfinished rows advance every second, continue without pausing on entering Approval needed or Input needed, and stop on Completed to give way to the status dot; the collapsed right end shows the longest across unfinished Turns and disappears once everything is finished with no subagent running; spoken copy uses duration form; and no per-second refresh exists with no unfinished Turn — **a subagent count left alone in the collapsed state must not introduce one either**, since it does not change with the clock.
 7. Clicking any row reaches the same thread; opening a home page is not a pass.
 8. Primary quota window switching and unavailability behave correctly, and a quota failure does not affect the thread list.
-9. A missing title shows `Untitled`, and row height and panel geometry are unchanged by it. (The former preview switch is gone — §7 — so there is no preview-off case to check.)
+9. A missing title shows `Untitled Session`, and row height and panel geometry are unchanged by it. (The former preview switch is gone — §7 — so there is no preview-off case to check.)
 10. Disconnected clears the list, and neither `Connected` nor the four passive states carry action buttons.
 11. The expanded baseline is `520` wide, the top region is `46` in the reference design and grows only horizontally, and no status name is occluded by the physical notch. Panel height is computed per §9.2 rather than fixed.
 12. More than three rows scroll vertically, and re-sorting never interrupts the user's current scroll position.

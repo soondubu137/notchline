@@ -925,7 +925,7 @@ Spoken examples:
 ```text
 Notchline, three current Turns, status input needed, quota 72 percent remaining
 Confirm the unread lifecycle, Project Notchline, input needed
-Awaiting approval, Chats, approval needed
+Awaiting approval, Untitled Project, approval needed
 ```
 
 **Neither the subagent badge nor the session-count dots may speak through colour alone.** The badge's number can be read, but "the ground inverted" cannot, so its spoken copy states the state as a word: a row reads `3 subagents, waiting for you` (`MonitoredSession.spokenSubagentSummary`), and the collapsed state also names the product, because two side by side are told apart only by ink — `Codex 3 subagents, Claude Code 4 subagents, waiting for you` (`MonitorStore.spokenRunningSubagentText`). Both badge views are `accessibilityHidden`, spoken by the row or top bar containing them, so one number is never read twice. The session-count dots are not spoken separately: they count how many rows the list has, and the list itself is read row by row below. **Their breath is**, because it is the one thing on this surface said by motion alone — the collapsed label gains `2 turns finished and unread` on exactly the terms the column moves on (`MonitorStore.spokenBuriedCompletionText`, [`dual-agent-design.md`](dual-agent-design.md) §12). It says how many, which the movement never does; the number is already known and nothing about the drawing has to change to hand it over.

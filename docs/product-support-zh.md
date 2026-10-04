@@ -95,8 +95,8 @@ Notchline 不提供持久权限规则。请求形态、编码限制和交付语�
 | --- | --- | --- | --- | --- |
 | **层级** | 普通 `PermissionRequest` 达到 **L6**；同步问题和 `request_permissions` 具备 L4/L5 覆盖 | 第 3 节列出的请求形态达到 **L6** | 两个界面上已观察到的 Turn 达到 **L3**；模式限制见下文 | **L5**，限 Trae 3.5.91 / 3.5.104 已验证构建、普通命令和结构化问题 |
 | Turn 生命周期与经过时间 | 支持 | 支持 | 支持从首次模型调用到 `Stop` 的监测。Desktop 的 **Stop execution** 不发出 `Stop`（已测量），因此该 Turn 会保持 `Working...`，直到该会话的下一次 Turn、Desktop 退出或用户手动移除；CLI 中不伴随 `Stop` 的中断未独立观察 | 使用原生实时 Turn ID 和开始时间；完成、失败及取消均结束 Turn |
-| Project 名 | Desktop 的 Project 归属，或 `Chats`；绝不从 cwd 推断 | 工作目录名称 | Desktop：其 Project 归属，未归入任何 Project 时显示 `Standalone`，无法读取时显示 `Project unavailable`；绝不使用文件夹名。CLI：TUI 工作区路径；当前 `-p` 载荷没有路径，显示 `Untitled folder` | 原生本地工作区文件夹名称；明确缺失时显示 `Untitled folder` |
-| Thread 标题 | Desktop 名称 → Thread 预览 → 当前用户请求 → `Untitled` | transcript 中的标题记录；不可用时显示 `Untitled` | 两个界面均从 transcript 读取用户请求生成标题，不与 Desktop 生成的标题同步 | 界面显示的原生标题；为空时显示 `Untitled` |
+| Project 名 | Desktop 的 Project 归属；属于 Chats 的 Thread 显示 `Untitled Project`，无法读取时显示 `Project unavailable`；绝不从 cwd 推断 | 工作目录名称 | Desktop：其 Project 归属，未归入任何 Project（Desktop 中的 `Standalone`）时显示 `Untitled Project`，无法读取时显示 `Project unavailable`；绝不使用文件夹名。CLI：TUI 工作区路径；当前 `-p` 载荷没有路径，显示 `Untitled Project` | 原生本地工作区文件夹名称；明确缺失时显示 `Untitled Project` |
+| Thread 标题 | Desktop 名称 → Thread 预览 → 当前用户请求 → `Untitled Session` | transcript 中的标题记录；不可用时显示 `Untitled Session` | 两个界面均从 transcript 读取用户请求生成标题，不与 Desktop 生成的标题同步 | 界面显示的原生标题；为空时显示 `Untitled Session` |
 | Live progress | 拉取内容；不可用时按 Thread 降级 | 推送的 `MessageDisplay` 更新 | 在下一次模型调用和 `Stop` 时读取 transcript；长时间工具调用可能延迟更新 | 由 renderer store 变化读取已显示的根 Thread 文本；相邻纯内容更新合并 100 ms，保留生命周期和请求边界 |
 | 审批等待与输入等待 | 支持普通审批、`request_permissions` 和同步问题；过滤自动审核 | 支持第 3 节列出的形态 | 两者均不支持 | 普通手动 `RunCommand` 与 `AskUserQuestion`；排除自动审核和子级活动 |
 | 请求阅读与回答 | 普通审批可回答，`request_permissions` 和同步问题只读，异步问题仅预览；CLI 在 §5.1 单独声明为 L5 | 范围见第 3 节 | 两者均不支持 | 命令和问题集只读，保留选项、自定义文本限制及可选附加信息；不支持回答 |

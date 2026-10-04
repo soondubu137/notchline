@@ -1,5 +1,7 @@
 # Resolve Project per product: a Desktop entity for Codex, the working directory for Claude Code
 
+> **The label changed in 0.4.3 (2026-09-13); the decision did not. Recorded 2026-10-04.** An unattached Codex Thread now draws `Untitled Project`, the shared missing-name fallback, instead of `Chats`. Resolution per product is unchanged.
+
 A row's Project has no single definition; it is resolved per product.
 
 Codex rows keep [ADR 0003](0003-use-codex-desktop-project-identity.md): the Project must be an entity the user created in the Codex Desktop sidebar, an unattached Thread shows `Chats`, and inference from `cwd`, the Git root or a path name stays forbidden. That ban now binds only the Codex side, because its reason was that paths do not map one-to-one onto user-managed Desktop Projects.
