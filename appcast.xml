@@ -6,6 +6,27 @@
     <description>Notchline's update feed, read by every copy through SUFeedURL. Items are added by scripts/release/build-release.sh, newest first; do not rename or move this file.</description>
     <language>en</language>
     <item>
+      <title>Notchline 0.6.3 Beta</title>
+      <pubDate>Mon, 05 Oct 2026 04:52:59 GMT</pubDate>
+      <sparkle:version>26</sparkle:version>
+      <sparkle:shortVersionString>0.6.3</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>26.5</sparkle:minimumSystemVersion>
+      <sparkle:fullReleaseNotesLink>https://github.com/soondubu137/notchline/releases/tag/v0.6.3</sparkle:fullReleaseNotesLink>
+      <description sparkle:format="markdown"><![CDATA[**The notch comes back when you switch desktops.** If macOS had left the overlay on one desktop only, switching to another now brings it back. Notchline does not come to the front or take the keyboard. (`docs/PRD.md` §9.2.1.)
+
+### Fixed
+
+- **The overlay could be missing from a second desktop while its menu bar was showing.** The panel asks macOS for every desktop, but macOS could keep it on the first one only. Nothing checked again, because Notchline only reacted when the menu bar appeared or disappeared. Every desktop switch now checks the new menu bar and returns a missing panel. A full-screen app or an auto-hidden menu bar still hides it.
+
+### Known limitations
+
+- **The repair happens at the next switch.** What first takes the overlay off a desktop has not been found, so this does not prevent it. How the panel looks during a trackpad swipe between desktops has not been checked yet.
+
+Everything listed under `0.6.2` and earlier still stands, unchanged.
+]]></description>
+      <enclosure url="https://github.com/soondubu137/notchline/releases/download/v0.6.3/Notchline-0.6.3.zip" type="application/octet-stream" sparkle:edSignature="TexlQX4l8Qjba8H1A39ywkGsFCCVHY2/V9JfEAB01GCYn854wxboZYFV7x6GNd5RYay5bl9Z6DYF6dx8CiVDBA==" length="4007686"/>
+    </item>
+    <item>
       <title>Notchline 0.6.2 Beta</title>
       <pubDate>Sun, 04 Oct 2026 17:15:37 GMT</pubDate>
       <sparkle:version>25</sparkle:version>
