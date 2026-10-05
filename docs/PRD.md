@@ -324,6 +324,7 @@ The overlay hangs at the `.statusBar` level, one above the menu bar, so the syst
 
 - When the target display's menu bar is no longer drawn (an app or video is full-screen there, or the user set the menu bar to auto-hide), the panel goes off screen.
 - **Mission Control (and App Exposé, and Space switching) do not hide the menu bar**, which is still drawn above the shrunken desktops, and **the panel stays on screen too**. Mission Control is where users have always gone to see what is running, which is exactly what this overlay says, so hiding it there removes it at the moment it is most wanted. The rule is therefore only: follow the menu bar and judge nothing else.
+- After a Space switch, a panel stranded on the previous desktop must return on the selected display without activating Notchline or taking the keyboard. The new desktop's menu bar is checked first, so recovery still honours full-screen and auto-hide concealment.
 - **It holds per display**: a full-screen film on an external screen does not affect the panel in the built-in screen's notch.
 - The panel collapses before going off screen. Expansion is triggered by pointer dwell and collapsed by the pointer leaving, and a window pulled away never receives the leave, so it would otherwise come back expanded.
 - When the target display cannot be determined, it does not hide. The two errors are not equivalent: a panel left over a film is a blemish, while a panel that vanishes has no entry point to bring it back — the notch *is* the entry point.

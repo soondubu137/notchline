@@ -8,6 +8,7 @@ final class OverlayPanelController {
     private let panel: OverlayPanel
     private var cancellables = Set<AnyCancellable>()
     private var screenParametersObserver: NSObjectProtocol?
+    private var activeSpaceObserver: NSObjectProtocol?
     private var pendingFrameUpdate: DispatchWorkItem?
     private var pendingFrameUpdateShouldAnimate: Bool?
     /// A frame animation waiting out a closing wing's lead-out — see
@@ -47,6 +48,7 @@ final class OverlayPanelController {
         bindStore()
         observeScreenChanges()
         observeConcealment()
+        observeSpaceChanges()
     }
 
     deinit {
@@ -57,6 +59,9 @@ final class OverlayPanelController {
         }
         if let screenParametersObserver {
             NotificationCenter.default.removeObserver(screenParametersObserver)
+        }
+        if let activeSpaceObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(activeSpaceObserver)
         }
     }
 
@@ -312,7 +317,7 @@ final class OverlayPanelController {
             panel.contentView?.layoutSubtreeIfNeeded()
             // A concealed panel tracks its frame but must not be ordered back over the full-screen window.
             if hasShownPanel, !isConcealed {
-                panel.orderFrontRegardless()
+                panel.orderFrontAcrossSpaces()
             }
             reconcilePointer(from: previousFrame, to: targetFrame)
             return
@@ -428,7 +433,23 @@ final class OverlayPanelController {
         }
 
         updatePanelFrame(animated: false)
-        panel.orderFrontRegardless()
+        panel.orderFrontAcrossSpaces()
+    }
+
+    private func observeSpaceChanges() {
+        activeSpaceObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // The menu bar may be unchanged while the window's Space membership is stale.
+                // Sample first so recovery never brings the panel over a concealed menu bar.
+                self.concealmentWatcher.sampleNow()
+                self.orderPanelToMatchConcealment()
+            }
+        }
     }
 
     private func observeScreenChanges() {
@@ -530,6 +551,39 @@ enum OverlayPanelLayout {
 }
 
 final class OverlayPanel: NSPanel {
+    private var collectionBehaviorToRestore: NSWindow.CollectionBehavior?
+
+    /// A sticky window can still lose membership of a desktop. Reordering it or assigning
+    /// `.canJoinAllSpaces` again leaves it stranded; `isOnActiveSpace` reads the actual result.
+    func orderFrontAcrossSpaces() {
+        guard isOnActiveSpace else {
+            recoverSpaceMembership()
+            return
+        }
+        orderFrontRegardless()
+    }
+
+    /// Temporarily lets AppKit bring this window to the current desktop, without taking keys.
+    /// Internal so tests can exercise the in-flight recovery without switching the user's Space.
+    func recoverSpaceMembership() {
+        guard collectionBehaviorToRestore == nil else {
+            orderFrontRegardless()
+            return
+        }
+        let original = collectionBehavior
+        collectionBehaviorToRestore = original
+        collectionBehavior = original.subtracting(.canJoinAllSpaces)
+            .union(.moveToActiveSpace)
+        orderFrontRegardless()
+        // AppKit queues the move. Restoring synchronously cancels it (measured in Release);
+        // one main-queue turn lets the ordering land before returning to all desktops.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let original = self.collectionBehaviorToRestore else { return }
+            self.collectionBehavior = original
+            self.collectionBehaviorToRestore = nil
+        }
+    }
+
     /// Whether this panel may hold the keyboard: false except while a row is open
     /// (`answer-in-notch.md` §9.4). Hover never latches.
     var latches = false {
