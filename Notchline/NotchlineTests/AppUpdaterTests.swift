@@ -23,11 +23,14 @@ struct AppUpdaterTests {
     }
 
     @Test func noUpdaterStartsWithoutAPublicKey() throws {
-        #expect(!AppUpdater.hasPublicKey(try bundle(info: [:])))
-        #expect(!AppUpdater.hasPublicKey(try bundle(info: ["SUPublicEDKey": ""])))
-        #expect(!AppUpdater.hasPublicKey(try bundle(info: ["SUPublicEDKey": "  "])))
+        let bundles = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppUpdaterTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: bundles) }
+        #expect(!AppUpdater.hasPublicKey(try bundle(info: [:], in: bundles)))
+        #expect(!AppUpdater.hasPublicKey(try bundle(info: ["SUPublicEDKey": ""], in: bundles)))
+        #expect(!AppUpdater.hasPublicKey(try bundle(info: ["SUPublicEDKey": "  "], in: bundles)))
         #expect(AppUpdater.hasPublicKey(try bundle(
-            info: ["SUPublicEDKey": "B9KrayMX4Wr+owCMTj31CS2Yoo90flO6SNFcXuXgtb8="]
+            info: ["SUPublicEDKey": "B9KrayMX4Wr+owCMTj31CS2Yoo90flO6SNFcXuXgtb8="], in: bundles
         )))
     }
 
@@ -62,9 +65,8 @@ struct AppUpdaterTests {
         try #require(try node.nodes(forXPath: path).first?.stringValue)
     }
 
-    private func bundle(info: [String: String]) throws -> Bundle {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("AppUpdaterTests-\(UUID().uuidString).bundle")
+    private func bundle(info: [String: String], in directory: URL) throws -> Bundle {
+        let root = directory.appendingPathComponent("\(UUID().uuidString).bundle")
         let contents = root.appendingPathComponent("Contents")
         try FileManager.default.createDirectory(at: contents, withIntermediateDirectories: true)
         var plist = info
