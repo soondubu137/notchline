@@ -4,6 +4,20 @@ What each released version of Notchline contains, newest first.
 
 Versions are `major.minor.patch` under [semantic versioning](https://semver.org), with a stage word while a version is not yet finished. The app draws both plus its build number — `Version 0.1.0 Alpha (1)` — on the first-run window and at the foot of Settings. The number in brackets is `CURRENT_PROJECT_VERSION` and rises with every build handed to anybody; it is what tells two people running the same `0.1.0` apart in a bug report. The stage word is deliberately not part of `MARKETING_VERSION`, which stays numeric-dotted so it remains a version macOS can validate and compare.
 
+## 0.6.3 Beta — 2026-10-04
+
+**The notch comes back when you switch desktops.** If macOS had left the overlay on one desktop only, switching to another now brings it back. Notchline does not come to the front or take the keyboard. (`docs/PRD.md` §9.2.1.)
+
+### Fixed
+
+- **The overlay could be missing from a second desktop while its menu bar was showing.** The panel asks macOS for every desktop, but macOS could keep it on the first one only. Nothing checked again, because Notchline only reacted when the menu bar appeared or disappeared. Every desktop switch now checks the new menu bar and returns a missing panel. A full-screen app or an auto-hidden menu bar still hides it.
+
+### Known limitations
+
+- **The repair happens at the next switch.** What first takes the overlay off a desktop has not been found, so this does not prevent it. How the panel looks during a trackpad swipe between desktops has not been checked yet.
+
+Everything listed under `0.6.2` and earlier still stands, unchanged.
+
 ## 0.6.2 Beta — 2026-10-04
 
 **Trae 3.5.104 is watched, alongside 3.5.91.** It needs companion 1.2.4: press Repair for Trae in Settings, then restart extensions when Trae asks. (`docs/trae-integration.md`.)
