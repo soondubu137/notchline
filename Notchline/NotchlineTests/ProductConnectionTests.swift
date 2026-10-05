@@ -115,9 +115,9 @@ struct ProductConnectionTests {
         #expect(await counter.count == 3)
     }
     @Test @MainActor func externalSetupDeletionPreservesIntentAcrossLaunches() throws {
-        let name = "Notchline.ConnectionTests.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: name))
-        defer { defaults.removePersistentDomain(forName: name) }
+        let scratch = ScratchDefaults("connection")
+        defer { scratch.remove() }
+        let defaults = scratch.defaults
         let store = MonitorStore(services: [], preferences: defaults)
         store.applyForTesting(reading())
         #expect(store.monitoringIntent(for: .trae) == .enabled)

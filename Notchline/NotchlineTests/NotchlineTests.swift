@@ -1421,7 +1421,9 @@ struct NotchlineTests {
     /// external monitor.
     @Test @MainActor
     func hideNotchlineTakesEachDisplaysOwnFormAndSwitchingDisplaysDoesNotClearIt() {
-        let defaults = UserDefaults(suiteName: "wings-\(UUID().uuidString)")!
+        let scratch = ScratchDefaults("wings")
+        defer { scratch.remove() }
+        let defaults = scratch.defaults
         let notched = makeDisplay(
             id: "notched",
             ordinal: 1,
@@ -1533,7 +1535,9 @@ struct NotchlineTests {
     /// a shrinking middle would move the anchored mark and reading.
     @Test @MainActor
     func privacyModeCoversEveryWordAndSilencesThePillOutright() {
-        let defaults = UserDefaults(suiteName: "privacy-\(UUID().uuidString)")!
+        let scratch = ScratchDefaults("privacy")
+        defer { scratch.remove() }
+        let defaults = scratch.defaults
         let flat = makeDisplay(id: "flat", ordinal: 1, menuBarHeight: 24, hasNotch: false)
         let session = MonitoredSession(
             agent: .claudeCode,
@@ -1971,7 +1975,9 @@ struct NotchlineTests {
     /// a mark coming out brings it back.
     @Test @MainActor
     func theOutlineIsRememberedAndStandsDownOnlyForTheHiddenCompactSurface() {
-        let defaults = UserDefaults(suiteName: "outline-\(UUID().uuidString)")!
+        let scratch = ScratchDefaults("outline")
+        defer { scratch.remove() }
+        let defaults = scratch.defaults
         let notched = makeDisplay(
             id: "notched",
             ordinal: 1,
@@ -2477,7 +2483,9 @@ struct NotchlineTests {
     /// unknown name is ignored.
     @Test @MainActor
     func theQuotaTableChoiceIsRememberedAsWhatIsLeftOut() {
-        let defaults = UserDefaults(suiteName: "quota-table-\(UUID().uuidString)")!
+        let scratch = ScratchDefaults("quota-table")
+        defer { scratch.remove() }
+        let defaults = scratch.defaults
         let fresh = MonitorStore(services: [], preferences: defaults)
         #expect(fresh.productsHiddenFromQuotaTable.isEmpty)
         #expect(AgentKind.allCases.allSatisfy { fresh.showsInQuotaTable($0) })
@@ -2944,7 +2952,9 @@ struct NotchlineTests {
     /// One remembered table state for both products, starting shut (`quota-footer-v2.md` §8.1).
     @Test @MainActor
     func theQuotaTableIsOneRememberedStateForTheWholeFooter() {
-        let defaults = UserDefaults(suiteName: "quota-\(UUID().uuidString)")!
+        let scratch = ScratchDefaults("quota")
+        defer { scratch.remove() }
+        let defaults = scratch.defaults
         let store = MonitorStore(services: [], preferences: defaults)
         #expect(!store.isQuotaExpanded)
 
@@ -4301,7 +4311,9 @@ struct NotchlineTests {
     /// (2026-09-09).
     @Test @MainActor
     func aStoredAttributionStyleIsIgnoredRatherThanMigrated() {
-        let defaults = UserDefaults(suiteName: "rail-\(UUID().uuidString)")!
+        let scratch = ScratchDefaults("rail")
+        defer { scratch.remove() }
+        let defaults = scratch.defaults
         defaults.set("colourBar", forKey: "productAttribution")
         defaults.set("steel", forKey: "aggregateInk")
 
@@ -7372,10 +7384,9 @@ struct NotchlineTests {
 
     @Test @MainActor
     func selectedDisplayPreferencePersistsAcrossStoreInstances() throws {
-        let suiteName = "NotchlineTests-\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
-        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let scratch = ScratchDefaults("selected-display")
+        defer { scratch.remove() }
+        let defaults = scratch.defaults
 
         let primaryDisplay = makeDisplay(
             id: "primary",

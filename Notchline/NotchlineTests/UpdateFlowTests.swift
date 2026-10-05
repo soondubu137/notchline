@@ -257,10 +257,9 @@ struct UpdateFlowTests {
     }
 
     @Test func theReceiptIsReadOnlyForTheBuildItWasRecordedFor() throws {
-        // Unique per run: the suite is hosted by more than one test process at a time.
-        let suite = "notchline.update-receipt.\(UUID().uuidString)"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let scratch = ScratchDefaults("update-receipt")
+        defer { scratch.remove() }
+        let defaults = scratch.defaults
         let build = try #require(Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
 
         defaults.set(build, forKey: AppUpdater.receiptDefaultsKey)
